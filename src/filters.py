@@ -27,7 +27,20 @@ def check_container_modular_prefab(rec, exclusions):
     return None
 
 
-CHECKS = [check_container_modular_prefab]
+def check_rental(rec, exclusions):
+    """F2 — hard-exclude rental tenders (all languages).
+
+    FR uses rental-shaped phrase terms ('location de', 'en location'), not the
+    bare word — see config/exclusions.yaml for why.
+    """
+    cfg = exclusions["rental"]
+    terms = [w for lang in cfg["terms"].values() for w in lang]
+    if match.match_keywords(_text(rec), terms):
+        return "rental"
+    return None
+
+
+CHECKS = [check_container_modular_prefab, check_rental]
 
 
 def apply_filters(rec, exclusions):

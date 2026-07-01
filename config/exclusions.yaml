@@ -23,3 +23,18 @@ container_modular_prefab:
          vorgefertigten, Fertigkonstruktion, Fertigkonstruktionen,
          # ue/ae/oe/ss transliterations:
          Containergebaeude, Grossbehaelter]
+
+# F2 (CR-001) — rental tenders. FR 'location' is scoped to rental-shaped phrases
+# ('location de', 'en location') rather than the bare word: 'location' alone is also
+# plain French for "place", and a bare-word match would misfire on a tent PURCHASE
+# notice that happens to use the word that way (see CR §F2 Watch note; tested by
+# "Acquisition de tentes" staying kept in tests/test_12_filters.py).
+rental:
+  terms:
+    en: [rental]
+    fr: [location de, en location]
+    nl: [huur]
+    de: [Miete]
+  # Candidates raised at the meeting, not yet confirmed by the customer — do not activate:
+  # it: [noleggio]
+  # pl: [wynajem]

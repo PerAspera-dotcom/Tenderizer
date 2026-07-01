@@ -1,7 +1,8 @@
-"""Step 12 — post-match filter stage (CR-001 F3).
+"""Step 12 — post-match filter stage (CR-001 F2 + F3).
   filters.apply_filters(rec, exclusions) -> exclude_reason:str|None
   F3: container / modular / prefabricated structures are hard-excluded, even
   alongside a tent/shelter signal. Reason: 'container_modular_prefab'.
+  F2: rental tenders are hard-excluded, all languages. Reason: 'rental'.
 """
 import config, filters
 
@@ -62,3 +63,40 @@ def test_removed_terms_gone_from_active_keywords():
                "Fertigkonstruktion", "Fertigkonstruktionen", "vorgefertigt",
                "vorgefertigte", "vorgefertigten", "Containergebäude", "Großbehälter"}
     assert active.isdisjoint(removed)
+
+
+# ── F2: rental exclusion ─────────────────────────────────────────────────────
+
+def test_french_rental_phrase_is_excluded():
+    rec = _rec("Location de tentes", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "rental"
+
+
+def test_french_tent_purchase_is_kept():
+    # The CR's own acceptance case — "acquisition" (purchase) must NOT trip the
+    # rental filter just because the notice is otherwise about tents.
+    rec = _rec("Acquisition de tentes", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_bare_french_location_word_is_not_excluded():
+    # 'location' alone is also plain French for "place" — must not misfire when
+    # it's not in a rental-shaped phrase ('location de' / 'en location').
+    rec = _rec("Fourniture de tentes — précision de la location géographique du site",
+                cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_english_rental_is_excluded():
+    rec = _rec("Tent rental services for events", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "rental"
+
+
+def test_german_miete_is_excluded():
+    rec = _rec("Miete von Zelten für Feldlager", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "rental"
+
+
+def test_dutch_huur_is_excluded():
+    rec = _rec("Huur van tenten voor evenementen", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "rental"
