@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; }
+</style>
+</helmet>
+<div style="width:900px;min-height:1272px;box-sizing:border-box;background:#0f1623;color:#e7edf6;font-family:'Public Sans',system-ui,sans-serif;padding:46px 44px 40px;">
+
+  <!-- HEADER -->
+  <div style="display:flex;align-items:flex-start;gap:13px;border-bottom:1px solid #1f2b40;padding-bottom:20px;margin-bottom:24px;">
+    <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#2EE6D4,#17a8d8);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 0 16px rgba(46,230,212,0.35);flex-shrink:0;">⚡</div>
+    <div style="flex:1;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <h1 style="margin:0;font-size:25px;font-weight:800;letter-spacing:-0.02em;">Tenderizer — Production Readiness Checklist</h1>
+      </div>
+      <p style="margin:5px 0 0;color:#8a97ac;font-size:13px;">Design POC → multi-tenant SaaS. Scout = proof of viability; the full Portal is the product. Hand alongside <span style="font-family:'IBM Plex Mono',monospace;color:#9fc;">TENDERIZER_HANDOFF.md</span>.</p>
+    </div>
+    <div style="text-align:right;flex-shrink:0;">
+      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;color:#4c5a70;text-transform:uppercase;">v1 · Jun 2026</div>
+      <div style="font-size:10px;color:#5d6a7e;margin-top:4px;font-family:'IBM Plex Mono',monospace;">□ todo &nbsp; ◆ decide first</div>
+    </div>
+  </div>
+
+  <!-- TWO COLUMNS -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start;">
+
+    <!-- LEFT COLUMN -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#0f1623;background:#2EE6D4;border-radius:5px;padding:2px 7px;">◆ 0</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#2EE6D4;text-transform:uppercase;">Architecture — decide first</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Split <strong>static frontend</strong> from <strong>always-on backend</strong> (API + engine + DB).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Choose tenancy model: <strong>shared DB + <span style="font-family:'IBM Plex Mono',monospace;">tenant_id</span></strong> (recommended start).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Define <strong>API base URL</strong> as an env var per environment (dev / staging / prod).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Pick the always-on host (see hosting note).</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">1</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Backend — API &amp; engine</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Persist run metadata → <span style="font-family:'IBM Plex Mono',monospace;">last_run.json</span> (§5).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Add <span style="font-family:'IBM Plex Mono',monospace;">status</span> column + separate <span style="font-family:'IBM Plex Mono',monospace;">pipeline</span> table (workflow state).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Add config writers for <span style="font-family:'IBM Plex Mono',monospace;">cpv.yaml</span> / <span style="font-family:'IBM Plex Mono',monospace;">keywords.yaml</span>.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Build the ~12 FastAPI endpoints (read · run · pipeline · follow-up).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;"><strong>Connector interface</strong> so new portals plug in cleanly (TED/BOAMP pattern).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Keep the 52 engine tests green — <span style="font-family:'IBM Plex Mono',monospace;">pytest -q</span> after each change.</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">2</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Multi-tenancy &amp; auth</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">User accounts + login (email/pw or SSO).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Tenant isolation — <span style="font-family:'IBM Plex Mono',monospace;">tenant_id</span> on every row / row-level security.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Roles: analyst · manager · admin.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Audit trail — who changed status / notes / deadlines.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;"><strong>Per-tenant config</strong>: each company its own CPV set, keywords, portals.</span></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">3</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Frontend (React + Vite)</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Recreate the mockup wired to the live API (don't ship the HTML).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Build order: Dashboard → Feed → Review → Portal → Config.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Env-based API base URL · auth-gated routes.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Leave all 🚧 screens stubbed exactly as the mockup shows.</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">4</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Data &amp; reliability</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;"><strong>Migrate SQLite → Postgres</strong> before going multi-tenant.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Automated daily backups + a tested restore.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Scheduled scrape (cron) with per-source health logging.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Alert when a source fails N consecutive days.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Secrets &amp; config out of code (<span style="font-family:'IBM Plex Mono',monospace;">.env</span> / secrets manager).</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">5</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Notifications &amp; workflow</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;"><strong>Deadline alerts → email / Slack</strong>, not just on-screen banners.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Per-tenant new-tender digest.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Pipeline owner assignment + handoff.</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">6</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Compliance</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Per-portal ToS review before each goes live (with co-dev co.).</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">DTVP stays paused until cleared.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">GDPR: retention policy for stored notices + user data.</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;">
+          <span style="font-size:11px;font-weight:800;color:#c084fc;background:rgba(192,132,252,0.12);border:1px solid rgba(192,132,252,0.3);border-radius:5px;padding:2px 7px;">7</span>
+          <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#c9a3f5;text-transform:uppercase;">Phase 2 readiness</h2>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;"><strong style="color:#9cc1fb;">Vault</strong>: document store + metadata extraction Scout/Composer reuse.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;"><strong style="color:#c9a3f5;">Composer</strong>: requirement-validation gate → locked draft generation.</span></div>
+          <div style="display:flex;gap:9px;align-items:flex-start;"><span style="width:14px;height:14px;border:1.5px solid #3a4a64;border-radius:3px;flex-shrink:0;margin-top:1px;"></span><span style="font-size:12.5px;color:#cdd6e3;line-height:1.4;">Keep both preview-only in the app switcher until built.</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="margin-top:28px;padding-top:16px;border-top:1px solid #1f2b40;display:flex;align-items:center;gap:16px;">
+    <div style="font-size:11px;color:#6b7990;flex:1;">Critical path: <span style="color:#2EE6D4;font-weight:600;">0 Architecture → 1 Backend → 2 Tenancy → 3 Frontend</span>. Everything else hardens around it.</div>
+    <div style="font-size:10px;color:#4c5a70;font-family:'IBM Plex Mono',monospace;">Tenderizer · internal · p.1</div>
+  </div>
+
+</div>
+
+<!-- ============ PAGE 2 — DECISIONS & STACK ============ -->
+<div style="width:900px;min-height:1272px;box-sizing:border-box;background:#0f1623;color:#e7edf6;font-family:'Public Sans',system-ui,sans-serif;padding:46px 44px 40px;margin-top:40px;">
+
+  <div style="display:flex;align-items:flex-start;gap:13px;border-bottom:1px solid #1f2b40;padding-bottom:20px;margin-bottom:24px;">
+    <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#2EE6D4,#17a8d8);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 0 16px rgba(46,230,212,0.35);flex-shrink:0;">⚡</div>
+    <div style="flex:1;">
+      <h1 style="margin:0;font-size:25px;font-weight:800;letter-spacing:-0.02em;">Technical Decisions &amp; Recommended Stack</h1>
+      <p style="margin:5px 0 0;color:#8a97ac;font-size:13px;">The choices that unlock the multi-company goal. Make these before code starts.</p>
+    </div>
+    <div style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;color:#4c5a70;text-transform:uppercase;flex-shrink:0;">p.2</div>
+  </div>
+
+  <!-- A · API & TENANCY -->
+  <div style="margin-bottom:22px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:11px;font-weight:800;color:#0f1623;background:#2EE6D4;border-radius:5px;padding:2px 7px;">A</span>
+      <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#2EE6D4;text-transform:uppercase;">API &amp; tenancy</h2>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px 22px;">
+      <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ <strong>One API domain</strong> (<span style="font-family:'IBM Plex Mono',monospace;color:#9fc;">api.tenderizer.app</span>); tenants resolved by login token — <strong>not</strong> a URL per customer.</div>
+      <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ Frontend reads the base URL from <span style="font-family:'IBM Plex Mono',monospace;color:#9fc;">VITE_API_BASE_URL</span> — one build, per-env config (dev / staging / prod).</div>
+      <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ <strong>Shared Postgres + <span style="font-family:'IBM Plex Mono',monospace;">tenant_id</span></strong> on every row (row-level isolation); per-tenant CPV / keywords / portals.</div>
+      <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ Lock <strong>CORS</strong> to known frontend origins; API on a subdomain, not a path on the marketing site.</div>
+    </div>
+  </div>
+
+  <!-- B · STACK -->
+  <div style="margin-bottom:22px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">B</span>
+      <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Recommended stack</h2>
+    </div>
+    <div style="border:1px solid #222e44;border-radius:11px;overflow:hidden;">
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:0;font-size:12.5px;">
+        <div style="padding:11px 16px;background:#121a28;color:#7d8aa0;font-weight:700;border-bottom:1px solid #1b2536;">Frontend</div>
+        <div style="padding:11px 16px;color:#cdd6e3;border-bottom:1px solid #1b2536;">React + Vite + <strong>TypeScript</strong> · TanStack Query · React Router</div>
+        <div style="padding:11px 16px;background:#121a28;color:#7d8aa0;font-weight:700;border-bottom:1px solid #1b2536;">Backend</div>
+        <div style="padding:11px 16px;color:#cdd6e3;border-bottom:1px solid #1b2536;">FastAPI · <strong>Postgres</strong> · SQLAlchemy + Alembic (migrations)</div>
+        <div style="padding:11px 16px;background:#121a28;color:#7d8aa0;font-weight:700;border-bottom:1px solid #1b2536;">Auth</div>
+        <div style="padding:11px 16px;color:#cdd6e3;border-bottom:1px solid #1b2536;"><strong>Clerk</strong> / Auth0 / Supabase Auth — managed; don't roll your own</div>
+        <div style="padding:11px 16px;background:#121a28;color:#7d8aa0;font-weight:700;border-bottom:1px solid #1b2536;">Scheduled jobs</div>
+        <div style="padding:11px 16px;color:#cdd6e3;border-bottom:1px solid #1b2536;">APScheduler (start) → Celery if it grows · runs <span style="font-family:'IBM Plex Mono',monospace;">run_pipeline</span></div>
+        <div style="padding:11px 16px;background:#121a28;color:#7d8aa0;font-weight:700;">Infra glue</div>
+        <div style="padding:11px 16px;color:#cdd6e3;">Docker · Sentry (errors) · uptime monitor · secrets manager</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C · HOSTING -->
+  <div style="margin-bottom:22px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:11px;font-weight:800;color:#9fc;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">C</span>
+      <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#dbe3ee;text-transform:uppercase;">Hosting — recommended path</h2>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="background:#151d2c;border:1px solid rgba(46,230,212,0.25);border-radius:11px;padding:14px 16px;">
+        <div style="font-size:12px;font-weight:700;color:#2EE6D4;margin-bottom:5px;">Frontend → Vercel</div>
+        <div style="font-size:12px;color:#9aa7bc;line-height:1.45;">Static deploy, cheap/free, global CDN.</div>
+      </div>
+      <div style="background:#151d2c;border:1px solid rgba(46,230,212,0.25);border-radius:11px;padding:14px 16px;">
+        <div style="font-size:12px;font-weight:700;color:#2EE6D4;margin-bottom:5px;">Backend + DB → Railway / Render</div>
+        <div style="font-size:12px;color:#9aa7bc;line-height:1.45;">Managed always-on container + managed Postgres with automated backups.</div>
+      </div>
+    </div>
+    <div style="margin-top:11px;font-size:12px;color:#8a97ac;line-height:1.5;">Own the <strong style="color:#cdd6e3;">domain + database</strong> yourself regardless of host — that's the asset. &nbsp;·&nbsp; <span style="color:#6b7990;">VPS (Hetzner/DO) = cheaper but you run backups · Big cloud (AWS/Azure) = later, at scale.</span></div>
+  </div>
+
+  <!-- D · SCRAPING -->
+  <div style="margin-bottom:8px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:11px;font-weight:800;color:#0f1623;background:#e3b341;border-radius:5px;padding:2px 7px;">D</span>
+      <h2 style="margin:0;font-size:13px;font-weight:800;letter-spacing:0.06em;color:#e3b341;text-transform:uppercase;">Expandable scraping — most important for sell-to-many</h2>
+    </div>
+    <div style="background:#151d2c;border:1px solid #3a3320;border-radius:11px;padding:15px 18px;">
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ Make the <strong>connector a formal interface now</strong>: input a portal config → output records in the engine's existing normalized shape.</div>
+        <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ <span style="font-family:'IBM Plex Mono',monospace;color:#9fc;">ted.py</span> &amp; <span style="font-family:'IBM Plex Mono',monospace;color:#9fc;">boamp.py</span> are your two reference implementations — adding a portal = one new connector file against the contract.</div>
+        <div style="font-size:12.5px;color:#cdd6e3;line-height:1.45;">→ <strong>Per-tenant portal selection</strong>: each company turns on only the sources relevant to them.</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:24px;padding-top:16px;border-top:1px solid #1f2b40;display:flex;align-items:center;gap:16px;">
+    <div style="font-size:11px;color:#6b7990;flex:1;">Scout = POC proving viability (no tender capture → no automated offers). The full Portal — Scout + Vault + Composer — is the product.</div>
+    <div style="font-size:10px;color:#4c5a70;font-family:'IBM Plex Mono',monospace;">Tenderizer · internal · p.2</div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:900,&quot;height&quot;:1272}}"></script>
+</body>
+</html>

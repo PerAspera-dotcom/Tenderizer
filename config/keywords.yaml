@@ -1,0 +1,38 @@
+# Keyword safeguard layer (OR'd with CPV in the query). Broad, derived from the official
+# CPV EN/FR/NL/DE labels. Whole-word, accent-insensitive matching, so plurals/accents are
+# listed explicitly. All four languages sourced from the official CPV 2008 vocabulary.
+# German: umlaut forms also cover the naive-stripped spelling (ü->u) via unidecode folding;
+# the ue/ae/oe/ss transliterations are added separately for systems that don't support
+# umlauts/eszett.
+terms:
+  en: [tent, tents, marquee, shelter, shelters, awning, awnings, tarpaulin, tarpaulins,
+       sunblind, sunblinds, camouflage, cabin, cabins, cubicle, cubicles, canopy,
+       gazebo, bivouac, prefabricated, modular, portable]
+  fr: [tente, tentes, chapiteau, chapiteaux, abri, abris, campement, bache, baches,
+       auvent, auvents, marquise, marquises, velum, camouflage, cabine, cabines,
+       modulaire, prefabrique, prefabriques, prefabrication]
+  nl: [tent, tenten, zeil, zeilen, dekzeil, dekzeilen, zonwering, zonweringen,
+       camouflage, camouflagehoes, schuilhok, schuilhokje, schuiltent, onderkomen,
+       cabine, cabines, modulair, prefab, geprefabriceerd]
+  de: [Zelt, Zelte, Zelten, Zeltreparatur, Zeltreparatursets, Plane, Planen, Sonnensegel,
+       Markise, Markisen, Tarnung, Tarnüberzug, Tarnüberzüge, Tarnnetz, Campingausrüstung,
+       Campingausrüstungen, Schutzunterkunft, Schutzunterkünfte, Schutzunterkünften,
+       Unterstand, Unterstände, Unterkunft, Militärschutzraum, Militärschutzräume,
+       Militärschutzräumen, Schutzraum, Containergebäude, Großbehälter, Kabine, Kabinen,
+       Kleinkabine, Kleinkabinen, modular, Fertigkonstruktion, Fertigkonstruktionen,
+       vorgefertigt, vorgefertigte, vorgefertigten,
+       # ue/ae/oe/ss transliterations for systems without umlaut/eszett support:
+       Tarnueberzug, Tarnueberzuege, Campingausruestung, Campingausruestungen,
+       Schutzunterkuenfte, Schutzunterkuenften, Unterstaende, Militaerschutzraum,
+       Militaerschutzraeume, Militaerschutzraeumen, Containergebaeude, Grossbehaelter]
+
+# Distinctive subset fed into the LIVE TED query as a title match (notice-title = exact).
+# High-signal, unambiguous tent/cover words only — keeps the live pull tight (~25 title
+# matches; CPV OR title=distinctive ≈ 384 total). The full 'terms' library above is NOT
+# used in the TED query (full-text + stemming floods to ~75k); it is used client-side to
+# tag which terms matched each returned result. Broad words (shelter, modular, Unterkunft,
+# abri, cabine, container) are deliberately excluded here because they flood titles too.
+distinctive: [tent, tents, tente, tentes, chapiteau, chapiteaux, marquee, Zelt, Zelte,
+              Zelten, tarpaulin, tarpaulins, bache, baches, dekzeil, dekzeilen, camouflage,
+              Tarnung, Tarnnetz, Sonnensegel, Markise, Markisen, campement, schuiltent,
+              gazebo]

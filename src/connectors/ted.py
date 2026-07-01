@@ -1,0 +1,76 @@
+"""TED (Tenders Electronic Daily) connector.
+
+Verified against docs.ted.europa.eu (June 2026):
+  - Endpoint: POST https://api.ted.europa.eu/v3/notices/search
+  - No API key required for reading published notices.
+  - Body: query (expert query), fields (list), limit, scope ("ACTIVE" = live/recent),
+    paginationMode ("ITERATION" with iterationNextToken), checkQuerySyntax.
+  - Query language: field expressions + AND/OR/NOT + parentheses.
+
+RELEVANCE STRATEGY (after measuring against the live API):
+  - PRIMARY net = CPV codes: classification-cpv IN (...). Precise, language-independent.
+  - SAFEGUARD = distinctive keywords matched in the TITLE with the exact '=' operator:
+    notice-title = ("tent" OR "zelt" OR ...). This catches mis-coded tenders that have an
+    unambiguous tent word in the title.
+  - We deliberately DO NOT use full-text 'FT IN (...)': FT searches the whole notice body
+    across ~24 languages AND the IN operator stems terms, which floods to ~75k matches.
+    notice-title + '=' keeps the pull tight (CPV OR title=distinctive ≈ 384).
+  - publication-date must be YYYYMMDD (pattern [0-9]{8}|today(...)).
+
+TO CONFIRM when building Step 7: notice-title and place-of-performance come back as
+multilingual / array structures (3-letter lang keys like 'eng','fra','nld'); pick a
+language in normalize_ted. FIELDS may need country/deadline fields added.
+"""
+import requests
+
+ENDPOINT = "https://api.ted.europa.eu/v3/notices/search"
+
+# Fields to return — confirmed via live field probe (June 2026).
+FIELDS = [
+    "publication-number", "notice-title", "description-proc",
+    "buyer-name", "buyer-country", "contract-nature", "procedure-type", "notice-type",
+    "deadline-receipt-request", "place-of-performance", "classification-cpv", "links",
+]
+
+
+def build_query(cpv_codes, keywords, since):
+    """Primary net (CPV) OR safeguard (distinctive keywords in the title), since `since`.
+
+    `keywords` should be the distinctive subset (config.distinctive_keywords()).
+    """
+    cpv_part = "classification-cpv IN (" + " ".join(cpv_codes) + ")"
+    title_part = "notice-title = (" + " OR ".join(f'"{k}"' for k in keywords) + ")"
+    date_part = f"publication-date>={since.strftime('%Y%m%d')}"
+    return f"({cpv_part} OR {title_part}) AND {date_part}"
+
+
+def parse_response(json_data):
+    """Return the list of raw notice dicts; [] if none."""
+    return json_data.get("notices") or json_data.get("results") or []
+
+
+def fetch(cpv_codes, keywords, since, fields=FIELDS, limit=100, max_records=2000):
+    """Live, paginated pull. Returns a flat list of raw notice dicts.
+
+    max_records is a safety cap so a bad/broad query can never try to pull tens of
+    thousands of notices.
+    """
+    query = build_query(cpv_codes, keywords, since)
+    out, token = [], None
+    while True:
+        body = {
+            "query": query, "fields": fields, "limit": limit,
+            "scope": "ACTIVE", "paginationMode": "ITERATION",
+            "checkQuerySyntax": False,
+        }
+        if token:
+            body["iterationNextToken"] = token
+        resp = requests.post(ENDPOINT, json=body, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        notices = parse_response(data)
+        out.extend(notices)
+        token = data.get("iterationNextToken")
+        if not token or not notices or len(out) >= max_records:
+            break
+    return out[:max_records]

@@ -1,0 +1,32 @@
+# Verified against the official EU CPV 2008 vocabulary (the uploaded CPV2008 xls files).
+# Broad selection across the tent / cover / shelter / portable-structure domain.
+# Full metadata (official EN/FR/NL labels, group, category) lives in cpv_reference.json.
+# Note: no dedicated "military tent" CPV exists — military tents = 39522530 + defence buyer.
+codes:
+  # --- tents & covers (39522xxx) ---
+  - "39522000"   # Tarpaulins, sails, awnings, sunblinds, tents and camping goods (broad parent)
+  - "39522100"   # Tarpaulins, awnings and sunblinds
+  - "39522110"   # Tarpaulins
+  - "39522120"   # Awnings
+  - "39522130"   # Sunblinds
+  - "39522200"   # Camouflage covers
+  - "39522500"   # Textile camping goods
+  - "39522530"   # Tents
+  - "33163000"   # Tent for medical use
+  - "37414300"   # Tent repair kits
+  # --- shelters ---
+  - "44112100"   # Shelters
+  - "44112110"   # Shelter parts
+  - "45216129"   # Protective shelters (construction / works)
+  - "45216230"   # Military shelter construction work (works)
+  # --- prefabricated / modular buildings ---
+  - "44211000"   # Prefabricated buildings (broad parent)
+  - "44211100"   # Modular and portable buildings
+  - "44211110"   # Cabins
+  - "44211200"   # Cubicles
+  - "45223800"   # Assembly and erection of prefabricated structures (works)
+  - "45223810"   # Prefabricated constructions (works)
+  # --- mobile containers (borderline; confirm at meeting) ---
+  - "34221000"   # Special-purpose mobile containers
+  # --- awning installation (works) ---
+  - "45421144"   # Installation work of awnings

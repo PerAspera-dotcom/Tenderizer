@@ -1,0 +1,191 @@
+{
+  "source": "Official EU CPV 2008 vocabulary (publictendering / SIMAP)",
+  "version": "CPV 2008",
+  "languages": [
+    "en",
+    "fr",
+    "nl",
+    "de"
+  ],
+  "german_status": "complete — official German labels from cpv-2008-deutsch (A-Z)",
+  "generated": "2026-06-27",
+  "note": "Curated tent/shelter/cover/portable-structure candidates. Translations are official CPV labels. 'group' and 'category' are project annotations for routing/filtering.",
+  "codes": {
+    "39522000": {
+      "en": "Tarpaulins, sails for boats, sailboards or land craft, awnings, sunblinds, tents and camping goods",
+      "fr": "Bâches imperméables, voiles pour bateaux, planches à voile ou chars à voile, auvents, stores, tentes et articles de camping",
+      "nl": "Tarpaulins, zeilen voor schepen, surfplanken of zeilwagens, dekzeilen, zonweringen, tenten en kampeerartikelen",
+      "de": "Planen, Segel für Boote, Windsurfbretter oder Segelkarren, Sonnensegel, Markisen, Zelte und Campingausrüstungen",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522100": {
+      "en": "Tarpaulins, awnings and sunblinds",
+      "fr": "Bâches imperméables, auvents et stores",
+      "nl": "Tarpaulin, dekzeilen en zonweringen",
+      "de": "Planen, Sonnensegel und Markisen",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522110": {
+      "en": "Tarpaulins",
+      "fr": "Bâches imperméables",
+      "nl": "Tarpaulin",
+      "de": "Planen",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522120": {
+      "en": "Awnings",
+      "fr": "Marquises",
+      "nl": "Dekzeilen",
+      "de": "Sonnensegel",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522130": {
+      "en": "Sunblinds",
+      "fr": "Rideaux pare-soleil",
+      "nl": "Zonweringen",
+      "de": "Markisen",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522200": {
+      "en": "Camouflage covers",
+      "fr": "Toiles de camouflage",
+      "nl": "Camouflagehoezen",
+      "de": "Tarnüberzüge",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522500": {
+      "en": "Textile camping goods",
+      "fr": "Articles de camping en textile",
+      "nl": "Kampeerartikelen van textiel",
+      "de": "Campingausrüstungen aus Textilien",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "39522530": {
+      "en": "Tents",
+      "fr": "Tentes",
+      "nl": "Tenten",
+      "de": "Zelte",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "33163000": {
+      "en": "Tent for medical use",
+      "fr": "Tente à usage médical",
+      "nl": "Tent voor medische doeleinden",
+      "de": "Zelt für medizinische Zwecke",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "37414300": {
+      "en": "Tent repair kits",
+      "fr": "Trousses de réparation de tentes",
+      "nl": "Reparatiekits voor tenten",
+      "de": "Zeltreparatursets",
+      "group": "tents_covers",
+      "category": "supply"
+    },
+    "44112100": {
+      "en": "Shelters",
+      "fr": "Abris",
+      "nl": "Schuilhokjes",
+      "de": "Schutzunterkünfte",
+      "group": "shelters",
+      "category": "supply"
+    },
+    "44112110": {
+      "en": "Shelter parts",
+      "fr": "Éléments d'abris",
+      "nl": "Onderdelen van schuilhokjes",
+      "de": "Teile von Schutzunterkünften",
+      "group": "shelters",
+      "category": "supply"
+    },
+    "45216129": {
+      "en": "Protective shelters",
+      "fr": "Abris de protection",
+      "nl": "Schuilplaatsen",
+      "de": "Unterstände",
+      "group": "shelters",
+      "category": "works"
+    },
+    "45216230": {
+      "en": "Military shelter construction work",
+      "fr": "Travaux de construction d'abris militaires",
+      "nl": "Bouwen van militaire schuilkelders",
+      "de": "Bau von Militärschutzräumen",
+      "group": "shelters",
+      "category": "works"
+    },
+    "44211000": {
+      "en": "Prefabricated buildings",
+      "fr": "Bâtiments préfabriqués",
+      "nl": "Prefabgebouwen",
+      "de": "Vorgefertigte Gebäude",
+      "group": "prefab_modular",
+      "category": "supply"
+    },
+    "44211100": {
+      "en": "Modular and portable buildings",
+      "fr": "Bâtiments modulaires préfabriqués",
+      "nl": "Modulaire verplaatsbare bouwelementen",
+      "de": "Mobile, modulare Containergebäude",
+      "group": "prefab_modular",
+      "category": "supply"
+    },
+    "44211110": {
+      "en": "Cabins",
+      "fr": "Cabines",
+      "nl": "Cabines",
+      "de": "Kabinen",
+      "group": "prefab_modular",
+      "category": "supply"
+    },
+    "44211200": {
+      "en": "Cubicles",
+      "fr": "Cellules",
+      "nl": "Hokjes",
+      "de": "Kleinkabinen",
+      "group": "prefab_modular",
+      "category": "supply"
+    },
+    "45223800": {
+      "en": "Assembly and erection of prefabricated structures",
+      "fr": "Assemblage et montage de structures préfabriquées",
+      "nl": "Monteren en bouwen van prefab-constructies",
+      "de": "Montage und Errichtung von Fertigkonstruktionen",
+      "group": "prefab_modular",
+      "category": "works"
+    },
+    "45223810": {
+      "en": "Prefabricated constructions",
+      "fr": "Constructions préfabriquées",
+      "nl": "Prefab-constructies",
+      "de": "Fertigkonstruktionen",
+      "group": "prefab_modular",
+      "category": "works"
+    },
+    "34221000": {
+      "en": "Special-purpose mobile containers",
+      "fr": "Conteneurs mobiles à usage spécifique",
+      "nl": "Mobiele containers voor bijzondere doeleinden",
+      "de": "Fahrbare Großbehälter für besondere Zwecke",
+      "group": "mobile_containers",
+      "category": "supply"
+    },
+    "45421144": {
+      "en": "Installation work of awnings",
+      "fr": "Travaux d'installation de vélums",
+      "nl": "Installeren van zonweringen",
+      "de": "Installation von Markisen",
+      "group": "awning_install",
+      "category": "works"
+    }
+  }
+}

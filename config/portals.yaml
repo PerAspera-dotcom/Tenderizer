@@ -1,0 +1,6 @@
+- name: TED
+  type: api
+  enabled: true
+- name: BOAMP
+  type: api
+  enabled: false

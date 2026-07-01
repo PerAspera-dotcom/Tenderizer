@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/pytest -q)",
+      "Bash(curl -s http://127.0.0.1:8000/api/stats)",
+      "Bash(python -m json.tool)",
+      "Bash(dir C:\\\\Users\\\\Maximilian\\\\Projects\\\\Tenderizer\\\\the_scout /b)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\Maximilian\\\\Projects\\\\Tenderizer\\\\the_scout\\\\frontend\\\\src\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object -ExpandProperty FullName | Sort-Object)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "PowerShell(New-Item *)",
+      "PowerShell(npx --yes playwright --version 2>&1 | Select-Object -First 3)",
+      "PowerShell(npm *)",
+      "PowerShell($proc = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Select-Object -First 1; if \\($proc\\) { Get-Process -Id $proc | Select-Object Id, ProcessName, CommandLine; Stop-Process -Id $proc -Force; Write-Host \"Killed PID $proc\" } else { Write-Host \"Nothing on 8000\" })",
+      "PowerShell(Stop-Job *)",
+      "PowerShell(winget *)",
+      "PowerShell(docker ps 2>&1; Write-Host \"---\"; python --version 2>&1; Write-Host \"---\"; Test-Path C:\\\\Users\\\\Maximilian\\\\Projects\\\\Tenderizer\\\\the_scout\\\\.venv)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Start-Sleep -Seconds 4; Invoke-WebRequest -Uri http://localhost:8000/api/health-check -UseBasicParsing 2>&1 | Select-Object -ExpandProperty Content)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(wsl --install)",
+      "PowerShell(\\([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent\\(\\)\\).IsInRole\\([Security.Principal.WindowsBuiltInRole]::Administrator\\))",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(grep -c \"^data/tenders.db$\")",
+      "Bash(git rm *)"
+    ]
+  }
+}

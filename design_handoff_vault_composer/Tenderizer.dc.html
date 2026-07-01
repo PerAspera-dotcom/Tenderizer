@@ -1,0 +1,1641 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: #2a3650; border-radius: 5px; }
+  @keyframes ucpulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+</style>
+</helmet>
+<div style="display:flex;height:100vh;width:100%;background:#0f1623;color:#e7edf6;font-family:'Public Sans',system-ui,-apple-system,sans-serif;font-size:14px;overflow:hidden;">
+
+  <!-- SIDEBAR -->
+  <aside style="width:236px;flex-shrink:0;background:#0b101a;border-right:1px solid #1a2334;display:flex;flex-direction:column;padding:0;">
+    <div style="position:relative;padding:18px 16px 8px;">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px;">
+        <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#2EE6D4,#17a8d8);display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 0 16px rgba(46,230,212,0.35);">⚡</div>
+        <div style="font-size:15.5px;font-weight:800;letter-spacing:-0.02em;flex:1;">Tenderizer</div>
+        <div style="font-size:9px;font-weight:700;letter-spacing:0.1em;color:#4c5a70;border:1px solid #243049;border-radius:5px;padding:2px 5px;">PORTAL</div>
+      </div>
+      <button onClick="{{ toggleAppMenu }}" style="width:100%;display:flex;align-items:center;gap:10px;background:#101826;border:1px solid #1d2940;border-radius:10px;padding:9px 10px;cursor:pointer;font-family:inherit;text-align:left;" style-hover="border-color:#2c3c5a;">
+        <span style="display:flex;width:19px;height:19px;flex-shrink:0;color:{{ currentApp.color }};">{{ currentApp.icon }}</span>
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:13px;font-weight:700;color:#eaf0f8;">{{ currentApp.name }}</span>
+          <span style="display:block;font-size:10.5px;color:#7d8aa0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ currentApp.tagline }}</span>
+        </span>
+        <span style="color:#5d6a7e;font-size:13px;flex-shrink:0;">⇅</span>
+      </button>
+      <sc-if value="{{ appMenuOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;left:16px;right:16px;top:113px;z-index:40;background:#0e1521;border:1px solid #243049;border-radius:12px;box-shadow:0 22px 55px rgba(0,0,0,0.6);padding:6px;">
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.1em;color:#4c5a70;text-transform:uppercase;padding:6px 8px 8px;">Tenderizer apps</div>
+          <sc-for list="{{ apps }}" as="a" hint-placeholder-count="3">
+            <button onClick="{{ a.onSelect }}" style="display:flex;align-items:center;gap:10px;width:100%;padding:9px 9px;border:none;background:transparent;border-radius:9px;cursor:pointer;text-align:left;font-family:inherit;" style-hover="background:#16202f;">
+              <span style="display:flex;width:19px;height:19px;flex-shrink:0;color:{{ a.color }};">{{ a.icon }}</span>
+              <span style="flex:1;min-width:0;">
+                <span style="display:block;font-size:13px;font-weight:700;color:#eaf0f8;">{{ a.name }}</span>
+                <span style="display:block;font-size:10.5px;color:#7d8aa0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ a.tagline }}</span>
+              </span>
+              <sc-if value="{{ a.isLive }}" hint-placeholder-val="{{ false }}"><span style="font-size:9px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.13);border-radius:5px;padding:2px 6px;flex-shrink:0;">LIVE</span></sc-if>
+              <sc-if value="{{ a.isDev }}" hint-placeholder-val="{{ false }}"><span style="font-size:9px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border-radius:5px;padding:2px 6px;flex-shrink:0;">DEV</span></sc-if>
+              <sc-if value="{{ a.isActive }}" hint-placeholder-val="{{ false }}"><span style="color:#2EE6D4;font-size:13px;font-weight:700;flex-shrink:0;">✓</span></sc-if>
+            </button>
+          </sc-for>
+        </div>
+      </sc-if>
+    </div>
+    <div style="padding:4px 16px;font-size:10px;font-weight:700;letter-spacing:0.12em;color:#4c5a70;text-transform:uppercase;margin:8px 0 5px;">{{ currentApp.name }} menu</div>
+    <nav style="display:flex;flex-direction:column;gap:3px;padding:0 12px;">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="7">
+        <sc-if value="{{ item.active }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ item.onClick }}" style="display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:9px;cursor:pointer;font-size:13.5px;font-weight:600;border:none;width:100%;text-align:left;font-family:inherit;background:rgba(46,230,212,0.1);color:#2EE6D4;">
+            <span style="display:flex;width:18px;height:18px;flex-shrink:0;">{{ item.icon }}</span>
+            <span style="flex:1;">{{ item.label }}</span>
+            <sc-if value="{{ item.hasBadge }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:700;color:#0f1623;background:#2EE6D4;border-radius:10px;padding:1px 7px;min-width:8px;text-align:center;">{{ item.badge }}</span></sc-if>
+            <sc-if value="{{ item.uc }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;">🚧</span></sc-if>
+          </button>
+        </sc-if>
+        <sc-if value="{{ item.inactive }}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{ item.onClick }}" style="display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:9px;cursor:pointer;font-size:13.5px;font-weight:500;border:none;width:100%;text-align:left;font-family:inherit;background:transparent;color:#8a97ac;">
+            <span style="display:flex;width:18px;height:18px;flex-shrink:0;">{{ item.icon }}</span>
+            <span style="flex:1;">{{ item.label }}</span>
+            <sc-if value="{{ item.hasBadge }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:700;color:#0f1623;background:#2EE6D4;border-radius:10px;padding:1px 7px;min-width:8px;text-align:center;">{{ item.badge }}</span></sc-if>
+            <sc-if value="{{ item.uc }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;">🚧</span></sc-if>
+          </button>
+        </sc-if>
+      </sc-for>
+    </nav>
+    <div style="margin-top:auto;padding:16px 16px 18px;border-top:1px solid #161f2e;">
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 11px;background:#101826;border:1px solid #1d2940;border-radius:9px;">
+        <div style="width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 8px #34d399;"></div>
+        <div style="flex:1;font-size:11.5px;color:#9aa7bc;">Scout engine <span style="color:#cfe;font-weight:600;">online</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;">
+
+    <!-- TOPBAR -->
+    <header style="height:62px;flex-shrink:0;border-bottom:1px solid #1a2334;display:flex;align-items:center;gap:18px;padding:0 28px;background:rgba(11,16,26,0.4);">
+      <div style="display:flex;align-items:center;gap:9px;flex:1;max-width:420px;background:#101826;border:1px solid #1d2940;border-radius:9px;padding:9px 13px;">
+        <span style="color:#5b6a82;font-size:13px;">⌕</span>
+        <input placeholder="Search tenders, CPV codes, buyers…" style="border:none;background:transparent;outline:none;color:#cdd6e3;font-size:13px;font-family:inherit;width:100%;" />
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex;align-items:center;gap:7px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);border-radius:20px;padding:6px 13px;">
+        <div style="width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 7px #34d399;"></div>
+        <span style="font-size:12px;color:#8ee9c4;font-weight:600;">Synced 06:14</span>
+      </div>
+      <div style="width:34px;height:34px;border-radius:50%;background:#1c2740;border:1px solid #2a3a58;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#9fc;letter-spacing:0.02em;">PA</div>
+    </header>
+
+    <!-- SCROLL AREA -->
+    <div style="flex:1;overflow-y:auto;padding:28px 32px 40px;">
+
+      <!-- ========== PORTAL — HOME ========== -->
+      <sc-if value="{{ isPHome }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <div style="margin-bottom:24px;">
+            <h1 style="margin:0;font-size:26px;font-weight:800;letter-spacing:-0.02em;">Welcome to Tenderizer</h1>
+            <p style="margin:6px 0 0;color:#8a97ac;font-size:14px;">Your tender pipeline at a glance — and a launchpad for every tool.</p>
+          </div>
+
+          <!-- APP LAUNCH CARDS -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(244px,1fr));gap:16px;margin-bottom:28px;">
+            <sc-for list="{{ launchApps }}" as="a" hint-placeholder-count="3">
+              <button onClick="{{ a.onSelect }}" style="text-align:left;border:1px solid #222e44;background:#151d2c;border-radius:14px;padding:18px;cursor:pointer;font-family:inherit;display:flex;flex-direction:column;gap:13px;" style-hover="border-color:#2c3c5a;background:#19222f;">
+                <div style="display:flex;align-items:center;gap:11px;">
+                  <span style="display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid #243049;color:{{ a.color }};">{{ a.icon }}</span>
+                  <div style="flex:1;font-size:15.5px;font-weight:700;color:#eaf0f8;">{{ a.name }}</div>
+                  <sc-if value="{{ a.isLive }}" hint-placeholder-val="{{ true }}"><span style="font-size:9px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.13);border-radius:5px;padding:2px 6px;">LIVE</span></sc-if>
+                  <sc-if value="{{ a.isDev }}" hint-placeholder-val="{{ false }}"><span style="font-size:9px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border-radius:5px;padding:2px 6px;">DEV</span></sc-if>
+                </div>
+                <div style="font-size:12.5px;color:#8a97ac;line-height:1.45;flex:1;">{{ a.tagline }}</div>
+                <div style="font-size:12px;font-weight:600;color:{{ a.color }};">Open {{ a.name }} →</div>
+              </button>
+            </sc-for>
+          </div>
+
+          <!-- DEADLINE ALERTS -->
+          <sc-if value="{{ hasAlerts }}" hint-placeholder-val="{{ true }}">
+            <div style="margin-bottom:26px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.09em;color:#7d8aa0;text-transform:uppercase;margin-bottom:11px;">Deadline alerts</div>
+              <div style="display:flex;flex-direction:column;gap:10px;">
+                <sc-for list="{{ pipeAlerts }}" as="al" hint-placeholder-count="2">
+                  <button onClick="{{ al.goPipeline }}" style="text-align:left;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:13px;border-radius:11px;padding:13px 16px;width:100%;border:1px solid #2a3650;background:#151d2c;" style-hover="background:#19222f;">
+                    <sc-if value="{{ al.isCritical }}" hint-placeholder-val="{{ true }}"><span style="width:9px;height:9px;border-radius:50%;background:#f87171;box-shadow:0 0 9px #f87171;flex-shrink:0;"></span></sc-if>
+                    <sc-if value="{{ al.isWarning }}" hint-placeholder-val="{{ false }}"><span style="width:9px;height:9px;border-radius:2px;background:#e3b341;box-shadow:0 0 9px rgba(227,179,65,0.6);flex-shrink:0;"></span></sc-if>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:13.5px;font-weight:600;color:#eaf0f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ al.title }}</div>
+                      <div style="font-size:12px;color:#8a97ac;margin-top:2px;">{{ al.portal }} · deadline {{ al.effDeadline }} · no tender sent yet</div>
+                    </div>
+                    <sc-if value="{{ al.isCritical }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;font-weight:700;color:#f87171;background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.3);padding:4px 10px;border-radius:7px;white-space:nowrap;">⚠ Closes in {{ al.effDaysLeft }}d</span></sc-if>
+                    <sc-if value="{{ al.isWarning }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.12);border:1px solid rgba(227,179,65,0.3);padding:4px 10px;border-radius:7px;white-space:nowrap;">{{ al.effDaysLeft }}d left</span></sc-if>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- ACCEPTED TENDERS SNAPSHOT -->
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+            <div style="display:flex;align-items:center;gap:11px;padding:15px 18px;border-bottom:1px solid #1f2b40;">
+              <h2 style="margin:0;font-size:15px;font-weight:700;">Accepted tenders</h2>
+              <span style="font-size:11.5px;color:#8a97ac;">{{ pipeStats.open }} open · {{ pipeStats.submitted }} submitted</span>
+              <div style="flex:1;"></div>
+              <button onClick="{{ goPipelineAll }}" style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">Open pipeline →</button>
+            </div>
+            <sc-for list="{{ pipeline }}" as="p" hint-placeholder-count="4">
+              <button onClick="{{ p.goPipeline }}" style="display:grid;grid-template-columns:minmax(0,2.6fr) minmax(0,1fr) minmax(0,1.05fr) minmax(0,1.35fr);gap:14px;align-items:center;width:100%;text-align:left;font-family:inherit;cursor:pointer;padding:13px 18px;border:none;border-top:1px solid #1b2536;background:transparent;" style-hover="background:#19222f;">
+                <div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;color:#eaf0f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.title }}</div><div style="font-size:11.5px;color:#738197;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{ p.flag }} {{ p.buyer }}</div></div>
+                <div style="font-size:12.5px;color:#bcc7d6;">{{ p.portal }}</div>
+                <div style="font-size:12.5px;color:#cdd6e3;font-family:'IBM Plex Mono',monospace;">{{ p.effDeadline }}</div>
+                <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+                  <sc-if value="{{ p.isCritical }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;font-weight:700;color:#f87171;font-family:'IBM Plex Mono',monospace;">{{ p.effDaysLeft }}d</span></sc-if>
+                  <sc-if value="{{ p.isWarning }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;font-weight:700;color:#e3b341;font-family:'IBM Plex Mono',monospace;">{{ p.effDaysLeft }}d</span></sc-if>
+                  <sc-if value="{{ p.isOk }}" hint-placeholder-val="{{ true }}"><span style="font-size:11px;color:#6b7990;font-family:'IBM Plex Mono',monospace;">{{ p.effDaysLeft }}d</span></sc-if>
+                  <sc-if value="{{ p.isSubmitted }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.28);padding:3px 9px;border-radius:6px;">Submitted</span></sc-if>
+                  <sc-if value="{{ p.isDrafting }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:700;color:#60a5fa;background:rgba(96,165,250,0.12);border:1px solid rgba(96,165,250,0.28);padding:3px 9px;border-radius:6px;">Drafting</span></sc-if>
+                  <sc-if value="{{ p.isNotStarted }}" hint-placeholder-val="{{ true }}"><span style="font-size:10.5px;font-weight:700;color:#9aa7bc;background:#16202f;border:1px solid #2a3650;padding:3px 9px;border-radius:6px;">Not started</span></sc-if>
+                </div>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== PORTAL — PIPELINE & DEADLINES ========== -->
+      <sc-if value="{{ isPPipeline }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:14px;">
+            <div>
+              <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Pipeline &amp; Deadlines</h1>
+              <p style="margin:5px 0 0;color:#8a97ac;font-size:13.5px;">Accepted tenders in progress — track submission status, amend deadlines, keep notes</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#f87171;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.25);padding:6px 11px;border-radius:8px;"><span style="width:7px;height:7px;border-radius:50%;background:#f87171;"></span>{{ pipeStats.critical }} closing soon</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#9aa7bc;background:#16202f;border:1px solid #2a3650;padding:6px 11px;border-radius:8px;">{{ pipeStats.open }} open</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#34d399;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);padding:6px 11px;border-radius:8px;">{{ pipeStats.submitted }} submitted</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:320px minmax(0,1fr);gap:18px;align-items:start;">
+            <!-- PIPELINE LIST -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="padding:14px 16px;border-bottom:1px solid #1f2b40;font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">Accepted · {{ pipeStats.total }} tenders</div>
+              <sc-for list="{{ pipeline }}" as="p" hint-placeholder-count="4">
+                <button onClick="{{ p.onSelect }}" style="position:relative;display:block;width:100%;text-align:left;border:none;background:transparent;border-top:1px solid #1b2536;padding:13px 16px;cursor:pointer;font-family:inherit;">
+                  <sc-if value="{{ p.isSelected }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;inset:0;background:rgba(46,230,212,0.08);border-left:2px solid #2EE6D4;pointer-events:none;"></div></sc-if>
+                  <div style="position:relative;display:flex;align-items:center;gap:8px;">
+                    <sc-if value="{{ p.isCritical }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#f87171;flex-shrink:0;"></span></sc-if>
+                    <sc-if value="{{ p.isWarning }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:2px;background:#e3b341;flex-shrink:0;"></span></sc-if>
+                    <sc-if value="{{ p.isOk }}" hint-placeholder-val="{{ true }}"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;flex-shrink:0;"></span></sc-if>
+                    <span style="flex:1;font-size:12.5px;font-weight:600;color:#dbe3ee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.title }}</span>
+                  </div>
+                  <div style="position:relative;display:flex;align-items:center;gap:9px;margin-top:8px;padding-left:16px;">
+                    <span style="font-size:11px;color:#6b7990;">{{ p.portal }}</span>
+                    <div style="flex:1;"></div>
+                    <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#8a97ac;">{{ p.effDeadline }}</span>
+                  </div>
+                </button>
+              </sc-for>
+            </div>
+
+            <!-- PIPELINE DETAIL -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <sc-if value="{{ selPipe.isCritical }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;padding:11px 22px;background:rgba(248,113,113,0.1);border-bottom:1px solid rgba(248,113,113,0.25);">
+                  <span style="font-size:14px;">⚠</span><span style="font-size:12.5px;font-weight:600;color:#f87171;">Closes in {{ selPipe.effDaysLeft }} days and no tender has been sent — act now or request an extension.</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ selPipe.isWarning }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;padding:11px 22px;background:rgba(227,179,65,0.09);border-bottom:1px solid rgba(227,179,65,0.22);">
+                  <span style="font-size:14px;">⏳</span><span style="font-size:12.5px;font-weight:600;color:#e3b341;">{{ selPipe.effDaysLeft }} days to deadline — submission not yet sent.</span>
+                </div>
+              </sc-if>
+
+              <div style="padding:20px 22px;border-bottom:1px solid #1f2b40;">
+                <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
+                  <span style="font-size:13px;">{{ selPipe.flag }}</span>
+                  <span style="font-size:12px;color:#8a97ac;">{{ selPipe.portal }} · {{ selPipe.buyer }}</span>
+                  <div style="flex:1;"></div>
+                  <sc-if value="{{ selPipe.extended }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;font-weight:700;color:#2EE6D4;background:rgba(46,230,212,0.1);border:1px solid rgba(46,230,212,0.3);padding:3px 9px;border-radius:7px;">Deadline extended</span></sc-if>
+                </div>
+                <h2 style="margin:0;font-size:19px;font-weight:700;line-height:1.3;letter-spacing:-0.01em;">{{ selPipe.title }}</h2>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));">
+                <!-- DEADLINE + STATUS -->
+                <div style="padding:20px 22px;border-bottom:1px solid #1f2b40;">
+                  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;margin-bottom:14px;">Deadline</div>
+                  <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+                    <div style="font-size:22px;font-weight:800;font-family:'IBM Plex Mono',monospace;letter-spacing:-0.01em;">{{ selPipe.effDeadline }}</div>
+                    <span style="font-size:12.5px;color:#8a97ac;">{{ selPipe.effDaysLeft }} days left</span>
+                  </div>
+                  <button onClick="{{ selPipe.amend }}" style="margin-top:14px;border:1px solid rgba(46,230,212,0.4);background:rgba(46,230,212,0.07);color:#2EE6D4;border-radius:9px;padding:9px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;" style-hover="background:rgba(46,230,212,0.16);">＋ Amend deadline (extension granted)</button>
+
+                  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;margin:22px 0 11px;">Submission status</div>
+                  <div style="display:flex;gap:8px;">
+                    <button onClick="{{ selPipe.setNotStarted }}" style="position:relative;flex:1;overflow:hidden;border:1px solid #2a3650;background:#16202f;color:#9aa7bc;border-radius:9px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">
+                      <sc-if value="{{ selPipe.isNotStarted }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(154,167,188,0.12);pointer-events:none;"></div></sc-if><span style="position:relative;">Not started</span>
+                    </button>
+                    <button onClick="{{ selPipe.setDrafting }}" style="position:relative;flex:1;overflow:hidden;border:1px solid rgba(96,165,250,0.45);background:rgba(96,165,250,0.07);color:#60a5fa;border-radius:9px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">
+                      <sc-if value="{{ selPipe.isDrafting }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(96,165,250,0.18);pointer-events:none;"></div></sc-if><span style="position:relative;">Drafting</span>
+                    </button>
+                    <button onClick="{{ selPipe.setSubmitted }}" style="position:relative;flex:1;overflow:hidden;border:1px solid rgba(52,211,153,0.45);background:rgba(52,211,153,0.07);color:#34d399;border-radius:9px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">
+                      <sc-if value="{{ selPipe.isSubmitted }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(52,211,153,0.18);pointer-events:none;"></div></sc-if><span style="position:relative;">Tender sent</span>
+                    </button>
+                  </div>
+
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px;">
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Est. value</div><div style="font-size:14px;color:#2EE6D4;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-weight:600;">{{ selPipe.value }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Owner</div><div style="font-size:13.5px;color:#e7edf6;margin-top:4px;">{{ selPipe.owner }}</div></div>
+                  </div>
+                </div>
+
+                <!-- NOTES -->
+                <div style="padding:20px 22px;">
+                  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;margin-bottom:11px;">Notes</div>
+                  <textarea onInput="{{ selPipe.onNotes }}" value="{{ selPipe.notes }}" placeholder="Add notes for the bid team — clarifications, blockers, pricing reminders…" style="width:100%;box-sizing:border-box;min-height:190px;resize:vertical;background:#101826;border:1px solid #1d2940;border-radius:10px;padding:13px;color:#cdd6e3;font-size:13px;line-height:1.55;font-family:inherit;outline:none;" style-focus="border-color:#2c3c5a;"></textarea>
+                  <div style="font-size:11px;color:#6b7990;margin-top:9px;line-height:1.5;">Notes are saved against this tender and visible to everyone working the pipeline.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== PORTAL — FOLLOW-UP & RESULTS ========== -->
+      <sc-if value="{{ isPFollowup }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:14px;">
+            <div>
+              <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Follow-up &amp; Results</h1>
+              <p style="margin:5px 0 0;color:#8a97ac;font-size:13.5px;">Tenders you've submitted — chase results and record won / lost outcomes</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#34d399;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);padding:6px 11px;border-radius:8px;">{{ fuStats.won }} won</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#f87171;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.25);padding:6px 11px;border-radius:8px;">{{ fuStats.lost }} lost</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#e3b341;background:rgba(227,179,65,0.1);border:1px solid rgba(227,179,65,0.25);padding:6px 11px;border-radius:8px;">{{ fuStats.pending }} awaiting</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#2EE6D4;background:rgba(46,230,212,0.1);border:1px solid rgba(46,230,212,0.28);padding:6px 11px;border-radius:8px;">{{ fuWinRate }}% win rate</div>
+            </div>
+          </div>
+
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+            <div style="display:grid;grid-template-columns:minmax(0,2.6fr) minmax(0,1fr) minmax(0,1.05fr) minmax(0,1.05fr) minmax(0,1.9fr);gap:14px;padding:11px 18px;background:#121826;border-bottom:1px solid #1f2b40;font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;">
+              <div>Tender</div><div>Portal</div><div>Submitted</div><div>Result due</div><div style="text-align:right;">Outcome</div>
+            </div>
+            <sc-for list="{{ followUp }}" as="f" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:minmax(0,2.6fr) minmax(0,1fr) minmax(0,1.05fr) minmax(0,1.05fr) minmax(0,1.9fr);gap:14px;align-items:center;padding:14px 18px;border-top:1px solid #1b2536;" style-hover="background:#19222f;">
+                <div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;color:#eaf0f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ f.title }}</div><div style="font-size:11.5px;color:#738197;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{ f.flag }} {{ f.buyer }} · {{ f.value }}</div></div>
+                <div style="font-size:12.5px;color:#bcc7d6;">{{ f.portal }}</div>
+                <div style="font-size:12.5px;color:#cdd6e3;font-family:'IBM Plex Mono',monospace;">{{ f.submitted }}</div>
+                <div style="font-size:12.5px;color:#cdd6e3;font-family:'IBM Plex Mono',monospace;">{{ f.resultDue }}</div>
+                <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+                  <sc-if value="{{ f.isPending }}" hint-placeholder-val="{{ true }}">
+                    <button onClick="{{ f.markWon }}" style="border:1px solid rgba(52,211,153,0.45);background:rgba(52,211,153,0.07);color:#34d399;border-radius:7px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit;" style-hover="background:rgba(52,211,153,0.16);">Mark won</button>
+                    <button onClick="{{ f.markLost }}" style="border:1px solid rgba(248,113,113,0.45);background:rgba(248,113,113,0.07);color:#f87171;border-radius:7px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit;" style-hover="background:rgba(248,113,113,0.16);">Mark lost</button>
+                  </sc-if>
+                  <sc-if value="{{ f.isWon }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-size:11.5px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.13);border:1px solid rgba(52,211,153,0.3);padding:5px 11px;border-radius:7px;">✓ Won</span>
+                    <button onClick="{{ f.reopen }}" style="border:none;background:transparent;color:#6b7990;font-size:11px;cursor:pointer;font-family:inherit;text-decoration:underline;">reopen</button>
+                  </sc-if>
+                  <sc-if value="{{ f.isLost }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-size:11.5px;font-weight:700;color:#f87171;background:rgba(248,113,113,0.13);border:1px solid rgba(248,113,113,0.3);padding:5px 11px;border-radius:7px;">✕ Lost</span>
+                    <button onClick="{{ f.reopen }}" style="border:none;background:transparent;color:#6b7990;font-size:11px;cursor:pointer;font-family:inherit;text-decoration:underline;">reopen</button>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== DASHBOARD ========== -->
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;">
+            <div>
+              <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Dashboard</h1>
+              <p style="margin:5px 0 0;color:#8a97ac;font-size:13.5px;">Daily digest for the tent &amp; shelter supply sector</p>
+            </div>
+          </div>
+
+          <!-- LAST RUN BAR -->
+          <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;background:#121a28;border:1px solid #202c41;border-radius:11px;padding:13px 18px;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:9px;">
+              <div style="width:8px;height:8px;border-radius:50%;background:#2EE6D4;box-shadow:0 0 9px #2EE6D4;"></div>
+              <span style="font-size:13px;color:#cdd6e3;">Last sync <strong style="color:#fff;">today at 06:14</strong></span>
+            </div>
+            <div style="width:1px;height:16px;background:#2a3650;margin:0 16px;"></div>
+            <span style="font-size:13px;color:#9aa7bc;"><strong style="color:#e7edf6;">847</strong> notices scanned</span>
+            <div style="width:1px;height:16px;background:#2a3650;margin:0 16px;"></div>
+            <span style="font-size:13px;color:#9aa7bc;"><strong style="color:#2EE6D4;">14</strong> matched</span>
+            <div style="flex:1;min-width:20px;"></div>
+            <span style="font-size:12.5px;color:#8a97ac;">Next run in <strong style="color:#e7edf6;font-family:'IBM Plex Mono',monospace;">5h 46m</strong></span>
+            <button style="margin-left:16px;border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">↻ Run now</button>
+          </div>
+
+          <!-- KPI STRIP -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px;">
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">New tenders today</div>
+              <div style="font-size:34px;font-weight:800;letter-spacing:-0.03em;margin-top:8px;line-height:1;">14</div>
+              <div style="font-size:12px;color:#5fae8a;margin-top:8px;">▲ in the last 24h</div>
+            </div>
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">Portals active</div>
+              <div style="font-size:34px;font-weight:800;letter-spacing:-0.03em;margin-top:8px;line-height:1;">2 <span style="color:#3f4d63;font-size:24px;">/ 4</span></div>
+              <div style="font-size:12px;color:#e3b341;margin-top:8px;">⚠️ BE planned · DE paused</div>
+            </div>
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">Matched by CPV</div>
+              <div style="font-size:34px;font-weight:800;letter-spacing:-0.03em;margin-top:8px;line-height:1;color:#34d399;">9</div>
+              <div style="font-size:12px;color:#8a97ac;margin-top:8px;">code-based matches</div>
+            </div>
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">Keyword only</div>
+              <div style="font-size:34px;font-weight:800;letter-spacing:-0.03em;margin-top:8px;line-height:1;color:#60a5fa;">5</div>
+              <div style="font-size:12px;color:#8a97ac;margin-top:8px;">no CPV match</div>
+            </div>
+          </div>
+
+          <!-- FEED + PORTAL HEALTH -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:18px;align-items:start;">
+
+            <!-- FEED TABLE -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="display:flex;align-items:center;gap:11px;padding:16px 18px;border-bottom:1px solid #1f2b40;">
+                <h2 style="margin:0;font-size:15px;font-weight:700;">Tender Feed</h2>
+                <span style="font-size:11px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.25);padding:2px 8px;border-radius:6px;">✓ LIVE</span>
+                <div style="flex:1;"></div>
+                <span style="font-size:12px;color:#8a97ac;">Showing 5 of 14 matched</span>
+              </div>
+              <!-- header -->
+              <div style="display:grid;grid-template-columns:minmax(0,2.7fr) minmax(0,1fr) minmax(0,1.1fr) minmax(0,1fr) 70px;gap:14px;padding:11px 18px;background:#121826;border-bottom:1px solid #1f2b40;font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;">
+                <div>Title</div><div>Portal</div><div>Deadline</div><div>Match</div><div style="text-align:right;">Open</div>
+              </div>
+              <sc-for list="{{ tenders }}" as="item" hint-placeholder-count="5">
+                <div style="display:grid;grid-template-columns:minmax(0,2.7fr) minmax(0,1fr) minmax(0,1.1fr) minmax(0,1fr) 70px;gap:14px;align-items:center;padding:13px 18px;border-top:1px solid #1b2536;" style-hover="background:#19222f;">
+                  <div style="min-width:0;">
+                    <div style="font-size:13.5px;font-weight:600;color:#eaf0f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ item.title }}</div>
+                    <div style="font-size:11.5px;color:#738197;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{ item.buyer }}</div>
+                  </div>
+                  <div style="font-size:12.5px;color:#bcc7d6;"><span style="font-size:14px;">{{ item.flag }}</span> {{ item.portal }}</div>
+                  <div style="font-size:12.5px;color:#cdd6e3;font-family:'IBM Plex Mono',monospace;">{{ item.deadline }}</div>
+                  <div>
+                    <sc-if value="{{ item.isBoth }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#c084fc;background:rgba(192,132,252,0.13);border:1px solid rgba(192,132,252,0.28);padding:3px 9px;border-radius:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#c084fc;"></span>Both</span></sc-if>
+                    <sc-if value="{{ item.isCpv }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#34d399;background:rgba(52,211,153,0.13);border:1px solid rgba(52,211,153,0.28);padding:3px 9px;border-radius:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#34d399;"></span>CPV</span></sc-if>
+                    <sc-if value="{{ item.isKeyword }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#60a5fa;background:rgba(96,165,250,0.13);border:1px solid rgba(96,165,250,0.28);padding:3px 9px;border-radius:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#60a5fa;"></span>Keyword</span></sc-if>
+                  </div>
+                  <button onClick="{{ item.open }}" style="justify-self:end;border:1px solid rgba(46,230,212,0.38);background:rgba(46,230,212,0.07);color:#2EE6D4;border-radius:7px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;" style-hover="background:rgba(46,230,212,0.16);">Open</button>
+                </div>
+              </sc-for>
+            </div>
+
+            <!-- PORTAL HEALTH (UC) -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;position:relative;">
+              <div style="position:absolute;inset:0;background-image:repeating-linear-gradient(45deg,transparent,transparent 11px,rgba(227,179,65,0.04) 11px,rgba(227,179,65,0.04) 22px);pointer-events:none;"></div>
+              <div style="display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid #1f2b40;position:relative;">
+                <h2 style="margin:0;font-size:15px;font-weight:700;">Portal Health</h2>
+                <span style="font-size:10.5px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:2px 8px;border-radius:6px;letter-spacing:0.04em;">🚧 UNDER CONSTRUCTION</span>
+              </div>
+              <div style="padding:6px 0;position:relative;">
+                <div style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid #1b2536;">
+                  <div style="width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 7px #34d399;flex-shrink:0;"></div>
+                  <div style="flex:1;font-size:13.5px;font-weight:600;">TED <span style="color:#6b7990;font-weight:400;font-size:12px;">· EU</span></div>
+                  <div style="font-size:12px;color:#5fae8a;font-weight:600;">Live</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid #1b2536;">
+                  <div style="width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 7px #34d399;flex-shrink:0;"></div>
+                  <div style="flex:1;font-size:13.5px;font-weight:600;">BOAMP <span style="color:#6b7990;font-weight:400;font-size:12px;">· France</span></div>
+                  <div style="font-size:12px;color:#5fae8a;font-weight:600;">Live</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid #1b2536;">
+                  <div style="width:8px;height:8px;border-radius:50%;background:#4c5a70;flex-shrink:0;"></div>
+                  <div style="flex:1;font-size:13.5px;font-weight:600;color:#9aa7bc;">e-Procurement <span style="color:#6b7990;font-weight:400;font-size:12px;">· Belgium</span></div>
+                  <div style="font-size:12px;color:#8a97ac;font-weight:600;">Planned</div>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:11px;padding:13px 18px;">
+                  <div style="width:8px;height:8px;border-radius:2px;background:#e3b341;box-shadow:0 0 7px rgba(227,179,65,0.6);flex-shrink:0;margin-top:4px;"></div>
+                  <div style="flex:1;">
+                    <div style="font-size:13.5px;font-weight:600;">DTVP <span style="color:#6b7990;font-weight:400;font-size:12px;">· Germany</span></div>
+                    <div style="font-size:11.5px;color:#e3b341;margin-top:3px;">⚠️ Scraper paused — ToS review pending</div>
+                  </div>
+                </div>
+              </div>
+              <div style="margin:6px 14px 16px;padding:11px 13px;background:rgba(227,179,65,0.06);border:1px dashed rgba(227,179,65,0.3);border-radius:9px;font-size:11.5px;color:#c9b27a;position:relative;text-align:center;">Coming soon — in active development</div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== TENDER FEED PAGE ========== -->
+      <sc-if value="{{ isFeed }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="margin:0 0 5px;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Tender Feed</h1>
+          <p style="margin:0 0 20px;color:#8a97ac;font-size:13.5px;">All scored matches from the latest Scout run</p>
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:16px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;background:#101826;border:1px solid #1d2940;border-radius:9px;padding:9px 13px;min-width:240px;flex:1;max-width:340px;">
+              <span style="color:#5b6a82;font-size:13px;">⌕</span>
+              <input placeholder="Filter feed…" style="border:none;background:transparent;outline:none;color:#cdd6e3;font-size:13px;font-family:inherit;width:100%;" />
+            </div>
+            <button style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:9px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">All portals ▾</button>
+            <button style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:9px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">All countries ▾</button>
+            <button style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:9px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;">Match type ▾</button>
+          </div>
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+            <div style="display:grid;grid-template-columns:minmax(0,2.9fr) minmax(0,1fr) minmax(0,1.1fr) minmax(0,1fr) 70px;gap:14px;padding:11px 18px;font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;border-bottom:1px solid #1f2b40;">
+              <div>Title</div><div>Portal</div><div>Deadline</div><div>Match</div><div style="text-align:right;">Open</div>
+            </div>
+            <sc-for list="{{ tenders }}" as="item" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:minmax(0,2.9fr) minmax(0,1fr) minmax(0,1.1fr) minmax(0,1fr) 70px;gap:14px;align-items:center;padding:14px 18px;border-top:1px solid #1b2536;" style-hover="background:#19222f;">
+                <div style="min-width:0;">
+                  <div style="font-size:13.5px;font-weight:600;color:#eaf0f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ item.title }}</div>
+                  <div style="font-size:11.5px;color:#738197;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{ item.buyer }}</div>
+                </div>
+                <div style="font-size:12.5px;color:#bcc7d6;"><span style="font-size:14px;">{{ item.flag }}</span> {{ item.portal }}</div>
+                <div style="font-size:12.5px;color:#cdd6e3;font-family:'IBM Plex Mono',monospace;">{{ item.deadline }}</div>
+                <div>
+                  <sc-if value="{{ item.isBoth }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#c084fc;background:rgba(192,132,252,0.13);border:1px solid rgba(192,132,252,0.28);padding:3px 9px;border-radius:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#c084fc;"></span>Both</span></sc-if>
+                  <sc-if value="{{ item.isCpv }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#34d399;background:rgba(52,211,153,0.13);border:1px solid rgba(52,211,153,0.28);padding:3px 9px;border-radius:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#34d399;"></span>CPV</span></sc-if>
+                  <sc-if value="{{ item.isKeyword }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#60a5fa;background:rgba(96,165,250,0.13);border:1px solid rgba(96,165,250,0.28);padding:3px 9px;border-radius:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#60a5fa;"></span>Keyword</span></sc-if>
+                </div>
+                <button onClick="{{ item.open }}" style="justify-self:end;border:1px solid rgba(46,230,212,0.38);background:rgba(46,230,212,0.07);color:#2EE6D4;border-radius:7px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;" style-hover="background:rgba(46,230,212,0.16);">Open</button>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== REVIEW QUEUE ========== -->
+      <sc-if value="{{ isReview }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:14px;">
+            <div>
+              <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Review Queue</h1>
+              <p style="margin:5px 0 0;color:#8a97ac;font-size:13.5px;">Triage scored matches — confirm relevance before they reach the analyst's shortlist</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#8a97ac;background:#16202f;border:1px solid #2a3650;padding:6px 11px;border-radius:8px;"><span style="width:7px;height:7px;border-radius:50%;border:1.5px solid #5d6a7e;"></span>{{ reviewCounts.new }} new</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#34d399;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);padding:6px 11px;border-radius:8px;"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;"></span>{{ reviewCounts.shortlisted }} shortlisted</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#e3b341;background:rgba(227,179,65,0.1);border:1px solid rgba(227,179,65,0.25);padding:6px 11px;border-radius:8px;"><span style="width:7px;height:7px;border-radius:50%;background:#e3b341;"></span>{{ reviewCounts.reviewed }} reviewed</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#f87171;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.25);padding:6px 11px;border-radius:8px;"><span style="width:7px;height:7px;border-radius:50%;background:#f87171;"></span>{{ reviewCounts.dismissed }} dismissed</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:300px minmax(0,1fr);gap:18px;align-items:start;">
+
+            <!-- QUEUE LIST -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="padding:14px 16px;border-bottom:1px solid #1f2b40;font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">Queue · 5 matches</div>
+              <sc-for list="{{ reviewTenders }}" as="item" hint-placeholder-count="5">
+                <button onClick="{{ item.onSelect }}" style="position:relative;display:block;width:100%;text-align:left;border:none;background:transparent;border-top:1px solid #1b2536;padding:13px 16px;cursor:pointer;font-family:inherit;">
+                  <sc-if value="{{ item.isSelected }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(46,230,212,0.08);border-left:2px solid #2EE6D4;pointer-events:none;"></div></sc-if>
+                  <div style="position:relative;display:flex;align-items:center;gap:8px;">
+                    <sc-if value="{{ item.isShortlisted }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;flex-shrink:0;"></span></sc-if>
+                    <sc-if value="{{ item.isReviewed }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#e3b341;flex-shrink:0;"></span></sc-if>
+                    <sc-if value="{{ item.isDismissed }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#f87171;flex-shrink:0;"></span></sc-if>
+                    <sc-if value="{{ item.isNew }}" hint-placeholder-val="{{ true }}"><span style="width:8px;height:8px;border-radius:50%;border:1.5px solid #4c5a70;flex-shrink:0;"></span></sc-if>
+                    <span style="flex:1;font-size:12.5px;font-weight:600;color:#dbe3ee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ item.title }}</span>
+                  </div>
+                  <div style="position:relative;display:flex;align-items:center;gap:9px;margin-top:9px;padding-left:16px;">
+                    <span style="font-size:11px;color:#6b7990;">{{ item.portal }} · {{ item.cc }}</span>
+                    <div style="flex:1;height:5px;background:#1f2b40;border-radius:3px;overflow:hidden;"><div style="height:100%;width:{{ item.miniWidth }};background:#2EE6D4;border-radius:3px;"></div></div>
+                    <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#8a97ac;">{{ item.confidence }}%</span>
+                  </div>
+                </button>
+              </sc-for>
+            </div>
+
+            <!-- DETAIL -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="padding:20px 22px;border-bottom:1px solid #1f2b40;">
+                <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;flex-wrap:wrap;">
+                  <span style="font-size:12px;color:#8a97ac;">{{ selectedReview.portal }}</span>
+                  <span style="color:#3f4d63;">·</span>
+                  <span style="font-size:15px;">{{ selectedReview.flag }}</span>
+                  <span style="font-size:12px;color:#8a97ac;">{{ selectedReview.country }}</span>
+                  <div style="flex:1;"></div>
+                  <sc-if value="{{ selectedReview.isShortlisted }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.13);border:1px solid rgba(52,211,153,0.3);padding:3px 10px;border-radius:7px;">★ Shortlisted</span></sc-if>
+                  <sc-if value="{{ selectedReview.isReviewed }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 10px;border-radius:7px;">◐ Reviewed</span></sc-if>
+                  <sc-if value="{{ selectedReview.isDismissed }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#f87171;background:rgba(248,113,113,0.13);border:1px solid rgba(248,113,113,0.3);padding:3px 10px;border-radius:7px;">✕ Dismissed</span></sc-if>
+                  <sc-if value="{{ selectedReview.isNew }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;font-weight:700;color:#8a97ac;background:#16202f;border:1px solid #2a3650;padding:3px 10px;border-radius:7px;">○ New — awaiting decision</span></sc-if>
+                </div>
+                <h2 style="margin:0;font-size:19px;font-weight:700;line-height:1.3;letter-spacing:-0.01em;">{{ selectedReview.title }}</h2>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));">
+                <!-- CORE ELEMENTS -->
+                <div style="padding:20px 22px;border-bottom:1px solid #1f2b40;">
+                  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;margin-bottom:15px;">Core elements</div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 18px;">
+                    <div style="grid-column:1 / -1;"><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Issuing authority</div><div style="font-size:13.5px;color:#e7edf6;margin-top:4px;font-weight:600;">{{ selectedReview.issuingGov }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Country</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;">{{ selectedReview.flag }} {{ selectedReview.country }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Region</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;">{{ selectedReview.region }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Source portal</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;">{{ selectedReview.portal }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Procedure type</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;">{{ selectedReview.procedure }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Published</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;font-family:'IBM Plex Mono',monospace;">{{ selectedReview.published }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Deadline</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;font-family:'IBM Plex Mono',monospace;">{{ selectedReview.deadline }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Est. value</div><div style="font-size:13px;color:#2EE6D4;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-weight:600;">{{ selectedReview.value }}</div></div>
+                    <div><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Language</div><div style="font-size:13px;color:#e7edf6;margin-top:4px;">{{ selectedReview.lang }}</div></div>
+                    <div style="grid-column:1 / -1;"><div style="font-size:10.5px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Primary CPV</div><div style="font-size:14px;color:#2EE6D4;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-weight:600;">{{ selectedReview.cpv }}</div></div>
+                  </div>
+                </div>
+
+                <!-- CONFIDENCE -->
+                <div style="padding:20px 22px;">
+                  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;margin-bottom:15px;">Relevance confidence</div>
+                  <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
+                    <div style="font-size:46px;font-weight:800;line-height:1;letter-spacing:-0.03em;">{{ selectedReview.confidence }}<span style="font-size:22px;color:#5d6a7e;">%</span></div>
+                    <div>
+                      <sc-if value="{{ selectedReview.isHigh }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#34d399;background:rgba(52,211,153,0.13);border:1px solid rgba(52,211,153,0.3);padding:3px 10px;border-radius:7px;">High relevance</span></sc-if>
+                      <sc-if value="{{ selectedReview.isMedium }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 10px;border-radius:7px;">Medium relevance</span></sc-if>
+                      <sc-if value="{{ selectedReview.isLow }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#f87171;background:rgba(248,113,113,0.13);border:1px solid rgba(248,113,113,0.3);padding:3px 10px;border-radius:7px;">Low relevance</span></sc-if>
+                      <div style="font-size:11.5px;color:#8a97ac;margin-top:6px;">± {{ selectedReview.interval }}% interval</div>
+                    </div>
+                  </div>
+
+                  <div style="margin-top:20px;display:flex;flex-direction:column;gap:14px;">
+                    <sc-for list="{{ selectedReview.signals }}" as="s" hint-placeholder-count="4">
+                      <div>
+                        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px;">
+                          <span style="font-size:12.5px;color:#dbe3ee;font-weight:600;">{{ s.label }}</span>
+                          <span style="font-size:11.5px;font-family:'IBM Plex Mono',monospace;color:#8a97ac;">{{ s.value }}/100</span>
+                        </div>
+                        <div style="height:7px;background:#1f2b40;border-radius:4px;overflow:hidden;"><div style="height:100%;width:{{ s.width }};background:{{ s.color }};border-radius:4px;"></div></div>
+                        <div style="font-size:10.5px;color:#6b7990;margin-top:4px;">{{ s.desc }}</div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+
+              <!-- TRIAGE ACTIONS -->
+              <div style="padding:16px 22px;border-top:1px solid #1f2b40;background:#121a28;">
+                <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;margin-bottom:11px;">Analyst decision</div>
+                <div style="display:flex;gap:11px;">
+                  <button onClick="{{ selectedReview.setShortlisted }}" style="position:relative;flex:1;overflow:hidden;border:1px solid rgba(52,211,153,0.5);background:rgba(52,211,153,0.07);color:#34d399;border-radius:10px;padding:13px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;">
+                    <sc-if value="{{ selectedReview.isShortlisted }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(52,211,153,0.18);pointer-events:none;"></div></sc-if>
+                    <span style="position:relative;">★ Shortlist</span>
+                  </button>
+                  <button onClick="{{ selectedReview.setReviewed }}" style="position:relative;flex:1;overflow:hidden;border:1px solid rgba(227,179,65,0.5);background:rgba(227,179,65,0.07);color:#e3b341;border-radius:10px;padding:13px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;">
+                    <sc-if value="{{ selectedReview.isReviewed }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(227,179,65,0.18);pointer-events:none;"></div></sc-if>
+                    <span style="position:relative;">◐ Mark reviewed</span>
+                  </button>
+                  <button onClick="{{ selectedReview.setDismissed }}" style="position:relative;flex:1;overflow:hidden;border:1px solid rgba(248,113,113,0.5);background:rgba(248,113,113,0.07);color:#f87171;border-radius:10px;padding:13px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;">
+                    <sc-if value="{{ selectedReview.isDismissed }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(248,113,113,0.18);pointer-events:none;"></div></sc-if>
+                    <span style="position:relative;">✕ Dismiss</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== PORTALS PAGE (UC) ========== -->
+      <sc-if value="{{ isPortals }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Portals &amp; Health</h1>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 22px;color:#8a97ac;font-size:13.5px;">Live scraper status, throughput and ToS compliance per source portal</p>
+          <div style="position:relative;">
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;opacity:0.5;pointer-events:none;filter:saturate(0.7);">
+              <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;"><div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:15px;font-weight:700;">TED · EU</div><div style="width:9px;height:9px;border-radius:50%;background:#34d399;"></div></div><div style="font-size:12px;color:#8a97ac;margin-top:10px;">412 notices / day · last scrape 06:14</div></div>
+              <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;"><div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:15px;font-weight:700;">BOAMP · France</div><div style="width:9px;height:9px;border-radius:50%;background:#34d399;"></div></div><div style="font-size:12px;color:#8a97ac;margin-top:10px;">228 notices / day · last scrape 06:11</div></div>
+              <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:18px;"><div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:15px;font-weight:700;">e-Procurement · BE</div><div style="width:9px;height:9px;border-radius:50%;background:#4c5a70;"></div></div><div style="font-size:12px;color:#8a97ac;margin-top:10px;">Connector not yet built — planned</div></div>
+              <div style="background:#151d2c;border:1px solid #3a3320;border-radius:13px;padding:18px;"><div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:15px;font-weight:700;">DTVP · Germany</div><div style="width:9px;height:9px;border-radius:2px;background:#e3b341;"></div></div><div style="font-size:12px;color:#e3b341;margin-top:10px;">Paused — ToS review pending</div></div>
+            </div>
+            <div style="position:absolute;inset:0;background-image:repeating-linear-gradient(45deg,transparent,transparent 13px,rgba(255,255,255,0.018) 13px,rgba(255,255,255,0.018) 26px);display:flex;align-items:center;justify-content:center;">
+              <div style="background:#121a28;border:1px solid #2a3650;border-radius:14px;padding:22px 30px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,0.5);">
+                <div style="font-size:30px;animation:ucpulse 2.4s ease-in-out infinite;">🚧</div>
+                <div style="font-size:15px;font-weight:700;margin-top:8px;">Coming soon</div>
+                <div style="font-size:12.5px;color:#8a97ac;margin-top:4px;">In active development</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== CPV CONFIG (UC) ========== -->
+      <sc-if value="{{ isCpv }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">CPV Config</h1>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 22px;color:#8a97ac;font-size:13.5px;">22 active CPV codes matched against incoming notices</p>
+          <div style="position:relative;">
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;opacity:0.5;pointer-events:none;">
+              <div style="display:flex;align-items:center;gap:11px;padding:14px 18px;border-bottom:1px solid #1f2b40;"><div style="flex:1;font-size:13px;color:#8a97ac;">⌕ Search codes…</div><div style="font-size:12px;font-weight:600;color:#2EE6D4;border:1px solid rgba(46,230,212,0.4);padding:6px 12px;border-radius:7px;">+ Add CPV</div></div>
+              <div style="display:grid;grid-template-columns:auto 1.2fr 2.4fr;gap:14px;padding:9px 18px;font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;"><div>Active</div><div>Code</div><div>Label (EN / FR / NL)</div></div>
+              <div style="display:grid;grid-template-columns:auto 1.2fr 2.4fr;gap:14px;padding:13px 18px;border-top:1px solid #1b2536;align-items:center;"><div style="width:34px;height:19px;border-radius:10px;background:#2EE6D4;position:relative;"><div style="width:15px;height:15px;border-radius:50%;background:#fff;position:absolute;top:2px;right:2px;"></div></div><div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#2EE6D4;">35521100</div><div style="font-size:12.5px;color:#cdd6e3;">Military camping tents · Tentes de camping militaires · Militaire kampeertenten</div></div>
+              <div style="display:grid;grid-template-columns:auto 1.2fr 2.4fr;gap:14px;padding:13px 18px;border-top:1px solid #1b2536;align-items:center;"><div style="width:34px;height:19px;border-radius:10px;background:#2EE6D4;position:relative;"><div style="width:15px;height:15px;border-radius:50%;background:#fff;position:absolute;top:2px;right:2px;"></div></div><div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#2EE6D4;">44211000</div><div style="font-size:12.5px;color:#cdd6e3;">Prefabricated buildings · Bâtiments préfabriqués · Geprefabriceerde gebouwen</div></div>
+              <div style="display:grid;grid-template-columns:auto 1.2fr 2.4fr;gap:14px;padding:13px 18px;border-top:1px solid #1b2536;align-items:center;"><div style="width:34px;height:19px;border-radius:10px;background:#2b3650;position:relative;"><div style="width:15px;height:15px;border-radius:50%;background:#7a8aa3;position:absolute;top:2px;left:2px;"></div></div><div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#8a97ac;">39522000</div><div style="font-size:12.5px;color:#8a97ac;">Awnings &amp; tarpaulins · Stores et bâches · Zonneschermen en dekzeilen</div></div>
+            </div>
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background-image:repeating-linear-gradient(45deg,transparent,transparent 13px,rgba(255,255,255,0.018) 13px,rgba(255,255,255,0.018) 26px);">
+              <div style="background:#121a28;border:1px solid #2a3650;border-radius:14px;padding:22px 30px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,0.5);"><div style="font-size:30px;animation:ucpulse 2.4s ease-in-out infinite;">🚧</div><div style="font-size:15px;font-weight:700;margin-top:8px;">Coming soon</div><div style="font-size:12.5px;color:#8a97ac;margin-top:4px;">In active development</div></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== KEYWORDS (UC) ========== -->
+      <sc-if value="{{ isKeywords }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Keywords</h1>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 22px;color:#8a97ac;font-size:13.5px;">68 multilingual keywords across EN / FR / NL / DE</p>
+          <div style="position:relative;">
+            <div style="opacity:0.5;pointer-events:none;">
+              <sc-for list="{{ kwGroups }}" as="g" hint-placeholder-count="4">
+                <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;padding:16px 18px;margin-bottom:14px;">
+                  <div style="font-size:12px;font-weight:700;color:#9aa7bc;margin-bottom:11px;">{{ g.lang }}</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                    <sc-for list="{{ g.words }}" as="w" hint-placeholder-count="6">
+                      <span style="font-size:12.5px;color:#cdd6e3;background:#1a2436;border:1px solid #2a3650;padding:5px 11px;border-radius:7px;">{{ w }}</span>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background-image:repeating-linear-gradient(45deg,transparent,transparent 13px,rgba(255,255,255,0.018) 13px,rgba(255,255,255,0.018) 26px);">
+              <div style="background:#121a28;border:1px solid #2a3650;border-radius:14px;padding:22px 30px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,0.5);"><div style="font-size:30px;animation:ucpulse 2.4s ease-in-out infinite;">🚧</div><div style="font-size:15px;font-weight:700;margin-top:8px;">Coming soon</div><div style="font-size:12.5px;color:#8a97ac;margin-top:4px;">In active development</div></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== REPORTS (UC) ========== -->
+      <sc-if value="{{ isReports }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Reports</h1>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 22px;color:#8a97ac;font-size:13.5px;">Weekly digest email &amp; spreadsheet exports</p>
+          <div style="position:relative;max-width:620px;">
+            <div style="opacity:0.5;pointer-events:none;">
+              <div style="display:flex;justify-content:flex-end;margin-bottom:14px;"><span style="font-size:12.5px;font-weight:600;color:#34d399;border:1px solid rgba(52,211,153,0.4);background:rgba(52,211,153,0.08);padding:8px 14px;border-radius:8px;">⤓ Export to Excel</span></div>
+              <div style="background:#fff;border-radius:13px;overflow:hidden;color:#1a2436;">
+                <div style="background:#0b101a;padding:16px 20px;color:#fff;display:flex;align-items:center;gap:9px;"><span style="font-size:15px;">⚡</span><span style="font-weight:700;">Tenderizer Weekly Digest</span></div>
+                <div style="padding:20px;">
+                  <div style="font-size:13px;color:#6b7280;">Week of 22–28 Jun 2026</div>
+                  <div style="font-size:19px;font-weight:800;margin:8px 0 14px;color:#0f1623;">9 new high-priority tenders</div>
+                  <div style="border-top:1px solid #e5e7eb;padding-top:12px;font-size:13px;color:#374151;">Fourniture de tentes de camping militaires — <strong>BOAMP</strong>, deadline 15 Jul</div>
+                  <div style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:12px;font-size:13px;color:#374151;">Shelter structures for humanitarian use — <strong>TED</strong>, deadline 22 Jul</div>
+                </div>
+              </div>
+            </div>
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background-image:repeating-linear-gradient(45deg,transparent,transparent 13px,rgba(255,255,255,0.02) 13px,rgba(255,255,255,0.02) 26px);">
+              <div style="background:#121a28;border:1px solid #2a3650;border-radius:14px;padding:22px 30px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,0.5);"><div style="font-size:30px;animation:ucpulse 2.4s ease-in-out infinite;">🚧</div><div style="font-size:15px;font-weight:700;margin-top:8px;">Coming soon</div><div style="font-size:12.5px;color:#8a97ac;margin-top:4px;">In active development</div></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== SETTINGS (UC) ========== -->
+      <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Settings</h1>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 22px;color:#8a97ac;font-size:13.5px;">Workspace, notifications and Scout run schedule</p>
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:14px;padding:40px;text-align:center;">
+            <div style="font-size:34px;animation:ucpulse 2.4s ease-in-out infinite;">🚧</div>
+            <div style="font-size:16px;font-weight:700;margin-top:10px;">Coming soon — in active development</div>
+            <div style="font-size:13px;color:#8a97ac;margin-top:6px;">This section is being built.</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== VAULT — LIBRARY ========== -->
+      <sc-if value="{{ isVault }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:5px;flex-wrap:wrap;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Library</h1>
+            <span style="font-size:11px;font-weight:700;color:#60a5fa;background:rgba(96,165,250,0.12);border:1px solid rgba(96,165,250,0.3);padding:3px 9px;border-radius:6px;">VAULT</span>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 18px;color:#8a97ac;font-size:13.5px;">Ingest a library of technical documents — Vault extracts structured metadata that Scout and Composer reuse</p>
+
+          <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(96,165,250,0.22);border-radius:11px;padding:11px 16px;margin-bottom:18px;background-color:rgba(96,165,250,0.05);background-image:repeating-linear-gradient(45deg,transparent,transparent 11px,rgba(96,165,250,0.04) 11px,rgba(96,165,250,0.04) 22px);">
+            <span style="font-size:16px;">🚧</span>
+            <div style="flex:1;"><div style="font-size:13px;font-weight:700;color:#9cc1fb;">In active development</div><div style="font-size:12px;color:#8090ad;">Preview of the Vault app — interface is not yet functional</div></div>
+          </div>
+
+          <div>
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:8px;background:#101826;border:1px solid #1d2940;border-radius:9px;padding:9px 13px;min-width:240px;flex:1;max-width:360px;"><span style="color:#5b6a82;font-size:13px;">⌕</span><span style="font-size:13px;color:#5d6a7e;">Search specs, datasheets, certificates…</span></div>
+              <div style="flex:1;"></div>
+              <span style="font-size:12.5px;font-weight:700;color:#0f1623;background:#60a5fa;padding:9px 15px;border-radius:8px;white-space:nowrap;">⤓ Ingest documents</span>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:18px;align-items:start;">
+              <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+                <div style="padding:13px 16px;border-bottom:1px solid #1f2b40;display:flex;align-items:center;gap:9px;"><span style="font-size:12px;font-weight:700;color:#dbe3ee;">Indexed documents</span><div style="flex:1;"></div><span style="font-size:11px;color:#7d8aa0;">1,240 total · {{ vaultStats.processing }} processing</span></div>
+                <sc-for list="{{ vaultDocs }}" as="d" hint-placeholder-count="6">
+                  <button onClick="{{ d.onSelect }}" style="position:relative;display:block;width:100%;text-align:left;border:none;background:transparent;border-top:1px solid #1b2536;padding:13px 16px;cursor:pointer;font-family:inherit;" style-hover="background:#19222f;">
+                    <sc-if value="{{ d.isSelected }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;inset:0;background:rgba(96,165,250,0.08);border-left:2px solid #60a5fa;pointer-events:none;"></div></sc-if>
+                    <div style="position:relative;">
+                      <div style="display:flex;align-items:center;gap:9px;">
+                        <span style="font-size:13.5px;font-weight:600;color:#eaf0f8;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ d.name }}</span>
+                        <span style="font-size:10.5px;font-weight:600;color:#9aa7bc;background:#1a2436;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;flex-shrink:0;">{{ d.type }}</span>
+                      </div>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;align-items:center;">
+                        <sc-for list="{{ d.meta }}" as="m" hint-placeholder-count="3">
+                          <span style="font-size:11px;color:#9cc1fb;background:rgba(96,165,250,0.1);border:1px solid rgba(96,165,250,0.2);border-radius:6px;padding:2px 8px;font-family:'IBM Plex Mono',monospace;">{{ m }}</span>
+                        </sc-for>
+                        <div style="flex:1;"></div>
+                        <sc-if value="{{ d.isIndexed }}" hint-placeholder-val="{{ true }}"><span style="font-size:11px;color:#34d399;display:inline-flex;align-items:center;gap:5px;"><span style="width:6px;height:6px;border-radius:50%;background:#34d399;"></span>Indexed</span></sc-if>
+                        <sc-if value="{{ d.isProcessing }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;color:#e3b341;display:inline-flex;align-items:center;gap:5px;"><span style="width:6px;height:6px;border-radius:50%;background:#e3b341;"></span>Processing</span></sc-if>
+                      </div>
+                    </div>
+                  </button>
+                </sc-for>
+              </div>
+
+              <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;position:sticky;top:0;">
+                <div style="padding:13px 16px;border-bottom:1px solid #1f2b40;"><div style="font-size:12px;font-weight:700;color:#dbe3ee;">Extracted metadata</div><div style="font-size:11px;color:#7d8aa0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ vaultSelected.name }}</div></div>
+                <div style="padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;">
+                  <sc-for list="{{ vaultSelected.fields }}" as="f" hint-placeholder-count="6">
+                    <div>
+                      <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">{{ f.label }}</div>
+                      <sc-if value="{{ f.mono }}" hint-placeholder-val="{{ false }}"><div style="font-size:13px;color:#e7edf6;margin-top:4px;font-family:'IBM Plex Mono',monospace;">{{ f.value }}</div></sc-if>
+                      <sc-if value="{{ f.notMono }}" hint-placeholder-val="{{ true }}"><div style="font-size:13px;color:#e7edf6;margin-top:4px;">{{ f.value }}</div></sc-if>
+                    </div>
+                  </sc-for>
+                  <div style="grid-column:1 / -1;"><div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:#6b7990;text-transform:uppercase;">Linked CPV codes</div><div style="font-size:13px;color:#2EE6D4;margin-top:4px;font-family:'IBM Plex Mono',monospace;">{{ vaultSelected.cpv }}</div></div>
+                  <div style="grid-column:1 / -1;display:flex;align-items:center;gap:8px;padding-top:13px;border-top:1px solid #1f2b40;">
+                    <sc-if value="{{ vaultSelected.isIndexed }}" hint-placeholder-val="{{ true }}"><span style="font-size:12px;color:#8a97ac;">{{ vaultSelected.fieldCount }} fields extracted</span><div style="flex:1;"></div><span style="font-size:11.5px;font-weight:700;color:#34d399;">{{ vaultSelected.confidence }}% confidence</span></sc-if>
+                    <sc-if value="{{ vaultSelected.isProcessing }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#e3b341;">⏳ Extracting fields — not yet available for retrieval</span></sc-if>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== COMPOSER — INGEST & CONFIG ========== -->
+      <sc-if value="{{ isCConfig }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:5px;flex-wrap:wrap;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Ingest &amp; Config</h1>
+            <span style="font-size:11px;font-weight:700;color:#c084fc;background:rgba(192,132,252,0.12);border:1px solid rgba(192,132,252,0.3);padding:3px 9px;border-radius:6px;">COMPOSER</span>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 18px;color:#8a97ac;font-size:13.5px;">Drop in the tender documents — Composer reads and interprets them, then the responsible person validates each requirement before any draft is generated</p>
+
+          <!-- WORKFLOW STEPPER -->
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
+            <span style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#c084fc;background:rgba(192,132,252,0.1);border:1px solid rgba(192,132,252,0.28);padding:6px 12px;border-radius:8px;"><span style="width:18px;height:18px;border-radius:50%;background:#c084fc;color:#0f1623;display:flex;align-items:center;justify-content:center;font-size:11px;">1</span>Ingest</span>
+            <span style="color:#3f4d63;">→</span>
+            <span style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#c084fc;background:rgba(192,132,252,0.1);border:1px solid rgba(192,132,252,0.28);padding:6px 12px;border-radius:8px;"><span style="width:18px;height:18px;border-radius:50%;background:#c084fc;color:#0f1623;display:flex;align-items:center;justify-content:center;font-size:11px;">2</span>Interpret</span>
+            <span style="color:#3f4d63;">→</span>
+            <span style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.1);border:1px solid rgba(227,179,65,0.28);padding:6px 12px;border-radius:8px;"><span style="width:18px;height:18px;border-radius:50%;background:#e3b341;color:#0f1623;display:flex;align-items:center;justify-content:center;font-size:11px;">3</span>Validate</span>
+            <span style="color:#3f4d63;">→</span>
+            <span style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#5d6a7e;background:#16202f;border:1px solid #2a3650;padding:6px 12px;border-radius:8px;"><span style="width:18px;height:18px;border-radius:50%;background:#2a3650;color:#9aa7bc;display:flex;align-items:center;justify-content:center;font-size:11px;">4</span>Generate draft</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:300px minmax(0,1fr);gap:18px;align-items:start;">
+            <!-- INGEST + DOCS -->
+            <div style="display:flex;flex-direction:column;gap:16px;">
+              <div style="border:1.5px dashed #3a3550;background:rgba(192,132,252,0.04);border-radius:13px;padding:22px 18px;text-align:center;">
+                <div style="font-size:26px;">⤓</div>
+                <div style="font-size:13px;font-weight:700;color:#dbe3ee;margin-top:8px;">Drop tender documents</div>
+                <div style="font-size:11.5px;color:#8a97ac;margin-top:4px;line-height:1.45;">Role auto-detected from filename prefix — <span style="font-family:'IBM Plex Mono',monospace;color:#a9b6cb;">sow_ · tech_ · background_ · parta_ · example_</span></div>
+              </div>
+              <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+                <div style="padding:12px 15px;border-bottom:1px solid #1f2b40;display:flex;align-items:center;gap:8px;"><span style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#7d8aa0;text-transform:uppercase;">Document library</span><div style="flex:1;"></div><span style="font-size:11px;color:#7d8aa0;">{{ ingestDocCount }} files</span></div>
+                <sc-for list="{{ ingestDocs }}" as="d" hint-placeholder-count="6">
+                  <div style="padding:11px 15px;border-top:1px solid #1b2536;">
+                    <div style="display:flex;align-items:center;gap:9px;">
+                      <span style="font-size:9.5px;font-weight:700;letter-spacing:0.03em;color:{{ d.color }};background:{{ d.color }}1a;border:1px solid {{ d.color }}44;border-radius:5px;padding:2px 6px;flex-shrink:0;text-transform:uppercase;">{{ d.role }}</span>
+                      <div style="flex:1;min-width:0;"><div style="font-size:12px;font-weight:600;color:#eaf0f8;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ d.name }}</div><div style="font-size:10.5px;color:#738197;">{{ d.pages }} pages · {{ d.chunks }} chunks</div></div>
+                      <sc-if value="{{ d.isIngested }}" hint-placeholder-val="{{ true }}"><span style="font-size:10px;font-weight:700;color:#34d399;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;"><span style="width:6px;height:6px;border-radius:50%;background:#34d399;"></span>Ingested</span></sc-if>
+                      <sc-if value="{{ d.isPending }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:700;color:#e3b341;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;"><span style="width:6px;height:6px;border-radius:50%;background:#e3b341;"></span>Pending</span></sc-if>
+                      <sc-if value="{{ d.isStyleOnly }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:700;color:#8a97ac;flex-shrink:0;">Style only</span></sc-if>
+                    </div>
+                    <sc-if value="{{ d.enrich }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;align-items:center;gap:7px;margin-top:8px;padding:6px 9px;background:rgba(227,179,65,0.08);border:1px solid rgba(227,179,65,0.28);border-radius:7px;"><span style="font-size:11px;">⚠</span><span style="font-size:10.5px;color:#d8bd7c;flex:1;">Image-heavy PDF — run datasheet enrichment to extract specs</span></div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+                <div style="display:flex;gap:7px;padding:11px 15px;border-top:1px solid #1f2b40;">
+                  <span style="flex:1;text-align:center;font-size:11.5px;font-weight:700;color:#0f1623;background:#c084fc;border-radius:7px;padding:7px;">⟳ Ingest all</span>
+                  <span style="flex:1;text-align:center;font-size:11.5px;font-weight:600;color:#d8bd7c;background:rgba(227,179,65,0.1);border:1px solid rgba(227,179,65,0.3);border-radius:7px;padding:7px;">✨ Enrich datasheets</span>
+                </div>
+              </div>
+              <div style="background:#151d2c;border:1px solid #243049;border-radius:13px;padding:13px 15px;display:flex;align-items:center;gap:10px;">
+                <span style="font-size:16px;">▦</span>
+                <div style="flex:1;min-width:0;"><div style="font-size:12px;font-weight:600;color:#eaf0f8;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">compliance_matrix.xlsx</div><div style="font-size:10.5px;color:#738197;">Compliance matrix · 41 requirements</div></div>
+                <span style="font-size:10px;font-weight:700;color:#34d399;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;"><span style="width:6px;height:6px;border-radius:50%;background:#34d399;"></span>Loaded</span>
+              </div>
+            </div>
+
+            <!-- INTERPRETED REQUIREMENTS -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="display:flex;align-items:center;gap:11px;padding:15px 18px;border-bottom:1px solid #1f2b40;">
+                <h2 style="margin:0;font-size:15px;font-weight:700;">Interpreted requirements</h2>
+                <div style="flex:1;"></div>
+                <span style="font-size:12px;color:#8a97ac;">{{ ingestValidated }} of {{ ingestTotal }} validated</span>
+              </div>
+              <!-- progress -->
+              <div style="padding:13px 18px;border-bottom:1px solid #1f2b40;">
+                <div style="height:7px;background:#1f2b40;border-radius:4px;overflow:hidden;"><div style="height:100%;width:{{ ingestPct }};background:#c084fc;border-radius:4px;"></div></div>
+              </div>
+              <sc-for list="{{ ingestReqs }}" as="r" hint-placeholder-count="6">
+                <div style="padding:14px 18px;border-top:1px solid #1b2536;">
+                  <div style="display:flex;align-items:flex-start;gap:11px;">
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:13.5px;font-weight:600;color:#eaf0f8;">{{ r.req }}</div>
+                      <div style="font-size:12px;color:#9aa7bc;margin-top:4px;line-height:1.5;">“{{ r.extracted }}”</div>
+                      <div style="display:flex;align-items:center;gap:9px;margin-top:7px;flex-wrap:wrap;">
+                        <span style="font-size:10.5px;color:#8a97ac;font-family:'IBM Plex Mono',monospace;background:#16202f;border:1px solid #2a3650;border-radius:5px;padding:2px 7px;">{{ r.source }}</span>
+                        <span style="font-size:10.5px;color:#c8b6f0;">{{ r.confidence }}% extraction confidence</span>
+                      </div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;width:108px;">
+                      <button onClick="{{ r.validate }}" style="position:relative;overflow:hidden;border:1px solid rgba(52,211,153,0.45);background:rgba(52,211,153,0.07);color:#34d399;border-radius:7px;padding:7px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit;">
+                        <sc-if value="{{ r.isValidated }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(52,211,153,0.2);pointer-events:none;"></div></sc-if>
+                        <span style="position:relative;">✓ Validate</span>
+                      </button>
+                      <button onClick="{{ r.flag }}" style="position:relative;overflow:hidden;border:1px solid rgba(227,179,65,0.45);background:rgba(227,179,65,0.07);color:#e3b341;border-radius:7px;padding:7px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit;">
+                        <sc-if value="{{ r.isFlagged }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;background:rgba(227,179,65,0.2);pointer-events:none;"></div></sc-if>
+                        <span style="position:relative;">⚑ Flag</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </sc-for>
+              <!-- GATE -->
+              <div style="padding:16px 18px;border-top:1px solid #1f2b40;background:#121a28;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                <sc-if value="{{ ingestAllValid }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:1;min-width:160px;font-size:12.5px;color:#34d399;font-weight:600;">All requirements validated — ready to generate.</span>
+                  <button onClick="{{ goToProposals }}" style="border:none;background:#c084fc;color:#0f1623;border-radius:9px;padding:11px 18px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;">✦ Proceed to draft generation →</button>
+                </sc-if>
+                <sc-if value="{{ ingestNotAllValid }}" hint-placeholder-val="{{ true }}">
+                  <span style="flex:1;min-width:160px;font-size:12.5px;color:#8a97ac;">Validate every requirement to unlock draft generation ({{ ingestValidated }}/{{ ingestTotal }}).</span>
+                  <span style="border:1px solid #2a3650;background:#16202f;color:#5d6a7e;border-radius:9px;padding:11px 18px;font-size:13px;font-weight:700;cursor:not-allowed;">✦ Proceed to draft generation</span>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== COMPOSER — PROPOSAL REVIEW ========== -->
+      <sc-if value="{{ isCReview }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:5px;flex-wrap:wrap;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Proposal Review</h1>
+            <span style="font-size:11px;font-weight:700;color:#c084fc;background:rgba(192,132,252,0.12);border:1px solid rgba(192,132,252,0.3);padding:3px 9px;border-radius:6px;">COMPOSER</span>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 18px;color:#8a97ac;font-size:13.5px;">Every response traces to the SOW. Review section by section, refine the prose, and clear the gaps before submission.</p>
+
+          <!-- READINESS BANNER -->
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-radius:13px;padding:15px 18px;margin-bottom:18px;background:rgba(227,179,65,0.07);border:1px solid rgba(227,179,65,0.3);">
+            <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:240px;">
+              <span style="width:11px;height:11px;border-radius:50%;background:#e3b341;box-shadow:0 0 11px rgba(227,179,65,0.7);flex-shrink:0;"></span>
+              <div>
+                <div style="font-size:14px;font-weight:800;letter-spacing:0.02em;color:#e3b341;">NOT SUBMISSION-READY</div>
+                <div style="font-size:12px;color:#a9b6cb;margin-top:2px;">Drafting <strong style="color:#eaf0f8;">Fourniture de tentes de camping militaires</strong> · BOAMP · deadline 15 Jul 2026</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:18px;">
+              <div style="text-align:center;"><div style="font-size:20px;font-weight:800;color:#e3b341;font-family:'IBM Plex Mono',monospace;">{{ propCounts.completed }}</div><div style="font-size:10px;color:#8a97ac;text-transform:uppercase;letter-spacing:0.05em;">to complete</div></div>
+              <div style="text-align:center;"><div style="font-size:20px;font-weight:800;color:#60a5fa;font-family:'IBM Plex Mono',monospace;">{{ propCounts.linked }}</div><div style="font-size:10px;color:#8a97ac;text-transform:uppercase;letter-spacing:0.05em;">to link</div></div>
+              <div style="text-align:center;"><div style="font-size:20px;font-weight:800;color:#34d399;font-family:'IBM Plex Mono',monospace;">{{ propCounts.complete }}</div><div style="font-size:10px;color:#8a97ac;text-transform:uppercase;letter-spacing:0.05em;">complete</div></div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button onClick="{{ goGaps }}" style="border:1px solid rgba(227,179,65,0.45);background:rgba(227,179,65,0.1);color:#e3b341;border-radius:8px;padding:8px 13px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">View gaps →</button>
+              <span style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:8px 13px;font-size:12px;font-weight:600;">⤓ .docx</span>
+              <span style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:8px;padding:8px 13px;font-size:12px;font-weight:600;">⤓ matrix .xlsx</span>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:340px minmax(0,1fr);gap:18px;align-items:start;">
+            <!-- REQUIREMENT LIST -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="display:flex;gap:5px;padding:11px 12px;border-bottom:1px solid #1f2b40;flex-wrap:wrap;">
+                <sc-for list="{{ filters }}" as="f" hint-placeholder-count="4">
+                  <sc-if value="{{ f.active }}" hint-placeholder-val="{{ false }}"><button onClick="{{ f.setFilter }}" style="border:1px solid rgba(192,132,252,0.45);background:rgba(192,132,252,0.14);color:#d3b3fb;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">{{ f.label }} · {{ f.n }}</button></sc-if>
+                  <sc-if value="{{ f.inactive }}" hint-placeholder-val="{{ true }}"><button onClick="{{ f.setFilter }}" style="border:1px solid #2a3650;background:transparent;color:#9aa7bc;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;">{{ f.label }} · {{ f.n }}</button></sc-if>
+                </sc-for>
+              </div>
+              <div style="max-height:560px;overflow-y:auto;">
+                <sc-for list="{{ propFiltered }}" as="r" hint-placeholder-count="6">
+                  <button onClick="{{ r.onSelect }}" style="position:relative;display:block;width:100%;text-align:left;border:none;background:transparent;border-top:1px solid #1b2536;padding:12px 14px;cursor:pointer;font-family:inherit;" style-hover="background:#19222f;">
+                    <sc-if value="{{ r.isSelected }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;inset:0;background:rgba(192,132,252,0.09);border-left:2px solid #c084fc;pointer-events:none;"></div></sc-if>
+                    <div style="position:relative;display:flex;align-items:flex-start;gap:9px;">
+                      <span style="width:7px;height:7px;border-radius:50%;background:{{ r.statusColor }};flex-shrink:0;margin-top:5px;"></span>
+                      <div style="flex:1;min-width:0;">
+                        <div style="display:flex;align-items:baseline;gap:7px;"><span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#7d8aa0;flex-shrink:0;">{{ r.num }}</span><span style="font-size:12.5px;font-weight:600;color:#eaf0f8;">{{ r.title }}</span></div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-top:5px;">
+                          <span style="font-size:10px;font-weight:700;color:{{ r.statusColor }};">{{ r.statusLabel }}</span>
+                          <span style="font-size:10px;color:#6b7990;font-family:'IBM Plex Mono',monospace;">sim {{ r.simStr }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+
+            <!-- DETAIL -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;">
+              <div style="padding:16px 20px;border-bottom:1px solid #1f2b40;display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:200px;">
+                  <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#7d8aa0;">Requirement {{ selProp.num }}</div>
+                  <h2 style="margin:3px 0 0;font-size:17px;font-weight:700;letter-spacing:-0.01em;text-wrap:pretty;">{{ selProp.title }}</h2>
+                </div>
+                <div style="display:flex;align-items:center;gap:9px;flex-shrink:0;">
+                  <span style="font-size:11px;font-weight:700;color:{{ selProp.statusColor }};background:{{ selProp.statusColor }}1a;border:1px solid {{ selProp.statusColor }}55;border-radius:7px;padding:4px 10px;">{{ selProp.statusLabel }}</span>
+                  <div style="text-align:right;"><div style="font-size:15px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:{{ selProp.statusColor }};">{{ selProp.simStr }}</div><div style="font-size:9px;color:#6b7990;text-transform:uppercase;letter-spacing:0.05em;">similarity</div></div>
+                </div>
+              </div>
+
+              <div style="padding:18px 20px;">
+                <!-- SOW source -->
+                <div style="font-size:10px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;margin-bottom:7px;">Requirement · from SOW</div>
+                <div style="font-size:13px;line-height:1.6;color:#cdd6e3;border-left:2px solid #2a3a58;padding:2px 0 2px 13px;margin-bottom:20px;">{{ selProp.sow }}</div>
+
+                <!-- Generated response -->
+                <div style="font-size:10px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;margin-bottom:7px;">Generated response</div>
+                <sc-if value="{{ selProp.hasText }}" hint-placeholder-val="{{ true }}">
+                  <div style="font-size:13.5px;line-height:1.65;color:#dbe3ee;margin-bottom:14px;">{{ selProp.text }}</div>
+                </sc-if>
+                <sc-if value="{{ selProp.isCompleted }}" hint-placeholder-val="{{ false }}">
+                  <div style="border:1px dashed rgba(248,113,113,0.5);background:rgba(248,113,113,0.06);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+                    <div style="font-size:12px;font-weight:800;letter-spacing:0.04em;color:#f87171;text-transform:uppercase;">⛔ To be completed</div>
+                    <div style="font-size:12.5px;color:#e6a9a9;margin-top:6px;line-height:1.55;">{{ selProp.gap }}</div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ selProp.isLinked }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:flex-start;gap:9px;border:1px solid rgba(96,165,250,0.35);background:rgba(96,165,250,0.07);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+                    <span style="font-size:13px;flex-shrink:0;">🔗</span>
+                    <div><div style="font-size:11.5px;font-weight:700;color:#9cc1fb;">To be linked</div><div style="font-size:12px;color:#a9c4ec;margin-top:3px;line-height:1.5;">{{ selProp.link }}</div></div>
+                  </div>
+                </sc-if>
+
+                <!-- Citations -->
+                <sc-if value="{{ selProp.hasCites }}" hint-placeholder-val="{{ true }}">
+                  <div style="font-size:10px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;margin-bottom:8px;">Source citations · from Vault</div>
+                  <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:20px;">
+                    <sc-for list="{{ selProp.cites }}" as="c" hint-placeholder-count="2">
+                      <div style="display:flex;align-items:center;gap:10px;background:#121a28;border:1px solid #243049;border-radius:9px;padding:9px 12px;">
+                        <span style="font-size:11px;color:#60a5fa;flex-shrink:0;">↳</span>
+                        <span style="flex:1;min-width:0;font-size:12px;font-family:'IBM Plex Mono',monospace;color:#cdd6e3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ c.doc }}</span>
+                        <span style="font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#8ee9c4;flex-shrink:0;">{{ c.score }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <!-- Refine -->
+                <div style="border-top:1px solid #1f2b40;padding-top:16px;">
+                  <div style="font-size:10px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;margin-bottom:8px;">Refine this section</div>
+                  <textarea placeholder="Type a refinement instruction — e.g. “reference the SGS certificate” / “be more assertive” / “make this shorter”" style="width:100%;box-sizing:border-box;resize:vertical;min-height:58px;background:#101826;border:1px solid #243049;border-radius:9px;padding:10px 12px;color:#cdd6e3;font-size:12.5px;font-family:inherit;outline:none;"></textarea>
+                  <div style="display:flex;align-items:center;gap:9px;margin-top:10px;flex-wrap:wrap;">
+                    <span style="font-size:12.5px;font-weight:700;color:#0f1623;background:#c084fc;border-radius:8px;padding:9px 15px;">⟳ Regenerate section</span>
+                    <span style="font-size:12px;color:#8a97ac;font-family:'IBM Plex Mono',monospace;">v3 · last regenerated 27 Jun</span>
+                    <div style="flex:1;"></div>
+                    <span style="font-size:11.5px;color:#9cc1fb;cursor:pointer;">⌄ Version history</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== COMPOSER — GAPS REPORT ========== -->
+      <sc-if value="{{ isCGaps }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:5px;flex-wrap:wrap;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Gaps Report</h1>
+            <span style="font-size:11px;font-weight:700;color:#c084fc;background:rgba(192,132,252,0.12);border:1px solid rgba(192,132,252,0.3);padding:3px 9px;border-radius:6px;">COMPOSER</span>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <p style="margin:0 0 18px;color:#8a97ac;font-size:13.5px;">The single number that matters: outstanding gaps. The proposal is not submission-ready until it reaches zero.</p>
+
+          <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:18px;align-items:start;margin-bottom:18px;">
+            <!-- READINESS -->
+            <div style="border-radius:14px;padding:22px 24px;background:rgba(227,179,65,0.07);border:1px solid rgba(227,179,65,0.3);display:flex;align-items:center;gap:22px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:180px;">
+                <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:#8a97ac;text-transform:uppercase;">Submission status</div>
+                <div style="font-size:26px;font-weight:800;letter-spacing:-0.01em;color:#e3b341;margin-top:5px;">{{ outstanding }} items outstanding</div>
+                <div style="font-size:12.5px;color:#a9b6cb;margin-top:5px;">{{ propCounts.completed }} to be completed · {{ propCounts.linked }} to be linked · {{ propCounts.complete }} of {{ propCounts.total }} complete</div>
+              </div>
+              <div style="position:relative;width:84px;height:84px;border-radius:50%;background:conic-gradient(#34d399 0 44%,#1f2b40 44% 100%);flex-shrink:0;">
+                <div style="position:absolute;inset:8px;border-radius:50%;background:#13192a;display:flex;flex-direction:column;align-items:center;justify-content:center;"><span style="font-size:18px;font-weight:800;color:#eaf0f8;font-family:'IBM Plex Mono',monospace;">{{ propCounts.complete }}/{{ propCounts.total }}</span><span style="font-size:9px;color:#8a97ac;">done</span></div>
+              </div>
+            </div>
+
+            <!-- RUN PROGRESS -->
+            <div style="background:#151d2c;border:1px solid #222e44;border-radius:14px;padding:16px 18px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:#7d8aa0;text-transform:uppercase;margin-bottom:14px;">Gaps closed across runs</div>
+              <div style="display:flex;align-items:flex-end;gap:14px;height:96px;">
+                <sc-for list="{{ gapRuns }}" as="g" hint-placeholder-count="4">
+                  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:6px;">
+                    <span style="font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#cdd6e3;">{{ g.gaps }}</span>
+                    <sc-if value="{{ g.current }}" hint-placeholder-val="{{ false }}"><div style="width:100%;max-width:34px;border-radius:5px 5px 0 0;background:#e3b341;height:{{ g.barH }};"></div></sc-if>
+                    <sc-if value="{{ g.past }}" hint-placeholder-val="{{ true }}"><div style="width:100%;max-width:34px;border-radius:5px 5px 0 0;background:#3a4a66;height:{{ g.barH }};"></div></sc-if>
+                    <span style="font-size:10px;color:#8a97ac;">{{ g.run }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <!-- TO BE COMPLETED -->
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;margin-bottom:16px;">
+            <div style="display:flex;align-items:center;gap:9px;padding:13px 18px;border-bottom:1px solid #1f2b40;"><span style="width:9px;height:9px;border-radius:50%;background:#e3b341;"></span><span style="font-size:13px;font-weight:700;color:#eaf0f8;">To be completed</span><span style="font-size:11px;color:#8a97ac;">no supporting documentation found</span><div style="flex:1;"></div><span style="font-size:11px;font-weight:700;color:#e3b341;font-family:'IBM Plex Mono',monospace;">{{ propCounts.completed }}</span></div>
+            <sc-for list="{{ gapCompleted }}" as="r" hint-placeholder-count="2">
+              <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border-top:1px solid #1b2536;flex-wrap:wrap;">
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#7d8aa0;flex-shrink:0;">{{ r.num }}</span>
+                <div style="flex:1;min-width:200px;"><div style="font-size:13px;font-weight:600;color:#eaf0f8;">{{ r.title }}</div><div style="font-size:11.5px;color:#8a97ac;margin-top:3px;line-height:1.5;">{{ r.gap }}</div></div>
+                <button onClick="{{ goReview }}" style="border:1px solid rgba(227,179,65,0.4);background:rgba(227,179,65,0.08);color:#e3b341;border-radius:8px;padding:7px 13px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0;">+ Add document</button>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- TO BE LINKED -->
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:13px;overflow:hidden;margin-bottom:16px;">
+            <div style="display:flex;align-items:center;gap:9px;padding:13px 18px;border-bottom:1px solid #1f2b40;"><span style="width:9px;height:9px;border-radius:50%;background:#60a5fa;"></span><span style="font-size:13px;font-weight:700;color:#eaf0f8;">To be linked</span><span style="font-size:11px;color:#8a97ac;">evidence present — needs formal linking</span><div style="flex:1;"></div><span style="font-size:11px;font-weight:700;color:#60a5fa;font-family:'IBM Plex Mono',monospace;">{{ propCounts.linked }}</span></div>
+            <sc-for list="{{ gapLinked }}" as="r" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border-top:1px solid #1b2536;flex-wrap:wrap;">
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#7d8aa0;flex-shrink:0;">{{ r.num }}</span>
+                <div style="flex:1;min-width:200px;"><div style="font-size:13px;font-weight:600;color:#eaf0f8;">{{ r.title }}</div><div style="font-size:11.5px;color:#9cc1fb;margin-top:3px;line-height:1.5;">{{ r.link }}</div></div>
+                <div style="display:flex;gap:7px;flex-shrink:0;">
+                  <button onClick="{{ goReview }}" style="border:1px solid rgba(96,165,250,0.4);background:rgba(96,165,250,0.08);color:#9cc1fb;border-radius:8px;padding:7px 13px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">Link document</button>
+                  <span style="border:1px solid #2a3650;background:#16202f;color:#9aa7bc;border-radius:8px;padding:7px 13px;font-size:12px;font-weight:600;">Mark resolved</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;">
+            <span style="border:1px solid #2a3650;background:#16202f;color:#cdd6e3;border-radius:9px;padding:10px 16px;font-size:12.5px;font-weight:600;">⤓ Download gaps_report.txt</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ========== COMPOSER — GENERIC UC ========== -->
+      <sc-if value="{{ isCUC }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:18px;flex-wrap:wrap;">
+            <h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.02em;">Composer</h1>
+            <span style="font-size:11px;font-weight:700;color:#c084fc;background:rgba(192,132,252,0.12);border:1px solid rgba(192,132,252,0.3);padding:3px 9px;border-radius:6px;">COMPOSER</span>
+            <span style="font-size:11px;font-weight:700;color:#e3b341;background:rgba(227,179,65,0.13);border:1px solid rgba(227,179,65,0.3);padding:3px 9px;border-radius:6px;">🚧 UNDER CONSTRUCTION</span>
+          </div>
+          <div style="background:#151d2c;border:1px solid #222e44;border-radius:14px;padding:40px;text-align:center;">
+            <div style="font-size:34px;animation:ucpulse 2.4s ease-in-out infinite;">🚧</div>
+            <div style="font-size:16px;font-weight:700;margin-top:10px;">Coming soon — in active development</div>
+            <div style="font-size:13px;color:#8a97ac;margin-top:6px;">This section is being built.</div>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </main>
+
+  <!-- ========== TENDER DETAIL SLIDE-OVER (UC) ========== -->
+  <sc-if value="{{ detailOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:50;display:flex;justify-content:flex-end;">
+      <div onClick="{{ closeDetail }}" style="position:absolute;inset:0;background:rgba(6,9,15,0.62);backdrop-filter:blur(2px);"></div>
+      <div style="position:relative;width:460px;max-width:92vw;height:100%;background:#111927;border-left:1px solid #233148;display:flex;flex-direction:column;box-shadow:-30px 0 70px rgba(0,0,0,0.5);">
+        <div style="display:flex;align-items:center;gap:10px;padding:11px 18px;background:rgba(227,179,65,0.09);border-bottom:1px solid rgba(227,179,65,0.22);">
+          <span style="font-size:11px;font-weight:700;color:#e3b341;">🚧 UNDER CONSTRUCTION</span>
+          <span style="font-size:11.5px;color:#b8a06a;">Tender detail view — coming soon</span>
+          <div style="flex:1;"></div>
+          <button onClick="{{ closeDetail }}" style="border:none;background:#1c2740;color:#cdd6e3;width:28px;height:28px;border-radius:7px;cursor:pointer;font-size:15px;line-height:1;">✕</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:22px 22px 30px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+            <span style="font-size:12px;color:#8a97ac;">{{ detail.portal }}</span>
+            <span style="color:#3f4d63;">·</span>
+            <span style="font-size:15px;">{{ detail.flag }}</span>
+            <span style="font-size:12px;color:#8a97ac;">{{ detail.country }}</span>
+          </div>
+          <h2 style="margin:0 0 16px;font-size:19px;font-weight:700;line-height:1.3;letter-spacing:-0.01em;">{{ detail.title }}</h2>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#1f2b40;border:1px solid #1f2b40;border-radius:11px;overflow:hidden;margin-bottom:18px;">
+            <div style="background:#141d2c;padding:13px 15px;"><div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;">Buyer</div><div style="font-size:13px;color:#e7edf6;margin-top:5px;">{{ detail.buyer }}</div></div>
+            <div style="background:#141d2c;padding:13px 15px;"><div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;">Est. value</div><div style="font-size:13px;color:#2EE6D4;margin-top:5px;font-family:'IBM Plex Mono',monospace;font-weight:600;">{{ detail.value }}</div></div>
+            <div style="background:#141d2c;padding:13px 15px;"><div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;">Deadline</div><div style="font-size:13px;color:#e7edf6;margin-top:5px;font-family:'IBM Plex Mono',monospace;">{{ detail.deadline }}</div></div>
+            <div style="background:#141d2c;padding:13px 15px;"><div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;">Language</div><div style="font-size:13px;color:#e7edf6;margin-top:5px;">{{ detail.lang }}</div></div>
+          </div>
+
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;margin-bottom:9px;">Matched CPV code</div>
+          <div style="display:inline-flex;align-items:center;gap:8px;background:rgba(46,230,212,0.1);border:1px solid rgba(46,230,212,0.35);border-radius:9px;padding:9px 14px;margin-bottom:18px;">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:#2EE6D4;">{{ detail.cpv }}</span>
+            <span style="font-size:11.5px;color:#8ddfd6;">highlighted match</span>
+          </div>
+
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;color:#6b7990;text-transform:uppercase;margin-bottom:9px;">Description</div>
+          <p style="margin:0 0 24px;font-size:13px;line-height:1.6;color:#bcc7d6;">{{ detail.desc }}</p>
+
+          <button style="width:100%;border:1px dashed rgba(227,179,65,0.45);background:rgba(227,179,65,0.07);color:#e3b341;border-radius:10px;padding:13px;font-size:13.5px;font-weight:700;cursor:not-allowed;font-family:inherit;">⚐ Flag for follow-up <span style="font-weight:400;opacity:0.7;">· coming soon</span></button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+    <rect width="400" height="400" fill="#0f1623"></rect>
+    <rect x="120" y="120" width="160" height="160" rx="42" fill="#2EE6D4"></rect>
+    <path d="M214 150 L168 214 L196 214 L186 250 L232 186 L204 186 Z" fill="#0f1623"></path>
+  </svg>
+</template>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { page: 'p_home', detailId: null, statuses: {}, reviewId: 1, app: 'portal', appMenuOpen: false, pip: {}, pipelineId: 1, fu: {}, reqValid: {}, propReqId: '3.6', propFilter: 'all', vaultDocId: 'd1' };
+
+  appsDefs = [
+    { key: 'portal', name: 'Portal', tagline: 'Pipeline, deadlines & follow-up', status: 'live', color: '#2EE6D4' },
+    { key: 'scout', name: 'Scout', tagline: 'Monitor & match tenders', status: 'live', color: '#2EE6D4' },
+    { key: 'vault', name: 'Vault', tagline: 'Technical document library', status: 'dev', color: '#60a5fa' },
+    { key: 'composer', name: 'Composer', tagline: 'Draft tender proposals', status: 'dev', color: '#c084fc' },
+  ];
+
+  firstPage = { portal: 'p_home', scout: 'dashboard', vault: 'v_library', composer: 'c_config' };
+
+  navByApp = {
+    portal: [
+      { key: 'p_home', label: 'Home', uc: false },
+      { key: 'p_pipeline', label: 'Pipeline & Deadlines', uc: false },
+      { key: 'p_followup', label: 'Follow-up & Results', uc: false },
+    ],
+    scout: [
+      { key: 'dashboard', label: 'Dashboard', uc: false },
+      { key: 'feed', label: 'Tender Feed', uc: false },
+      { key: 'review', label: 'Review Queue', uc: false },
+      { key: 'portals', label: 'Portals & Health', uc: true },
+      { key: 'cpv', label: 'CPV Config', uc: true },
+      { key: 'keywords', label: 'Keywords', uc: true },
+      { key: 'reports', label: 'Reports', uc: true },
+      { key: 'settings', label: 'Settings', uc: true },
+    ],
+    vault: [
+      { key: 'v_library', label: 'Library', uc: false },
+      { key: 'v_metadata', label: 'Metadata Rules', uc: true },
+      { key: 'v_collections', label: 'Collections', uc: true },
+      { key: 'v_settings', label: 'Settings', uc: true },
+    ],
+    composer: [
+      { key: 'c_config', label: 'Ingest & Config', uc: false },
+      { key: 'c_proposals', label: 'Proposal Review', uc: false },
+      { key: 'c_gaps', label: 'Gaps Report', uc: false },
+      { key: 'c_style', label: 'Style Guide', uc: true },
+      { key: 'c_settings', label: 'Settings', uc: true },
+    ],
+  };
+
+  // Sample rows mirror the real tenders.db schema (store.COLUMNS). Live sources are
+  // TED + BOAMP only; e-Procurement (BE) is planned, DTVP (DE) paused. `value`/`lang`
+  // are illustrative — NOT columns in the schema (see handoff doc).
+  tenderData = [
+    { id: 1, source: 'BOAMP', pub_number: '26-63438', title: 'Fourniture de tentes de camping militaires', portal: 'BOAMP', flag: '🇫🇷', country: 'France', cc: 'FR', place: 'FR-75', category: 'Supply', procedure: 'Procédure ouverte', pub_date: '08 Jun 2026', deadline: '15 Jul 2026', match: 'Both', match_source: 'both', cpv: '35521100', cpv_codes: ['35521100'], matched_terms: ['tente','campement'], buyer: 'Ministère des Armées — DGA', value: '€2.4M', lang: 'French', desc: 'Acquisition de tentes de camping militaires modulaires pour déploiement opérationnel, incluant structures porteuses, piquets et accessoires de montage rapide.', url: 'https://www.boamp.fr/pages/avis/?q=idweb:%2226-63438%22' },
+    { id: 2, source: 'TED', pub_number: '381972-2026', title: 'Shelter structures for humanitarian relief operations', portal: 'TED', flag: '🇸🇪', country: 'Sweden', cc: 'SWE', place: 'SE110', category: 'Supply', procedure: 'open', pub_date: '11 Jun 2026', deadline: '22 Jul 2026', match: 'CPV', match_source: 'cpv', cpv: '44211000', cpv_codes: ['44211000','44211100'], matched_terms: [], buyer: 'Myndigheten för samhällsskydd och beredskap (MSB)', value: '€5.1M', lang: 'English', desc: 'Framework agreement for rapid-deployment shelter structures supporting humanitarian relief operations, with delivery within 72 hours of activation.', url: 'https://ted.europa.eu/en/notice/-/detail/381972-2026/html' },
+    { id: 3, source: 'TED', pub_number: '402915-2026', title: 'Dostawa namiotów wojskowych i obozowisk polowych', portal: 'TED', flag: '🇵🇱', country: 'Poland', cc: 'POL', place: 'PL911', category: 'Supply', procedure: 'open', pub_date: '14 Jun 2026', deadline: '03 Aug 2026', match: 'Both', match_source: 'both', cpv: '35521200', cpv_codes: ['35521200','35521000'], matched_terms: ['namiot','obóz'], buyer: 'Inspektorat Uzbrojenia — Ministerstwo Obrony', value: '€1.8M', lang: 'Polish', desc: 'Dostawa namiotów wojskowych oraz kompletnych obozowisk polowych obejmujących struktury sypialne, sanitarne i dowodzenia.', url: 'https://ted.europa.eu/en/notice/-/detail/402915-2026/html' },
+    { id: 4, source: 'TED', pub_number: '388740-2026', title: 'Mobile camp infrastructure for field operations', portal: 'TED', flag: '🇫🇷', country: 'France', cc: 'FRA', place: 'FRJ15', category: 'Services', procedure: 'Competitive dialogue', pub_date: '12 Jun 2026', deadline: '10 Aug 2026', match: 'Keyword', match_source: 'keyword', cpv: '39522000', cpv_codes: ['39522000'], matched_terms: ['camp','shelter','modular'], buyer: 'Ministère de l’Intérieur — DGSCGC', value: '€3.3M', lang: 'English', desc: 'Supply of mobile camp infrastructure for field operations, including modular accommodation units, field kitchens and water/sanitation utilities.', url: 'https://ted.europa.eu/en/notice/-/detail/388740-2026/html' },
+    { id: 5, source: 'BOAMP', pub_number: '26-71204', title: 'Tentes et abris modulaires pour postes de commandement', portal: 'BOAMP', flag: '🇫🇷', country: 'France', cc: 'FR', place: 'FR-13', category: 'Supply', procedure: 'Procédure ouverte', pub_date: '15 Jun 2026', deadline: '18 Aug 2026', match: 'CPV', match_source: 'cpv', cpv: '35521000', cpv_codes: ['35521000'], matched_terms: [], buyer: 'SDIS 13 — Service Départemental d’Incendie et de Secours', value: '€640K', lang: 'French', desc: 'Fourniture de tentes et abris modulaires pour postes de commandement et bases de vie temporaires lors d’interventions de secours.', url: 'https://www.boamp.fr/pages/avis/?q=idweb:%2226-71204%22' },
+  ];
+
+  reviewMeta = {
+    1: { issuingGov: 'Direction Générale de l’Armement (DGA)', region: 'Île-de-France, FR', procedure: 'Procédure ouverte', published: '08 Jun 2026', deadline: '15 Jul 2026', value: '€2.4M', country: 'France', cc: 'FR', flag: '🇫🇷', portal: 'BOAMP', lang: 'French', cpv: '35521100', confidence: 92, interval: 4, cpvSig: 95, adjCpvSig: 70, termsSig: 85, adjTermsSig: 60 },
+    2: { issuingGov: 'Myndigheten för samhällsskydd och beredskap (MSB)', region: 'Stockholm, SE', procedure: 'Open procedure', published: '11 Jun 2026', deadline: '22 Jul 2026', value: '€5.1M', country: 'Sweden', cc: 'SWE', flag: '🇸🇪', portal: 'TED', lang: 'English', cpv: '44211000', confidence: 74, interval: 8, cpvSig: 88, adjCpvSig: 55, termsSig: 30, adjTermsSig: 25 },
+    3: { issuingGov: 'Inspektorat Uzbrojenia — Ministerstwo Obrony', region: 'Mazowieckie, PL', procedure: 'Open procedure', published: '14 Jun 2026', deadline: '03 Aug 2026', value: '€1.8M', country: 'Poland', cc: 'POL', flag: '🇵🇱', portal: 'TED', lang: 'Polish', cpv: '35521200', confidence: 88, interval: 5, cpvSig: 90, adjCpvSig: 65, termsSig: 80, adjTermsSig: 55 },
+    4: { issuingGov: 'Ministère de l’Intérieur — DGSCGC', region: 'Île-de-France, FR', procedure: 'Competitive dialogue', published: '12 Jun 2026', deadline: '10 Aug 2026', value: '€3.3M', country: 'France', cc: 'FRA', flag: '🇫🇷', portal: 'TED', lang: 'English', cpv: '39522000', confidence: 58, interval: 11, cpvSig: 20, adjCpvSig: 40, termsSig: 78, adjTermsSig: 62 },
+    5: { issuingGov: 'SDIS des Bouches-du-Rhône (SDIS 13)', region: 'Provence-Alpes-Côte d’Azur, FR', procedure: 'Procédure ouverte', published: '15 Jun 2026', deadline: '18 Aug 2026', value: '€640K', country: 'France', cc: 'FR', flag: '🇫🇷', portal: 'BOAMP', lang: 'French', cpv: '35521000', confidence: 71, interval: 9, cpvSig: 85, adjCpvSig: 60, termsSig: 35, adjTermsSig: 28 },
+  };
+
+  kwGroups = [
+    { lang: 'English', words: ['tent', 'shelter', 'camp', 'tarpaulin', 'marquee', 'awning', 'canopy', 'modular accommodation'] },
+    { lang: 'Français', words: ['tente', 'abri', 'campement', 'bâche', 'chapiteau', 'tentes modulaires', 'base de vie'] },
+    { lang: 'Nederlands', words: ['tent', 'tentenkamp', 'schuilplaats', 'dekzeil', 'paviljoen', 'onderkomen'] },
+    { lang: 'Deutsch', words: ['Zelt', 'Unterkunft', 'Zeltlager', 'Plane', 'Festzelt', 'Notunterkunft'] },
+  ];
+
+  // Vault — indexed technical documents. `fields` drives the metadata detail panel.
+  vaultDocs = [
+    { id: 'd1', name: 'Tent fabric spec — 600D polyester.pdf', type: 'Datasheet', meta: ['600D PES', '3000 mm', 'M2'], status: 'Indexed', confidence: 96, fieldCount: 12, cpv: '35521100 · 35521000',
+      fields: [['Document type','Datasheet'],['Material','600D polyester (PES)'],['Water column','3000 mm',true],['Fire rating','M2 · NF P92-507'],['Weight','230 g/m²',true],['Language','French']] },
+    { id: 'd2', name: 'Modular shelter frame — assembly drawing.dwg', type: 'Drawing', meta: ['Span 6 m', '120 kg/m²', 'S235'], status: 'Indexed', confidence: 91, fieldCount: 9, cpv: '44211000 · 44211100',
+      fields: [['Document type','Assembly drawing'],['Clear span','6 m',true],['Snow load','120 kg/m²',true],['Frame steel','S235 galvanised'],['Wind rating','120 km/h',true],['Connections','Bolted, tool-free']] },
+    { id: 'd3', name: 'ISO 5912 conformity certificate.pdf', type: 'Certificate', meta: ['ISO 5912', '→ 2028'], status: 'Indexed', confidence: 99, fieldCount: 7, cpv: '35521100',
+      fields: [['Document type','Conformity certificate'],['Standard','ISO 5912:2020'],['Scope','Camping tents'],['Issuer','SGS Group'],['Valid until','2028-04',true],['Certificate no.','SGS-5912-2241',true]] },
+    { id: 'd4', name: 'Military tent MT-12 datasheet.pdf', type: 'Datasheet', meta: ['12 pax', '84 kg', 'CPV 35521100'], status: 'Indexed', confidence: 94, fieldCount: 11, cpv: '35521100',
+      fields: [['Document type','Datasheet'],['Capacity','12 persons',true],['Packed weight','84 kg',true],['Footprint','6 × 4 m',true],['Frame','Anodised aluminium'],['Setup time','< 12 min']] },
+    { id: 'd5', name: 'Flame retardancy test — EN 13501-1.pdf', type: 'Certificate', meta: ['B-s1,d0', 'Lab SGS'], status: 'Processing', confidence: 0, fieldCount: 0, cpv: '—',
+      fields: [['Document type','Test report'],['Standard','EN 13501-1'],['Reaction to fire','B-s1,d0'],['Testing lab','SGS'],['Status','Extracting fields…'],['Pages','6']] },
+    { id: 'd6', name: 'Groundsheet PVC — technical note.pdf', type: 'Datasheet', meta: ['0.5 mm', 'Anti-slip'], status: 'Processing', confidence: 0, fieldCount: 0, cpv: '—',
+      fields: [['Document type','Technical note'],['Material','PVC-coated polyester'],['Thickness','0.5 mm'],['Surface','Anti-slip embossed'],['Status','Extracting fields…'],['Pages','3']] },
+  ];
+
+  // Composer — the ingested document library for the active tender. Role from filename prefix
+  // (sow_/tech_/background_/parta_/example_); compliance matrix sits apart from the library.
+  ingestDocs = [
+    { id: 'g1', name: 'sow_appel-offres-tentes.pdf', role: 'SOW', pages: 24, chunks: 186, enrich: false, status: 'Ingested' },
+    { id: 'g2', name: 'tech_fabric-spec-600D.pdf', role: 'Tech', pages: 8, chunks: 64, enrich: false, status: 'Ingested' },
+    { id: 'g3', name: 'tech_MT-12-datasheet.pdf', role: 'Tech', pages: 6, chunks: 0, enrich: true, status: 'Pending' },
+    { id: 'g4', name: 'tech_EN13501-fire-cert.pdf', role: 'Tech', pages: 6, chunks: 41, enrich: false, status: 'Ingested' },
+    { id: 'g5', name: 'background_company-profile.docx', role: 'Background', pages: 11, chunks: 73, enrich: false, status: 'Ingested' },
+    { id: 'g6', name: 'parta_qualification-form.pdf', role: 'Part A', pages: 9, chunks: 38, enrich: false, status: 'Ingested' },
+    { id: 'g7', name: 'example_2025-shelter-bid.docx', role: 'Example', pages: 32, chunks: 0, enrich: false, status: 'Style only' },
+  ];
+
+  roleColor = { 'SOW': '#60a5fa', 'Tech': '#e3b341', 'Background': '#2EE6D4', 'Part A': '#c084fc', 'Example': '#8a97ac' };
+
+  // Composer — generated proposal requirements, each with a gap status driven by retrieval
+  // similarity: COMPLETE ≥0.35 (green) · TO BE LINKED 0.20–0.34 (blue) · TO BE COMPLETED <0.20 (amber).
+  propReqs = [
+    { num: '3.1', title: 'Fire resistance — class M2 or better', sim: 0.41, status: 'complete',
+      sow: 'All fabric components shall achieve fire-reaction class M2 per NF P92-507 (or equivalent EN 13501-1 classification).',
+      text: 'The proposed tents meet fire-resistance class M2 per NF P92-507 and the equivalent B-s1,d0 classification under EN 13501-1, as evidenced by the referenced test report on the 600D PES roof and wall fabric.',
+      cites: [['tech_EN13501-fire-cert.pdf', 0.44], ['tech_fabric-spec-600D.pdf', 0.39]] },
+    { num: '3.2', title: 'Water column ≥ 2000 mm', sim: 0.52, status: 'complete',
+      sow: 'Roof fabric shall provide a minimum hydrostatic head (water column) of 2000 mm.',
+      text: 'The 600D polyester roof fabric is rated to a 3000 mm hydrostatic head, exceeding the 2000 mm requirement by 50%. Seam-sealed construction maintains the rating across the canopy.',
+      cites: [['tech_fabric-spec-600D.pdf', 0.58]] },
+    { num: '3.3', title: 'Capacity ≥ 10 persons per unit', sim: 0.38, status: 'complete',
+      sow: 'Each modular sleeping unit shall accommodate a minimum of 10 persons.',
+      text: 'The MT-12 modular unit is rated for 12 persons, exceeding the 10-person minimum, with a 6 × 4 m footprint and tool-free assembly under 12 minutes.',
+      cites: [['tech_MT-12-datasheet.pdf', 0.41]] },
+    { num: '3.4', title: 'ISO 5912 conformity', sim: 0.29, status: 'linked',
+      sow: 'Camping tents shall conform to ISO 5912:2020.',
+      text: 'The offered range conforms to ISO 5912:2020. A current SGS conformity certificate exists in the Vault but is not yet formally referenced against this lot.',
+      cites: [['tech_MT-12-datasheet.pdf', 0.29]], link: 'ISO 5912 conformity certificate.pdf — present in Vault, awaiting formal linking to this lot.' },
+    { num: '3.5', title: 'Wind load resistance ≥ 100 km/h', sim: 0.24, status: 'linked',
+      sow: 'Erected structures shall withstand sustained wind loads of at least 100 km/h.',
+      text: 'The bolted S235 frame is rated to 120 km/h per the assembly drawing. The drawing is indexed but the wind-load figure has not been formally evidenced as a test result.',
+      cites: [['tech_frame-drawing.dwg', 0.24]], link: 'Modular shelter frame — assembly drawing.dwg — figure present, needs a formal wind-load test reference.' },
+    { num: '3.6', title: 'Delivery within 60 days of award', sim: 0.08, status: 'completed',
+      sow: 'The supplier shall deliver all lots within 60 days of contract notification.',
+      text: '', cites: [],
+      gap: 'No supporting documentation found. A delivery-schedule or logistics commitment document must be added before submission.' },
+    { num: '3.7', title: 'French-language documentation', sim: 0.36, status: 'complete',
+      sow: 'All technical documentation shall be supplied in French.',
+      text: 'All technical and user documentation is supplied in French, consistent with prior deliveries referenced in the company background and Part A qualification.',
+      cites: [['background_company-profile.docx', 0.37], ['parta_qualification-form.pdf', 0.35]] },
+    { num: '3.8', title: 'Spare-parts availability — 10 years', sim: 0.11, status: 'completed',
+      sow: 'The supplier shall guarantee spare-parts availability for a minimum of 10 years post-delivery.',
+      text: '', cites: [],
+      gap: 'No supporting documentation found. A spare-parts / after-sales commitment must be added before submission.' },
+    { num: '3.9', title: 'UV resistance — ISO 4892', sim: 0.31, status: 'linked',
+      sow: 'Fabrics shall demonstrate UV resistance tested to ISO 4892.',
+      text: 'The 600D PES fabric is UV-stabilised. The datasheet notes UV treatment but does not cite a formal ISO 4892 test result for linking.',
+      cites: [['tech_fabric-spec-600D.pdf', 0.31]], link: 'Tent fabric spec — 600D polyester.pdf — UV note present, ISO 4892 test result to be linked.' },
+  ];
+
+  // Composer — outstanding-gap count across successive generation runs (submission readiness trend).
+  gapRuns = [
+    { run: 'Run 1', when: '18 Jun', gaps: 9 },
+    { run: 'Run 2', when: '23 Jun', gaps: 7 },
+    { run: 'Run 3', when: '27 Jun', gaps: 5 },
+  ];
+
+  composerReqs = [
+    { req: 'Fire resistance — class M2 or better', match: 'Flame retardancy test — EN 13501-1', ok: true },
+    { req: 'Water column ≥ 2000 mm', match: 'Tent fabric spec — 600D polyester', ok: true },
+    { req: 'Capacity ≥ 10 persons', match: 'Military tent MT-12 datasheet', ok: true },
+    { req: 'ISO 5912 conformity', match: 'ISO 5912 conformity certificate', ok: true },
+    { req: 'Delivery within 60 days', match: 'No source — needs analyst input', ok: false },
+  ];
+
+  composerSections = [
+    { n: '01', title: 'Executive summary' },
+    { n: '02', title: 'Technical compliance' },
+    { n: '03', title: 'Product specifications' },
+    { n: '04', title: 'Certifications & standards' },
+    { n: '05', title: 'Delivery & logistics' },
+    { n: '06', title: 'Pricing schedule' },
+  ];
+
+  // Portal — accepted tenders in the working pipeline (illustrative). daysLeft is relative
+  // to "today"; ext* = the values after a granted deadline extension.
+  pipelineData = [
+    { id: 1, title: 'Fourniture de tentes de camping militaires', portal: 'BOAMP', flag: '🇫🇷', buyer: 'Ministère des Armées — DGA', value: '€2.4M', deadline: '03 Jul 2026', daysLeft: 4, extDeadline: '17 Jul 2026', extDaysLeft: 18, submission: 'drafting', owner: 'A. Dubois', notes: '600D fabric annex confirmed with Vault. Awaiting pricing sign-off before submission.' },
+    { id: 2, title: 'Shelter structures for humanitarian relief operations', portal: 'TED', flag: '🇸🇪', buyer: 'MSB — Sweden', value: '€5.1M', deadline: '06 Jul 2026', daysLeft: 7, extDeadline: '20 Jul 2026', extDaysLeft: 21, submission: 'not_started', owner: 'C. Berg', notes: '' },
+    { id: 3, title: 'Dostawa namiotów wojskowych i obozowisk polowych', portal: 'TED', flag: '🇵🇱', buyer: 'Inspektorat Uzbrojenia', value: '€1.8M', deadline: '22 Jul 2026', daysLeft: 23, extDeadline: '05 Aug 2026', extDaysLeft: 37, submission: 'not_started', owner: 'M. Laurent', notes: '' },
+    { id: 5, title: 'Tentes et abris modulaires pour postes de commandement', portal: 'BOAMP', flag: '🇫🇷', buyer: 'SDIS 13', value: '€640K', deadline: '18 Aug 2026', daysLeft: 50, extDeadline: '01 Sep 2026', extDaysLeft: 64, submission: 'submitted', owner: 'A. Dubois', notes: 'Submitted 21 Jun 2026. Receipt confirmed by the buyer.' },
+  ];
+
+  // Portal — tenders already submitted, awaiting / having a result.
+  followUpData = [
+    { id: 201, title: 'Field hospital tent systems — framework', portal: 'TED', flag: '🇩🇰', buyer: 'Danish Emergency Management Agency', value: '€4.2M', submitted: '12 May 2026', resultDue: '30 Jun 2026', outcome: 'pending' },
+    { id: 202, title: 'Tentes pour la Sécurité Civile', portal: 'BOAMP', flag: '🇫🇷', buyer: 'Ministère de l’Intérieur', value: '€1.1M', submitted: '02 Apr 2026', resultDue: '05 Jun 2026', outcome: 'won' },
+    { id: 203, title: 'Modular shelter units — NATO support', portal: 'TED', flag: '🇧🇪', buyer: 'NSPA', value: '€7.8M', submitted: '18 Mar 2026', resultDue: '20 May 2026', outcome: 'lost' },
+    { id: 204, title: 'Tentes de commandement mobiles', portal: 'BOAMP', flag: '🇫🇷', buyer: 'SDIS 69', value: '€520K', submitted: '21 May 2026', resultDue: '10 Jul 2026', outcome: 'pending' },
+  ];
+
+  // Composer — requirements extracted from an ingested tender document, awaiting human validation.
+  composerIngest = [
+    { id: 'r1', req: 'Fire resistance — class M2 or better', extracted: 'M2 / NF P92-507 required on all fabric components', source: 'CCTP §4.2 · p.12', confidence: 96 },
+    { id: 'r2', req: 'Water column ≥ 2000 mm', extracted: 'Minimum 2000 mm hydrostatic head on roof fabric', source: 'CCTP §4.5 · p.13', confidence: 92 },
+    { id: 'r3', req: 'Capacity ≥ 10 persons per unit', extracted: '10–12 person modular sleeping units', source: 'CCTP §3.1 · p.8', confidence: 88 },
+    { id: 'r4', req: 'ISO 5912 conformity', extracted: 'Camping tents shall conform to ISO 5912:2020', source: 'CCTP §6.0 · p.18', confidence: 90 },
+    { id: 'r5', req: 'Delivery within 60 days of award', extracted: 'Délai de livraison : 60 jours à compter de la notification', source: 'RC §2.3 · p.4', confidence: 71 },
+    { id: 'r6', req: 'French-language documentation', extracted: 'Toute la documentation technique en français', source: 'RC §5.1 · p.9', confidence: 84 },
+  ];
+
+  navIcon(key) {
+    const C = React.createElement;
+    const svg = (kids) => C('svg', { width: 18, height: 18, viewBox: '0 0 18 18', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' }, kids.map((k, i) => C(k[0], { ...k[1], key: i })));
+    const map = {
+      dashboard: [['rect', { x: 2.5, y: 2.5, width: 5.5, height: 5.5, rx: 1.2 }], ['rect', { x: 10, y: 2.5, width: 5.5, height: 5.5, rx: 1.2 }], ['rect', { x: 2.5, y: 10, width: 5.5, height: 5.5, rx: 1.2 }], ['rect', { x: 10, y: 10, width: 5.5, height: 5.5, rx: 1.2 }]],
+      feed: [['line', { x1: 3, y1: 5, x2: 15, y2: 5 }], ['line', { x1: 3, y1: 9, x2: 15, y2: 9 }], ['line', { x1: 3, y1: 13, x2: 15, y2: 13 }]],
+      portals: [['circle', { cx: 9, cy: 9, r: 6.4 }], ['line', { x1: 2.6, y1: 9, x2: 15.4, y2: 9 }], ['line', { x1: 9, y1: 2.6, x2: 9, y2: 15.4 }]],
+      cpv: [['rect', { x: 3, y: 3, width: 12, height: 12, rx: 2 }], ['line', { x1: 3, y1: 7.5, x2: 15, y2: 7.5 }]],
+      keywords: [['line', { x1: 6.5, y1: 3, x2: 5.3, y2: 15 }], ['line', { x1: 12.7, y1: 3, x2: 11.5, y2: 15 }], ['line', { x1: 3, y1: 6.6, x2: 15, y2: 6.6 }], ['line', { x1: 3, y1: 11.4, x2: 15, y2: 11.4 }]],
+      reports: [['rect', { x: 4, y: 2.5, width: 10, height: 13, rx: 1.6 }], ['line', { x1: 6.5, y1: 6, x2: 11.5, y2: 6 }], ['line', { x1: 6.5, y1: 9, x2: 11.5, y2: 9 }], ['line', { x1: 6.5, y1: 12, x2: 9.5, y2: 12 }]],
+      settings: [['circle', { cx: 9, cy: 9, r: 2.6 }], ['circle', { cx: 9, cy: 9, r: 6.4 }]],
+      scout: [['circle', { cx: 9, cy: 9, r: 6.4 }], ['circle', { cx: 9, cy: 9, r: 1.7, fill: 'currentColor', stroke: 'none' }]],
+      vault: [['rect', { x: 4, y: 3, width: 10, height: 12, rx: 1.6 }], ['line', { x1: 6.5, y1: 6.5, x2: 11.5, y2: 6.5 }], ['line', { x1: 6.5, y1: 9, x2: 11.5, y2: 9 }], ['line', { x1: 6.5, y1: 11.5, x2: 9.5, y2: 11.5 }]],
+      composer: [['line', { x1: 4, y1: 14, x2: 13, y2: 5 }], ['line', { x1: 10.5, y1: 4.5, x2: 13.5, y2: 7.5 }], ['line', { x1: 4, y1: 14, x2: 6.2, y2: 13.6 }]],
+      v_library: [['rect', { x: 3.5, y: 3.5, width: 11, height: 11, rx: 1.6 }], ['line', { x1: 7, y1: 3.5, x2: 7, y2: 14.5 }]],
+      v_metadata: [['rect', { x: 3, y: 4, width: 12, height: 10, rx: 1.6 }], ['line', { x1: 3, y1: 7.5, x2: 15, y2: 7.5 }], ['circle', { cx: 6, cy: 11, r: 1.1 }]],
+      v_collections: [['rect', { x: 2.5, y: 2.5, width: 5.5, height: 5.5, rx: 1.2 }], ['rect', { x: 10, y: 2.5, width: 5.5, height: 5.5, rx: 1.2 }], ['rect', { x: 2.5, y: 10, width: 5.5, height: 5.5, rx: 1.2 }], ['rect', { x: 10, y: 10, width: 5.5, height: 5.5, rx: 1.2 }]],
+      v_settings: [['circle', { cx: 9, cy: 9, r: 2.6 }], ['circle', { cx: 9, cy: 9, r: 6.4 }]],
+      c_proposals: [['rect', { x: 4, y: 2.5, width: 10, height: 13, rx: 1.6 }], ['line', { x1: 6.5, y1: 6, x2: 11.5, y2: 6 }], ['line', { x1: 6.5, y1: 9, x2: 11.5, y2: 9 }], ['line', { x1: 6.5, y1: 12, x2: 9.5, y2: 12 }]],
+      c_templates: [['rect', { x: 3, y: 3, width: 12, height: 12, rx: 2 }], ['line', { x1: 3, y1: 7.5, x2: 15, y2: 7.5 }], ['line', { x1: 7.5, y1: 7.5, x2: 7.5, y2: 15 }]],
+      c_drafts: [['line', { x1: 3, y1: 5, x2: 15, y2: 5 }], ['line', { x1: 3, y1: 9, x2: 15, y2: 9 }], ['line', { x1: 3, y1: 13, x2: 11, y2: 13 }]],
+      c_settings: [['circle', { cx: 9, cy: 9, r: 2.6 }], ['circle', { cx: 9, cy: 9, r: 6.4 }]],
+      portal: [['path', { d: 'M2.8 8.4 L9 3.2 L15.2 8.4' }], ['path', { d: 'M4.6 8 L4.6 15 L13.4 15 L13.4 8' }]],
+      p_home: [['path', { d: 'M2.8 8.4 L9 3.2 L15.2 8.4' }], ['path', { d: 'M4.6 8 L4.6 15 L13.4 15 L13.4 8' }]],
+      p_pipeline: [['rect', { x: 3, y: 4, width: 12, height: 11, rx: 1.6 }], ['line', { x1: 3, y1: 7.5, x2: 15, y2: 7.5 }], ['line', { x1: 6.5, y1: 2.6, x2: 6.5, y2: 5 }], ['line', { x1: 11.5, y1: 2.6, x2: 11.5, y2: 5 }]],
+      p_followup: [['line', { x1: 5, y1: 2.8, x2: 5, y2: 15.4 }], ['path', { d: 'M5 3.6 L13.5 3.6 L11.3 6.6 L13.5 9.6 L5 9.6' }]],
+      c_config: [['line', { x1: 3, y1: 6, x2: 15, y2: 6 }], ['line', { x1: 3, y1: 12, x2: 15, y2: 12 }], ['circle', { cx: 7, cy: 6, r: 1.9, fill: 'currentColor', stroke: 'none' }], ['circle', { cx: 11, cy: 12, r: 1.9, fill: 'currentColor', stroke: 'none' }]],
+      c_gaps: [['path', { d: 'M9 2.6 L15.4 14 L2.6 14 Z' }], ['line', { x1: 9, y1: 7, x2: 9, y2: 10.4 }], ['circle', { cx: 9, cy: 12.3, r: 0.2, fill: 'currentColor' }]],
+      c_style: [['path', { d: 'M4 12.5 L11 5.5 L13 7.5 L6 14.5 L3.5 15 Z' }], ['line', { x1: 10.2, y1: 6.3, x2: 12.2, y2: 8.3 }]],
+    };
+    return svg(map[key] || []);
+  }
+
+  renderVals() {
+    const page = this.state.page;
+    const statuses = this.state.statuses;
+    const counts = { shortlisted: 0, reviewed: 0, dismissed: 0, new: 0 };
+    this.tenderData.forEach((t) => {
+      const s = statuses[t.id];
+      if (s === 'shortlisted') counts.shortlisted++;
+      else if (s === 'reviewed') counts.reviewed++;
+      else if (s === 'dismissed') counts.dismissed++;
+      else counts.new++;
+    });
+
+    const app = this.state.app;
+    const nav = (this.navByApp[app] || []).map((n) => {
+      const active = n.key === page;
+      const hasBadge = n.key === 'review' && counts.new > 0;
+      return { key: n.key, label: n.label, uc: n.uc, active, inactive: !active, hasBadge, badge: counts.new, icon: this.navIcon(n.key), onClick: () => this.setState({ page: n.key }) };
+    });
+
+    const apps = this.appsDefs.map((a) => ({
+      key: a.key, name: a.name, tagline: a.tagline, color: a.color,
+      isLive: a.status === 'live', isDev: a.status === 'dev', isActive: a.key === app,
+      icon: this.navIcon(a.key),
+      onSelect: () => this.setState({ app: a.key, page: this.firstPage[a.key], appMenuOpen: false }),
+    }));
+    const currentApp = apps.find((a) => a.isActive) || apps[0];
+    const composerReqs = this.composerReqs.map((r) => ({ req: r.req, match: r.match, ok: r.ok, warn: !r.ok }));
+
+    // ---- Vault: library + dynamic metadata panel ----
+    const vaultDocs = this.vaultDocs.map((d) => ({
+      ...d, isIndexed: d.status === 'Indexed', isProcessing: d.status !== 'Indexed',
+      isSelected: d.id === this.state.vaultDocId,
+      onSelect: () => this.setState({ vaultDocId: d.id }),
+    }));
+    const vSel = this.vaultDocs.find((d) => d.id === this.state.vaultDocId) || this.vaultDocs[0];
+    const vaultSelected = {
+      name: vSel.name, type: vSel.type, confidence: vSel.confidence, fieldCount: vSel.fieldCount, cpv: vSel.cpv,
+      isIndexed: vSel.status === 'Indexed', isProcessing: vSel.status !== 'Indexed',
+      fields: vSel.fields.map((f) => ({ label: f[0], value: f[1], mono: !!f[2], notMono: !f[2] })),
+    };
+    const vaultStats = { total: this.vaultDocs.length, indexed: this.vaultDocs.filter((d) => d.status === 'Indexed').length, processing: this.vaultDocs.filter((d) => d.status !== 'Indexed').length };
+
+    // ---- Composer: ingested document library (role-tagged) ----
+    const ingestDocs = this.ingestDocs.map((d) => ({
+      ...d, color: this.roleColor[d.role] || '#8a97ac',
+      isIngested: d.status === 'Ingested', isPending: d.status === 'Pending', isStyleOnly: d.status === 'Style only',
+    }));
+    const ingestDocCount = ingestDocs.length;
+
+    // ---- Composer: proposal review (gap statuses) ----
+    const statusMeta = {
+      complete:  { label: 'Complete',       color: '#34d399' },
+      linked:    { label: 'To be linked',   color: '#60a5fa' },
+      completed: { label: 'To be completed', color: '#e3b341' },
+    };
+    const order = { completed: 0, linked: 1, complete: 2 };
+    const propAll = this.propReqs.map((r) => {
+      const m = statusMeta[r.status];
+      return {
+        ...r, statusLabel: m.label, statusColor: m.color, simStr: r.sim.toFixed(2),
+        isComplete: r.status === 'complete', isLinked: r.status === 'linked', isCompleted: r.status === 'completed',
+        cites: (r.cites || []).map((c) => ({ doc: c[0], score: c[1].toFixed(2) })),
+        hasText: !!r.text, hasCites: (r.cites || []).length > 0,
+        isSelected: r.num === this.state.propReqId,
+        onSelect: () => this.setState({ propReqId: r.num }),
+      };
+    });
+    const propCounts = {
+      complete: propAll.filter((r) => r.isComplete).length,
+      linked: propAll.filter((r) => r.isLinked).length,
+      completed: propAll.filter((r) => r.isCompleted).length,
+      total: propAll.length,
+    };
+    const outstanding = propCounts.linked + propCounts.completed;
+    const ready = outstanding === 0;
+    const pf = this.state.propFilter;
+    const propFiltered = propAll
+      .filter((r) => pf === 'all' || r.status === pf)
+      .sort((a, b) => order[a.status] - order[b.status] || a.num.localeCompare(b.num));
+    const filters = [
+      { key: 'all', label: 'All', n: propCounts.total },
+      { key: 'completed', label: 'To complete', n: propCounts.completed },
+      { key: 'linked', label: 'To link', n: propCounts.linked },
+      { key: 'complete', label: 'Complete', n: propCounts.complete },
+    ].map((f) => ({ ...f, active: pf === f.key, inactive: pf !== f.key, setFilter: () => this.setState({ propFilter: f.key }) }));
+    const selProp = propAll.find((r) => r.num === this.state.propReqId) || propFiltered[0] || propAll[0];
+
+    // ---- Composer: gaps report ----
+    const gapCompleted = propAll.filter((r) => r.isCompleted);
+    const gapLinked = propAll.filter((r) => r.isLinked);
+    const maxRun = Math.max(...this.gapRuns.map((g) => g.gaps), outstanding);
+    const gapRuns = this.gapRuns.concat([{ run: 'Current', when: 'now', gaps: outstanding, current: true }])
+      .map((g) => ({ ...g, past: !g.current, barH: Math.round(100 * g.gaps / maxRun) + '%' }));
+
+    const tenders = this.tenderData.map((t) => ({
+      ...t,
+      isBoth: t.match === 'Both',
+      isCpv: t.match === 'CPV',
+      isKeyword: t.match === 'Keyword',
+      open: () => this.setState({ detailId: t.id }),
+    }));
+
+    const detail = tenders.find((t) => t.id === this.state.detailId) || null;
+
+    // ---- Review queue ----
+    const setStatus = (status) => {
+      const id = this.state.reviewId;
+      const next = { ...this.state.statuses, [id]: status };
+      let nextId = id;
+      for (const t of this.tenderData) { if (t.id !== id && !next[t.id]) { nextId = t.id; break; } }
+      this.setState({ statuses: next, reviewId: nextId });
+    };
+    const reviewTenders = this.tenderData.map((t) => {
+      const m = this.reviewMeta[t.id];
+      const s = statuses[t.id] || null;
+      return {
+        id: t.id, title: t.title, portal: t.portal, flag: t.flag, cc: t.cc,
+        confidence: m.confidence, miniWidth: m.confidence + '%',
+        isSelected: t.id === this.state.reviewId,
+        isShortlisted: s === 'shortlisted', isReviewed: s === 'reviewed', isDismissed: s === 'dismissed', isNew: !s,
+        onSelect: () => this.setState({ reviewId: t.id }),
+      };
+    });
+    const rt = this.tenderData.find((t) => t.id === this.state.reviewId) || this.tenderData[0];
+    const rm = this.reviewMeta[rt.id];
+    const rs = statuses[rt.id] || null;
+    const c = rm.confidence;
+    const selectedReview = {
+      ...rm, title: rt.title, id: rt.id,
+      isHigh: c >= 85, isMedium: c >= 65 && c < 85, isLow: c < 65,
+      isShortlisted: rs === 'shortlisted', isReviewed: rs === 'reviewed', isDismissed: rs === 'dismissed', isNew: !rs,
+      signals: [
+        { label: 'Match CPV', value: rm.cpvSig, width: rm.cpvSig + '%', color: '#2EE6D4', desc: 'Exact CPV code match' },
+        { label: 'Adjacent CPV', value: rm.adjCpvSig, width: rm.adjCpvSig + '%', color: '#34d399', desc: 'Related / neighbouring CPV codes' },
+        { label: 'Terms', value: rm.termsSig, width: rm.termsSig + '%', color: '#60a5fa', desc: 'Direct keyword matches' },
+        { label: 'Adjacent terms', value: rm.adjTermsSig, width: rm.adjTermsSig + '%', color: '#c084fc', desc: 'Fuzzy / semantically related terms' },
+      ],
+      setShortlisted: () => setStatus('shortlisted'),
+      setReviewed: () => setStatus('reviewed'),
+      setDismissed: () => setStatus('dismissed'),
+    };
+
+    // ---- Portal: pipeline & deadlines ----
+    const setPip = (id, patch) => {
+      const cur = this.state.pip[id] || {};
+      this.setState({ pip: { ...this.state.pip, [id]: { ...cur, ...patch } } });
+    };
+    const subLabel = { not_started: 'Not started', drafting: 'Drafting', submitted: 'Submitted' };
+    const pipeline = this.pipelineData.map((it) => {
+      const ps = this.state.pip[it.id] || {};
+      const submission = ps.submission || it.submission;
+      const extended = !!ps.extended;
+      const dl = extended ? it.extDaysLeft : it.daysLeft;
+      const level = submission === 'submitted' ? 'ok' : (dl <= 7 ? 'critical' : (dl <= 14 ? 'warning' : 'ok'));
+      return {
+        ...it, submission, subLabel: subLabel[submission],
+        isNotStarted: submission === 'not_started', isDrafting: submission === 'drafting', isSubmitted: submission === 'submitted',
+        extended, effDeadline: extended ? it.extDeadline : it.deadline, effDaysLeft: dl,
+        isCritical: level === 'critical', isWarning: level === 'warning', isOk: level === 'ok',
+        notes: ps.notes != null ? ps.notes : (it.notes || ''),
+        isSelected: it.id === this.state.pipelineId,
+        onSelect: () => this.setState({ pipelineId: it.id }),
+        goPipeline: () => this.setState({ page: 'p_pipeline', pipelineId: it.id }),
+      };
+    });
+    const pipeAlerts = pipeline.filter((p) => p.isCritical || p.isWarning);
+    const selPipe = pipeline.find((p) => p.id === this.state.pipelineId) || pipeline[0];
+    const selPipeView = selPipe ? {
+      ...selPipe,
+      amend: () => setPip(selPipe.id, { extended: true }),
+      setNotStarted: () => setPip(selPipe.id, { submission: 'not_started' }),
+      setDrafting: () => setPip(selPipe.id, { submission: 'drafting' }),
+      setSubmitted: () => setPip(selPipe.id, { submission: 'submitted' }),
+      onNotes: (e) => setPip(selPipe.id, { notes: e.target.value }),
+    } : null;
+    const pipeStats = {
+      total: pipeline.length,
+      critical: pipeline.filter((p) => p.isCritical).length,
+      submitted: pipeline.filter((p) => p.isSubmitted).length,
+      open: pipeline.filter((p) => !p.isSubmitted).length,
+    };
+
+    // ---- Portal: follow-up & results ----
+    const setOutcome = (id, outcome) => this.setState({ fu: { ...this.state.fu, [id]: outcome } });
+    const followUp = this.followUpData.map((f) => {
+      const o = this.state.fu[f.id] || f.outcome;
+      return {
+        ...f, outcome: o,
+        isPending: o === 'pending', isWon: o === 'won', isLost: o === 'lost',
+        markWon: () => setOutcome(f.id, 'won'), markLost: () => setOutcome(f.id, 'lost'), reopen: () => setOutcome(f.id, 'pending'),
+      };
+    });
+    const fuStats = { won: followUp.filter((f) => f.isWon).length, lost: followUp.filter((f) => f.isLost).length, pending: followUp.filter((f) => f.isPending).length };
+    const fuWinRate = (fuStats.won + fuStats.lost) > 0 ? Math.round(100 * fuStats.won / (fuStats.won + fuStats.lost)) : 0;
+
+    // ---- Composer: ingest & requirement validation ----
+    const setReq = (id, v) => this.setState({ reqValid: { ...this.state.reqValid, [id]: v } });
+    const ingestReqs = this.composerIngest.map((r) => {
+      const st = this.state.reqValid[r.id] || 'pending';
+      return {
+        ...r, vstatus: st,
+        isPending: st === 'pending', isValidated: st === 'validated', isFlagged: st === 'flagged',
+        validate: () => setReq(r.id, 'validated'), flag: () => setReq(r.id, 'flagged'),
+      };
+    });
+    const ingestValidated = ingestReqs.filter((r) => r.isValidated).length;
+    const ingestTotal = ingestReqs.length;
+    const ingestAllValid = ingestValidated === ingestTotal;
+    const ingestPct = Math.round(100 * ingestValidated / ingestTotal) + '%';
+
+    return {
+      nav, apps, currentApp,
+      isScout: app === 'scout', isVault: app === 'vault', isComposer: app === 'composer',
+      appMenuOpen: this.state.appMenuOpen, toggleAppMenu: () => this.setState((s) => ({ appMenuOpen: !s.appMenuOpen })),
+      vaultDocs, composerReqs, composerSections: this.composerSections,
+      kwGroups: this.kwGroups, tenders,
+      isDashboard: page === 'dashboard', isFeed: page === 'feed', isReview: page === 'review',
+      isPortals: page === 'portals', isCpv: page === 'cpv', isKeywords: page === 'keywords',
+      isReports: page === 'reports', isSettings: page === 'settings',
+      isPortal: app === 'portal',
+      isPHome: page === 'p_home', isPPipeline: page === 'p_pipeline', isPFollowup: page === 'p_followup',
+      isCConfig: app === 'composer' && page === 'c_config',
+      isCReview: app === 'composer' && page === 'c_proposals',
+      isCGaps: app === 'composer' && page === 'c_gaps',
+      isCUC: app === 'composer' && (page === 'c_style' || page === 'c_settings'),
+      vaultDocs, vaultSelected, vaultStats,
+      ingestDocs, ingestDocCount,
+      propFiltered, filters, selProp, propCounts, outstanding, ready, notReady: !ready,
+      gapCompleted, gapLinked, hasCompleted: gapCompleted.length > 0, hasLinked: gapLinked.length > 0, gapRuns,
+      goReview: () => this.setState({ page: 'c_proposals' }),
+      goGaps: () => this.setState({ page: 'c_gaps' }),
+      launchApps: apps.filter((a) => a.key !== 'portal'),
+      goPipelineAll: () => this.setState({ page: 'p_pipeline' }),
+      pipeline, pipeAlerts, hasAlerts: pipeAlerts.length > 0, selPipe: selPipeView, pipeStats,
+      followUp, fuStats, fuWinRate,
+      ingestReqs, ingestValidated, ingestTotal, ingestAllValid, ingestNotAllValid: !ingestAllValid, ingestPct, goToProposals: () => this.setState({ page: 'c_proposals' }),
+      detail, detailOpen: !!detail, closeDetail: () => this.setState({ detailId: null }),
+      reviewTenders, selectedReview, reviewCounts: counts,
+    };
+  }
+}
+</script>
+</body>
+</html>
