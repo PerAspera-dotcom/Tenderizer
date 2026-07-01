@@ -24,3 +24,10 @@ codes:
   # codes in config/exclusions.yaml (container_modular_prefab), not active match codes.
   # --- awning installation (works) ---
   - "45421144"   # Installation work of awnings
+  # --- individual equipment & bedding (CR-001 F7) ---
+  - "35800000"   # Individual and support equipment
+  - "39511100"   # Blankets
+  - "39522520"   # Camp beds (CR text called this "field bedding" — official CPV label is "Camp beds")
+  - "39522540"   # Sleeping bags
+  # Note: 44210000 (Structures and parts of structures) deliberately excluded (CR-001 F7) —
+  # drags in construction/mechanical noise. Was never in this active set; not a removal, a guard.

@@ -186,6 +186,38 @@
       "de": "Installation von Markisen",
       "group": "awning_install",
       "category": "works"
+    },
+    "35800000": {
+      "en": "Individual and support equipment",
+      "fr": "Équipement individuel et de soutien",
+      "nl": "Persoonlijke en ondersteunende uitrusting",
+      "de": "Persönliche Ausrüstung und Hilfsausrüstung",
+      "group": "individual_equipment",
+      "category": "supply"
+    },
+    "39511100": {
+      "en": "Blankets",
+      "fr": "Couvertures",
+      "nl": "Dekens",
+      "de": "Decken",
+      "group": "bedding",
+      "category": "supply"
+    },
+    "39522520": {
+      "en": "Camp beds",
+      "fr": "Lits de camp",
+      "nl": "Veldbedden",
+      "de": "Feldbetten",
+      "group": "bedding",
+      "category": "supply"
+    },
+    "39522540": {
+      "en": "Sleeping bags",
+      "fr": "Sacs de couchage",
+      "nl": "Slaapzakken",
+      "de": "Schlafsäcke",
+      "group": "bedding",
+      "category": "supply"
     }
   }
 }
