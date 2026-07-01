@@ -1,7 +1,9 @@
 """Loads the YAML config files. All relevance logic lives in config/, not in code."""
 import json
 import pathlib
+import re
 import yaml
+from unidecode import unidecode
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -59,6 +61,39 @@ def exclusions():
     See config/exclusions.yaml. Applied by filters.py as a post-match stage.
     """
     return _load("exclusions.yaml")
+
+
+def term_code_gaps():
+    """CR-001 F8 consistency check: report/review-only, not enforced.
+
+    codes_without_terms: active CPV codes whose official label (any language) shares
+        no word with any keyword term — a candidate for adding safeguard terms.
+    terms_without_codes: keyword terms that share no word with any active code's
+        official label — expected for broad supplementary safeguard vocabulary
+        (e.g. 'gazebo', 'bivouac') that was never meant to trace to one code 1:1.
+    """
+    def _words(text):
+        return set(re.findall(r"\w+", unidecode(text or "").lower()))
+
+    ref = cpv_reference()
+    active = cpv_codes()
+    term_words = set()
+    for term in keywords():
+        term_words |= _words(term)
+
+    label_words = set()
+    codes_without_terms = []
+    for code in active:
+        entry = ref.get(code, {})
+        this_code_words = set()
+        for lang in ("en", "fr", "nl", "de"):
+            this_code_words |= _words(entry.get(lang, ""))
+        label_words |= this_code_words
+        if not (this_code_words & term_words):
+            codes_without_terms.append(code)
+
+    terms_without_codes = [t for t in keywords() if not (_words(t) & label_words)]
+    return {"codes_without_terms": codes_without_terms, "terms_without_codes": terms_without_codes}
 
 
 def write_cpv(codes):

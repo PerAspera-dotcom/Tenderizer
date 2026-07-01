@@ -5,23 +5,34 @@
 # the ue/ae/oe/ss transliterations are added separately for systems that don't support
 # umlauts/eszett.
 terms:
+  # cabin/cabins/cubicle/cubicles/portable (+ FR/NL/DE forms) removed CR-001 F8: orphaned
+  # by F3 — their only source CPV codes (44211110, 44211200, 44211100) are now exclusion-
+  # only, not active, so these terms no longer trace to any active code.
   en: [tent, tents, marquee, shelter, shelters, awning, awnings, tarpaulin, tarpaulins,
-       sunblind, sunblinds, camouflage, cabin, cabins, cubicle, cubicles, canopy,
-       gazebo, bivouac, portable]
+       sunblind, sunblinds, camouflage, canopy, gazebo, bivouac,
+       # CR-001 F7 sync — 35800000, 39511100, 39522520, 39522540:
+       blanket, blankets, camp bed, camp beds, sleeping bag, sleeping bags,
+       individual equipment, support equipment]
   fr: [tente, tentes, chapiteau, chapiteaux, abri, abris, campement, bache, baches,
-       auvent, auvents, marquise, marquises, velum, camouflage, cabine, cabines]
+       auvent, auvents, marquise, marquises, velum, camouflage,
+       couverture, couvertures, lit de camp, lits de camp, sac de couchage,
+       sacs de couchage, equipement individuel, equipement de soutien]
   nl: [tent, tenten, zeil, zeilen, dekzeil, dekzeilen, zonwering, zonweringen,
        camouflage, camouflagehoes, schuilhok, schuilhokje, schuiltent, onderkomen,
-       cabine, cabines]
+       deken, dekens, veldbed, veldbedden, slaapzak, slaapzakken,
+       persoonlijke uitrusting, ondersteunende uitrusting]
   de: [Zelt, Zelte, Zelten, Zeltreparatur, Zeltreparatursets, Plane, Planen, Sonnensegel,
        Markise, Markisen, Tarnung, Tarnüberzug, Tarnüberzüge, Tarnnetz, Campingausrüstung,
        Campingausrüstungen, Schutzunterkunft, Schutzunterkünfte, Schutzunterkünften,
        Unterstand, Unterstände, Unterkunft, Militärschutzraum, Militärschutzräume,
-       Militärschutzräumen, Schutzraum, Kabine, Kabinen, Kleinkabine, Kleinkabinen,
+       Militärschutzräumen, Schutzraum,
+       Decke, Decken, Feldbett, Feldbetten, Schlafsack, Schlafsäcke,
+       persönliche Ausrüstung, Hilfsausrüstung,
        # ue/ae/oe/ss transliterations for systems without umlaut/eszett support:
        Tarnueberzug, Tarnueberzuege, Campingausruestung, Campingausruestungen,
        Schutzunterkuenfte, Schutzunterkuenften, Unterstaende, Militaerschutzraum,
-       Militaerschutzraeume, Militaerschutzraeumen]
+       Militaerschutzraeume, Militaerschutzraeumen, Schlafsaecke,
+       persoenliche Ausruestung, Hilfsausruestung]
 
 # Distinctive subset fed into the LIVE TED query as a title match (notice-title = exact).
 # High-signal, unambiguous tent/cover words only — keeps the live pull tight (~25 title
