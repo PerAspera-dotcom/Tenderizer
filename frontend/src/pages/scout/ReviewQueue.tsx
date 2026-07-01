@@ -188,7 +188,8 @@ export default function ReviewQueue() {
                     <div style={{ marginTop: 12 }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#4c5a70', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>CPV Codes</div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {selected.cpv_codes.map(c => (
+                        {/* stable order, unique only — the engine dedupes at ingest, this is a defensive backstop */}
+                        {Array.from(new Set(selected.cpv_codes)).map(c => (
                           <span key={c} className="mono" style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>{c}</span>
                         ))}
                       </div>

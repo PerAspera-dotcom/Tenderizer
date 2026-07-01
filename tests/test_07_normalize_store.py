@@ -76,3 +76,9 @@ def test_stored_record_roundtrips_cpv_list(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     store.upsert(conn, normalize.normalize_ted(raw_ted_supply))
     assert store.all_records(conn)[0]["cpv_codes"] == ["39522530", "39522500"]
+
+def test_cpv_codes_deduped_at_ingest(raw_ted_supply):
+    # CR-001 R2: TED can list the same CPV code twice (e.g. main + additional
+    # classification) — dedupe at ingest, preserving first-seen order.
+    raw_ted_supply["classification-cpv"] = ["39522530", "39522500", "39522530"]
+    assert normalize.normalize_ted(raw_ted_supply)["cpv_codes"] == ["39522530", "39522500"]

@@ -72,6 +72,11 @@ def _url(raw):
     pub = raw.get("publication-number", "")
     return f"https://ted.europa.eu/en/notice/{pub}/html" if pub else ""
 
+def _dedupe(codes):
+    """Unique codes, stable (first-seen) order — TED can list the same CPV code twice."""
+    return list(dict.fromkeys(codes))
+
+
 def normalize_ted(raw):
     return {
         "source": "TED",
@@ -85,7 +90,7 @@ def normalize_ted(raw):
         "procedure": _first(raw.get("procedure-type")),
         "pub_date": raw.get("publication-date", ""),
         "deadline": _first(raw.get("deadline-receipt-request")),
-        "cpv_codes": raw.get("classification-cpv", []),
+        "cpv_codes": _dedupe(raw.get("classification-cpv", [])),
         "matched_terms": [],
         "match_source": None,
         "url": _url(raw),
