@@ -7,24 +7,21 @@
 terms:
   en: [tent, tents, marquee, shelter, shelters, awning, awnings, tarpaulin, tarpaulins,
        sunblind, sunblinds, camouflage, cabin, cabins, cubicle, cubicles, canopy,
-       gazebo, bivouac, prefabricated, modular, portable]
+       gazebo, bivouac, portable]
   fr: [tente, tentes, chapiteau, chapiteaux, abri, abris, campement, bache, baches,
-       auvent, auvents, marquise, marquises, velum, camouflage, cabine, cabines,
-       modulaire, prefabrique, prefabriques, prefabrication]
+       auvent, auvents, marquise, marquises, velum, camouflage, cabine, cabines]
   nl: [tent, tenten, zeil, zeilen, dekzeil, dekzeilen, zonwering, zonweringen,
        camouflage, camouflagehoes, schuilhok, schuilhokje, schuiltent, onderkomen,
-       cabine, cabines, modulair, prefab, geprefabriceerd]
+       cabine, cabines]
   de: [Zelt, Zelte, Zelten, Zeltreparatur, Zeltreparatursets, Plane, Planen, Sonnensegel,
        Markise, Markisen, Tarnung, Tarnüberzug, Tarnüberzüge, Tarnnetz, Campingausrüstung,
        Campingausrüstungen, Schutzunterkunft, Schutzunterkünfte, Schutzunterkünften,
        Unterstand, Unterstände, Unterkunft, Militärschutzraum, Militärschutzräume,
-       Militärschutzräumen, Schutzraum, Containergebäude, Großbehälter, Kabine, Kabinen,
-       Kleinkabine, Kleinkabinen, modular, Fertigkonstruktion, Fertigkonstruktionen,
-       vorgefertigt, vorgefertigte, vorgefertigten,
+       Militärschutzräumen, Schutzraum, Kabine, Kabinen, Kleinkabine, Kleinkabinen,
        # ue/ae/oe/ss transliterations for systems without umlaut/eszett support:
        Tarnueberzug, Tarnueberzuege, Campingausruestung, Campingausruestungen,
        Schutzunterkuenfte, Schutzunterkuenften, Unterstaende, Militaerschutzraum,
-       Militaerschutzraeume, Militaerschutzraeumen, Containergebaeude, Grossbehaelter]
+       Militaerschutzraeume, Militaerschutzraeumen]
 
 # Distinctive subset fed into the LIVE TED query as a title match (notice-title = exact).
 # High-signal, unambiguous tent/cover words only — keeps the live pull tight (~25 title

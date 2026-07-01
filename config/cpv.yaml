@@ -19,14 +19,8 @@ codes:
   - "44112110"   # Shelter parts
   - "45216129"   # Protective shelters (construction / works)
   - "45216230"   # Military shelter construction work (works)
-  # --- prefabricated / modular buildings ---
-  - "44211000"   # Prefabricated buildings (broad parent)
-  - "44211100"   # Modular and portable buildings
-  - "44211110"   # Cabins
-  - "44211200"   # Cubicles
-  - "45223800"   # Assembly and erection of prefabricated structures (works)
-  - "45223810"   # Prefabricated constructions (works)
-  # --- mobile containers (borderline; confirm at meeting) ---
-  - "34221000"   # Special-purpose mobile containers
+  # --- prefabricated / modular / mobile-container codes removed (CR-001 F3, D5-confirmed):
+  # 44211000, 44211100, 44211110, 44211200, 45223800, 45223810, 34221000 — now hard-exclusion
+  # codes in config/exclusions.yaml (container_modular_prefab), not active match codes.
   # --- awning installation (works) ---
   - "45421144"   # Installation work of awnings

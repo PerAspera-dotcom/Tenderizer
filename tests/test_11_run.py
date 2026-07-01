@@ -34,3 +34,23 @@ def test_run_is_idempotent(tmp_path, raw_ted_supply):
     run.run_pipeline([_src_ok(raw_ted_supply)], db, out)   # second run, same data
     conn = store.init_db(db)
     assert len(store.all_records(conn)) == 1               # no duplicate
+
+def test_excluded_notice_is_stored_but_not_reported(tmp_path, raw_ted_supply):
+    # CR-001 F3: container/modular/prefab notices are auditable (kept in the DB with
+    # exclude_reason set) but must not surface in the report.
+    import store, copy
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "999999-2026"
+    raw["notice-title"] = {"eng": "Sweden – Supply of modular prefabricated cabins"}
+    raw["classification-cpv"] = ["44211100"]
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out)
+
+    conn = store.init_db(db)
+    stored = store.all_records(conn)
+    assert stored[0]["exclude_reason"] == "container_modular_prefab"  # auditable, not deleted
+
+    wb = load_workbook(out)
+    pub_numbers = [c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row]
+    assert "999999-2026" not in pub_numbers                            # but not surfaced

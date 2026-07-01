@@ -1,0 +1,25 @@
+# Active exclusion rules — a notice tripping one of these is dropped with the given
+# reason (recorded on the record as `exclude_reason`, not silently deleted), even if it
+# also matched a tent/shelter CPV code or keyword. Same accent/case-insensitive whole-word
+# matching as config/keywords.yaml (see src/match.py).
+
+# F3 (CR-001, D5-confirmed) — container / modular / prefabricated structures.
+# CPV codes cross-checked against cpv_reference.json (groups: prefab_modular, mobile_containers).
+container_modular_prefab:
+  codes:
+    - "44211000"   # Prefabricated buildings
+    - "44211100"   # Modular and portable buildings
+    - "44211110"   # Cabins
+    - "44211200"   # Cubicles
+    - "45223800"   # Assembly and erection of prefabricated structures
+    - "45223810"   # Prefabricated constructions
+    - "34221000"   # Special-purpose mobile containers
+  terms:
+    en: [container, containers, modular, prefabricated]
+    fr: [conteneur, conteneurs, modulaire, prefabrique, prefabriques,
+         prefabriquee, prefabriquees, prefabrication]
+    nl: [container, containers, modulair, prefab, geprefabriceerd]
+    de: [Container, Containergebäude, Großbehälter, modular, vorgefertigt, vorgefertigte,
+         vorgefertigten, Fertigkonstruktion, Fertigkonstruktionen,
+         # ue/ae/oe/ss transliterations:
+         Containergebaeude, Grossbehaelter]

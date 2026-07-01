@@ -14,6 +14,7 @@ import config
 import store
 import match
 import normalize
+import filters
 from report import build_report
 import json, os
 from datetime import datetime, date
@@ -33,6 +34,7 @@ def run_pipeline(sources, db_path, out_path):
     conn = store.init_db(db_path)
     full_keywords = config.keywords()
     cpv_set = set(config.cpv_codes())
+    exclusions = config.exclusions()
     health = {}
 
     for src in sources:
@@ -45,13 +47,15 @@ def run_pipeline(sources, db_path, out_path):
                 dl = (rec.get("deadline") or "")[:10]
                 if dl and dl < date.today().isoformat():
                     continue  # expired deadline — skip ingest
+                rec["exclude_reason"] = filters.apply_filters(rec, exclusions) or ""
                 store.upsert(conn, rec)
             health[name] = f"ok ({len(raws)})"
         except Exception as e:                       # one source failing must not abort the run
             health[name] = f"error: {e}"
 
     records = store.all_records(conn)
-    build_report(records, health, out_path)
+    surfaced = [r for r in records if not r.get("exclude_reason")]
+    build_report(surfaced, health, out_path)
     _write_last_run(db_path, health, records)
     return health
 

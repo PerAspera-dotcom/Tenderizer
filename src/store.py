@@ -5,7 +5,7 @@ from normalize import record_hash
 
 COLUMNS = ["hash", "source", "pub_number", "tag_line", "description", "buyer", "country",
            "place", "category", "procedure", "pub_date", "deadline", "cpv_codes",
-           "matched_terms", "match_source", "url", "first_seen", "status"]
+           "matched_terms", "match_source", "url", "first_seen", "status", "exclude_reason"]
 _JSON = {"cpv_codes", "matched_terms"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
@@ -15,11 +15,13 @@ def init_db(path):
     conn = sqlite3.connect(path)
     cols = ", ".join(f"{c} TEXT" for c in COLUMNS)
     conn.execute(f"CREATE TABLE IF NOT EXISTS tenders({cols}, PRIMARY KEY(hash))")
-    # Additive migration: add status for existing DBs that predate this column
-    try:
-        conn.execute("ALTER TABLE tenders ADD COLUMN status TEXT DEFAULT 'new'")
-    except sqlite3.OperationalError:
-        pass
+    # Additive migrations for existing DBs that predate these columns
+    for stmt in ("ALTER TABLE tenders ADD COLUMN status TEXT DEFAULT 'new'",
+                 "ALTER TABLE tenders ADD COLUMN exclude_reason TEXT DEFAULT ''"):
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     init_pipeline(conn)
     return conn

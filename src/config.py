@@ -53,6 +53,14 @@ def portals():
     return _load("portals.yaml")
 
 
+def exclusions():
+    """Active exclusion rules (name -> {codes: [...], terms: {lang: [...]}}).
+
+    See config/exclusions.yaml. Applied by filters.py as a post-match stage.
+    """
+    return _load("exclusions.yaml")
+
+
 def write_cpv(codes):
     """Validate CPV codes against cpv_reference.json then overwrite cpv.yaml."""
     import warnings
