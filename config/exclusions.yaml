@@ -38,3 +38,10 @@ rental:
   # Candidates raised at the meeting, not yet confirmed by the customer — do not activate:
   # it: [noleggio]
   # pl: [wynajem]
+
+# F6 (CR-001, D2-decided) — value floor. Non-EUR values are converted via ECB daily
+# reference rates (src/currency.py) before comparing. A tender with no disclosed
+# value (most notices — disclosure is optional under EU procurement rules) is
+# kept, not excluded.
+value_floor:
+  eur: 200000

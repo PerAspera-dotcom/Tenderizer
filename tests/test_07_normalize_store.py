@@ -3,7 +3,7 @@ import normalize, store
 
 REQUIRED_KEYS = {"source","pub_number","tag_line","buyer","country","place","category",
                  "procedure","pub_date","deadline","cpv_codes","matched_terms",
-                 "match_source","url","first_seen"}
+                 "match_source","url","first_seen","value","value_currency"}
 
 def test_normalize_ted_has_all_schema_keys(raw_ted_supply):
     assert REQUIRED_KEYS <= set(normalize.normalize_ted(raw_ted_supply))
@@ -82,3 +82,20 @@ def test_cpv_codes_deduped_at_ingest(raw_ted_supply):
     # classification) — dedupe at ingest, preserving first-seen order.
     raw_ted_supply["classification-cpv"] = ["39522530", "39522500", "39522530"]
     assert normalize.normalize_ted(raw_ted_supply)["cpv_codes"] == ["39522530", "39522500"]
+
+def test_value_extracted_when_present(raw_ted_supply):
+    # CR-001 F6: BT-27-Procedure (estimated-value-proc / -cur-proc)
+    raw_ted_supply["estimated-value-proc"] = "5000000"
+    raw_ted_supply["estimated-value-cur-proc"] = "SEK"
+    r = normalize.normalize_ted(raw_ted_supply)
+    assert r["value"] == "5000000" and r["value_currency"] == "SEK"
+
+def test_value_absent_when_not_disclosed(raw_ted_supply):
+    # most notices don't carry these fields at all — value disclosure is optional
+    r = normalize.normalize_ted(raw_ted_supply)
+    assert r["value"] == "" and r["value_currency"] == ""
+
+def test_boamp_value_always_absent(raw_boamp_supply):
+    # BOAMP's live schema has no value/amount field at all (verified live)
+    r = normalize.normalize_boamp(raw_boamp_supply)
+    assert r["value"] == "" and r["value_currency"] == ""

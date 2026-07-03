@@ -26,10 +26,18 @@ import requests
 ENDPOINT = "https://api.ted.europa.eu/v3/notices/search"
 
 # Fields to return — confirmed via live field probe (June 2026).
+# estimated-value-proc / estimated-value-cur-proc (CR-001 F6) verified via a live
+# probe of the actual v3 API's UNSUPPORTED_VALUE error, which lists every valid
+# field name — 'estimated-value' alone is NOT valid; per-notice-scope suffixes are
+# required, and '-proc' is the procedure-level BT-27 (pre-award estimate), not
+# '-glo'/'total-value'/'tender-value' which are award-result fields (out of scope
+# for open notices this connector fetches). Absent on most notices — value is
+# often undisclosed; normalize.py treats that as "no value" (kept, not excluded).
 FIELDS = [
     "publication-number", "notice-title", "description-proc",
     "buyer-name", "buyer-country", "contract-nature", "procedure-type", "notice-type",
     "deadline-receipt-request", "place-of-performance", "classification-cpv", "links",
+    "estimated-value-proc", "estimated-value-cur-proc",
 ]
 
 

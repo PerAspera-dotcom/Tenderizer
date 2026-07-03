@@ -66,7 +66,23 @@ def check_deadline_too_soon(rec, exclusions, now=None):
     return None
 
 
-CHECKS = [check_container_modular_prefab, check_rental, check_deadline_too_soon]
+def check_value_floor(rec, exclusions, now=None):
+    """F6 — exclude notices whose EUR-converted value is below the configured floor.
+
+    Reads rec['value_eur'] (pre-converted by run.py via currency.to_eur — this
+    check stays I/O-free, no network here). Missing/unconvertible value is kept,
+    not excluded — most notices don't disclose a value at all.
+    """
+    value_eur = rec.get("value_eur")
+    if not value_eur:
+        return None
+    if float(value_eur) < exclusions["value_floor"]["eur"]:
+        return "below_value_floor"
+    return None
+
+
+CHECKS = [check_container_modular_prefab, check_rental, check_deadline_too_soon,
+          check_value_floor]
 
 
 def apply_filters(rec, exclusions, now=None):

@@ -95,6 +95,10 @@ def normalize_ted(raw):
         "match_source": None,
         "url": _url(raw),
         "first_seen": None,
+        # CR-001 F6: procedure-level estimated value (BT-27-Procedure). Absent on
+        # most notices — value disclosure is optional under EU procurement rules.
+        "value": raw.get("estimated-value-proc") or "",
+        "value_currency": raw.get("estimated-value-cur-proc") or "",
     }
 
 def record_hash(record):
@@ -131,4 +135,8 @@ def normalize_boamp(raw):
         "match_source": None,
         "url": f'https://www.boamp.fr/pages/avis/?q=idweb:%22{idweb}%22' if idweb else "",
         "first_seen": None,
+        # BOAMP exposes no value/amount field at all (verified against its live
+        # OpenDataSoft schema) — always absent, so F6 never excludes on BOAMP alone.
+        "value": "",
+        "value_currency": "",
     }

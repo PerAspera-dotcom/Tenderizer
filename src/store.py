@@ -5,7 +5,8 @@ from normalize import record_hash
 
 COLUMNS = ["hash", "source", "pub_number", "tag_line", "description", "buyer", "country",
            "place", "category", "procedure", "pub_date", "deadline", "cpv_codes",
-           "matched_terms", "match_source", "url", "first_seen", "status", "exclude_reason"]
+           "matched_terms", "match_source", "url", "first_seen", "status", "exclude_reason",
+           "value", "value_currency", "value_eur", "fx_rate_date"]
 _JSON = {"cpv_codes", "matched_terms"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
@@ -17,7 +18,11 @@ def init_db(path):
     conn.execute(f"CREATE TABLE IF NOT EXISTS tenders({cols}, PRIMARY KEY(hash))")
     # Additive migrations for existing DBs that predate these columns
     for stmt in ("ALTER TABLE tenders ADD COLUMN status TEXT DEFAULT 'new'",
-                 "ALTER TABLE tenders ADD COLUMN exclude_reason TEXT DEFAULT ''"):
+                 "ALTER TABLE tenders ADD COLUMN exclude_reason TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN value TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN value_currency TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN value_eur TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN fx_rate_date TEXT DEFAULT ''"):
         try:
             conn.execute(stmt)
         except sqlite3.OperationalError:
@@ -54,6 +59,8 @@ def upsert(conn, record):
             values.append(record.get("status", "new"))
         elif c in _JSON:
             values.append(json.dumps(record.get(c, [])))
+        elif c in ("value", "value_currency", "value_eur", "fx_rate_date"):
+            values.append(record.get(c) or "")  # None (no value/no conversion) -> ''
         else:
             values.append(record.get(c, ""))
     cols_str = ", ".join(COLUMNS)

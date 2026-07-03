@@ -15,6 +15,7 @@ import store
 import match
 import normalize
 import filters
+import currency
 from report import build_report
 import json, os
 from datetime import datetime, date, timezone
@@ -30,12 +31,15 @@ def _tag(rec, full_keywords, cpv_set):
     return rec
 
 
-def run_pipeline(sources, db_path, out_path):
+def run_pipeline(sources, db_path, out_path, now=None, fx_rates=None):
     conn = store.init_db(db_path)
     full_keywords = config.keywords()
     cpv_set = set(config.cpv_codes())
     exclusions = config.exclusions()
-    now = datetime.now(timezone.utc)  # one snapshot for the whole run — see filters.check_deadline_too_soon
+    now = now or datetime.now(timezone.utc)  # one snapshot for the whole run
+    # ECB daily rates (D2) — fetch once per run, never per tender. `fx_rates` is
+    # injectable for tests; production (no arg) does one live fetch here.
+    fx_rates = fx_rates or currency.fetch_ecb_rates_or_fallback()
     health = {}
 
     for src in sources:
@@ -48,6 +52,8 @@ def run_pipeline(sources, db_path, out_path):
                 dl = (rec.get("deadline") or "")[:10]
                 if dl and dl < date.today().isoformat():
                     continue  # expired deadline — skip ingest
+                rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
+                    rec.get("value"), rec.get("value_currency"), fx_rates)
                 rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
                 store.upsert(conn, rec)
             health[name] = f"ok ({len(raws)})"

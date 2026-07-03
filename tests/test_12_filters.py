@@ -1,9 +1,12 @@
-"""Step 12 — post-match filter stage (CR-001 F1 + F2 + F3).
+"""Step 12 — post-match filter stage (CR-001 F1 + F2 + F3 + F6).
   filters.apply_filters(rec, exclusions, now=None) -> exclude_reason:str|None
   F3: container / modular / prefabricated structures are hard-excluded, even
   alongside a tent/shelter signal. Reason: 'container_modular_prefab'.
   F2: rental tenders are hard-excluded, all languages. Reason: 'rental'.
   F1: notices due in under 72h are hard-excluded. Reason: 'deadline_too_soon'.
+  F6: notices with a (pre-converted) EUR value under the floor are hard-
+  excluded. Reason: 'below_value_floor'. Currency conversion itself lives in
+  currency.py (network); this module only reads rec['value_eur'].
 """
 from datetime import datetime, timedelta, timezone
 import config, filters
@@ -14,9 +17,9 @@ D5_CODES = {"44211000", "44211100", "44211110", "44211200",
             "45223800", "45223810", "34221000"}
 
 
-def _rec(tag_line="", description="", cpv_codes=None, deadline=""):
+def _rec(tag_line="", description="", cpv_codes=None, deadline="", value_eur=None):
     return {"tag_line": tag_line, "description": description,
-            "cpv_codes": cpv_codes or [], "deadline": deadline}
+            "cpv_codes": cpv_codes or [], "deadline": deadline, "value_eur": value_eur}
 
 
 def test_prefab_cpv_code_is_excluded():
@@ -149,3 +152,21 @@ def test_missing_deadline_is_kept():
 def test_unparseable_deadline_is_kept():
     rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], deadline="not-a-date")
     assert filters.apply_filters(rec, EXCLUSIONS, NOW) is None
+
+
+# ── F6: value floor ───────────────────────────────────────────────────────────
+
+def test_value_below_floor_is_excluded():
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=150_000)
+    assert filters.apply_filters(rec, EXCLUSIONS) == "below_value_floor"
+
+
+def test_value_above_floor_is_kept():
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=250_000)
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_value_absent_is_kept():
+    # most notices don't disclose a value at all — don't exclude on missing data
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=None)
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
