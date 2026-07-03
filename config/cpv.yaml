@@ -17,13 +17,15 @@ codes:
   # --- shelters ---
   - "44112100"   # Shelters
   - "44112110"   # Shelter parts
-  - "45216129"   # Protective shelters (construction / works)
-  - "45216230"   # Military shelter construction work (works)
   # --- prefabricated / modular / mobile-container codes removed (CR-001 F3, D5-confirmed):
   # 44211000, 44211100, 44211110, 44211200, 45223800, 45223810, 34221000 — now hard-exclusion
   # codes in config/exclusions.yaml (container_modular_prefab), not active match codes.
-  # --- awning installation (works) ---
-  - "45421144"   # Installation work of awnings
+  # --- CR-001 F4 (D3 hard exclude): 45216129 (Protective shelters, works), 45216230
+  # (Military shelter construction, works), 45421144 (Installation work of awnings,
+  # works) removed — every CPV division-45 code is now hard-excluded (construction_works,
+  # no tent-signal override), so these three could never surface anyway. The supply-side
+  # codes for shelters (44112100/44112110) and awnings (39522120) remain active — F4 only
+  # kills the WORKS variants, not the underlying products.
   # --- individual equipment & bedding (CR-001 F7) ---
   - "35800000"   # Individual and support equipment
   - "39511100"   # Blankets

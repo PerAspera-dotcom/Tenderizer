@@ -81,8 +81,19 @@ def check_value_floor(rec, exclusions, now=None):
     return None
 
 
+def check_construction_works(rec, exclusions, now=None):
+    """F4 (D3 hard exclude) — any CPV division 45 (construction work) code drops
+    the notice entirely, no tent-signal override (customer confirmed). This is a
+    prefix rule, not an enumerable code list — division 45 is open-ended.
+    """
+    prefix = exclusions["construction_works"]["cpv_prefix"]
+    if any(c.startswith(prefix) for c in (rec.get("cpv_codes") or [])):
+        return "construction_works"
+    return None
+
+
 CHECKS = [check_container_modular_prefab, check_rental, check_deadline_too_soon,
-          check_value_floor]
+          check_value_floor, check_construction_works]
 
 
 def apply_filters(rec, exclusions, now=None):

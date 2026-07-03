@@ -170,3 +170,35 @@ def test_value_absent_is_kept():
     # most notices don't disclose a value at all — don't exclude on missing data
     rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=None)
     assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+# ── F4: construction works (D3 hard exclude) ─────────────────────────────────
+
+def test_45xxx_code_is_excluded():
+    rec = _rec("Construction of a military base", cpv_codes=["45000000"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "construction_works"
+
+
+def test_tent_only_notice_has_no_45xxx_and_is_kept():
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_45xxx_excludes_even_alongside_a_tent_signal():
+    # hard exclude, no tent-signal override (D3) — a notice can carry both a tent
+    # code and a 45xxx works code; the works code still wins.
+    rec = _rec("Construction of shelter facilities", cpv_codes=["39522530", "45216129"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "construction_works"
+
+
+def test_shelter_supply_code_44112100_is_not_45xxx_and_is_kept():
+    # the supply-side shelter code stays active; only the WORKS variants died to F4.
+    rec = _rec("Shelters, qty 50", cpv_codes=["44112100"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_f4_retired_codes_removed_from_active_cpv_set():
+    # these three would always trip construction_works, so they were pulled from
+    # the active list (see cpv.yaml's F4 note) — no point matching on a dead code.
+    retired = {"45216129", "45216230", "45421144"}
+    assert retired.isdisjoint(set(config.cpv_codes()))

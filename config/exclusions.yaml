@@ -45,3 +45,10 @@ rental:
 # kept, not excluded.
 value_floor:
   eur: 200000
+
+# F4 (CR-001, D3 ✅ hard exclude) — any CPV division 45 (construction work) code
+# drops the notice entirely, no tent-signal override (customer confirmed). This
+# also retired three of our own codes from the active set (see cpv.yaml F4 note):
+# 45216129, 45216230, 45421144 would always trip this, so they'd never surface.
+construction_works:
+  cpv_prefix: "45"
