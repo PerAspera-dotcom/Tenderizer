@@ -62,3 +62,24 @@ def test_get_tender_include_excluded_returns_the_record(tmp_path, monkeypatch):
     r = api.get_tender("EXCLUDED-1", include_excluded=True)
     assert r["pub_number"] == "EXCLUDED-1"
     assert r["exclude_reason"] == "rental"
+
+
+# ── CORS lockdown (phase 2/3 prep) ───────────────────────────────────────────
+
+def test_parse_allowed_origins_splits_and_trims():
+    assert api.parse_allowed_origins("http://a.com, http://b.com") == \
+        ["http://a.com", "http://b.com"]
+
+
+def test_parse_allowed_origins_drops_empties():
+    assert api.parse_allowed_origins("http://a.com,,  ,http://b.com") == \
+        ["http://a.com", "http://b.com"]
+
+
+def test_parse_allowed_origins_defaults_when_unset():
+    assert api.parse_allowed_origins(None) == ["http://localhost:5173"]
+
+
+def test_parse_allowed_origins_single_value():
+    assert api.parse_allowed_origins("https://app.tenderizer.example") == \
+        ["https://app.tenderizer.example"]

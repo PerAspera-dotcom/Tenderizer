@@ -5,10 +5,13 @@ Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
 import sys, pathlib, json, os
 from datetime import date, timedelta
+from dotenv import load_dotenv
 
 _HERE = pathlib.Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
+
+load_dotenv()
 
 import store, config
 import run as engine
@@ -24,10 +27,23 @@ DB_PATH       = str(ROOT / "data" / "tenders.db")
 REPORT_PATH   = str(ROOT / "reports" / "tenders.xlsx")
 LAST_RUN_PATH = str(ROOT / "data" / "last_run.json")
 
+DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
+
+
+def parse_allowed_origins(env_value):
+    """Comma-separated ALLOWED_ORIGINS -> list[str], trimmed, empties dropped.
+
+    Pulled out as a pure function so the parsing itself is unit-testable
+    without booting the FastAPI app.
+    """
+    raw = env_value if env_value is not None else DEFAULT_ALLOWED_ORIGINS
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(title="Tenderizer API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=parse_allowed_origins(os.getenv("ALLOWED_ORIGINS")),
     allow_methods=["*"],
     allow_headers=["*"],
 )
