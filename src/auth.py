@@ -1,14 +1,22 @@
-"""Clerk session-token verification (phase2/3 step 6).
+"""Auth verification for the API (phase2/3 step 6).
 
-Clerk session tokens are RS256-signed JWTs. Verifying them server-side means
-checking the signature against Clerk's published public keys (JWKS) rather
-than calling Clerk's API on every request — PyJWT's PyJWKClient fetches and
-caches that JWKS, only re-fetching when it sees an unfamiliar key id.
-
-CLERK_JWKS_URL is the instance's JWKS endpoint, e.g.
-https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json (found on
-the Clerk dashboard, or derivable from the publishable key).
+Two independent schemes:
+  - verify_token(): Clerk session tokens (RS256-signed JWTs) for regular
+    tenant users. Verifying server-side means checking the signature against
+    Clerk's published public keys (JWKS) rather than calling Clerk's API on
+    every request — PyJWT's PyJWKClient fetches and caches that JWKS, only
+    re-fetching when it sees an unfamiliar key id. CLERK_JWKS_URL is the
+    instance's JWKS endpoint, e.g.
+    https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json (found
+    on the Clerk dashboard, or derivable from the publishable key).
+  - verify_ops_token(): a static shared secret (OPS_API_TOKEN) for
+    operational endpoints (health, reports) that carry cross-tenant
+    operational data, not a single tenant's business data — no tenant's
+    Clerk login should be sufficient to pull every tenant's ingest health,
+    and these are exactly the kind of endpoint an uptime monitor or internal
+    dashboard hits without a human user session at all.
 """
+import hmac
 import os
 import jwt
 from jwt import PyJWKClient
@@ -23,8 +31,9 @@ class AuthError(Exception):
 
 
 class AuthNotConfigured(Exception):
-    """CLERK_JWKS_URL isn't set — the server can't verify anything, so no
-    token could ever succeed. Not the caller's fault; maps to 500."""
+    """Required server-side config (CLERK_JWKS_URL / OPS_API_TOKEN) isn't
+    set — the server can't verify anything, so no token could ever succeed.
+    Not the caller's fault; maps to 500."""
 
 
 def _get_jwks_client():
@@ -52,3 +61,19 @@ def verify_token(token):
                            options={"require": ["exp", "sub"]})
     except jwt.PyJWTError as e:
         raise AuthError(str(e)) from e
+
+
+def verify_ops_token(token):
+    """Constant-time comparison against OPS_API_TOKEN.
+
+    Returns True/False rather than raising AuthError on a mismatch — unlike
+    a Clerk token, an ops token isn't "invalid" in a way worth explaining
+    (no signature/expiry/claims to diagnose), and the caller (api.py) treats
+    a mismatch as 403, not 401: a request with *some* token, just the wrong
+    one, is a privilege failure, not a missing-credentials one. Raises
+    AuthNotConfigured if OPS_API_TOKEN isn't set.
+    """
+    expected = os.getenv("OPS_API_TOKEN")
+    if not expected:
+        raise AuthNotConfigured("OPS_API_TOKEN is not set")
+    return hmac.compare_digest(token, expected)

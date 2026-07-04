@@ -164,3 +164,52 @@ def test_same_clerk_user_resolves_to_the_same_tenant_every_time(tmp_path, monkey
     first = api.get_current_tenant_id(creds=_creds())
     second = api.get_current_tenant_id(creds=_creds())
     assert first == second
+
+
+# ── auth.verify_ops_token() / api.require_ops_access() ──────────────────────
+# Operational endpoints (health, reports) are gated on a static service
+# token, not any tenant's Clerk session — a regular tenant login must never
+# be sufficient to pull cross-tenant operational data.
+
+def test_verify_ops_token_accepts_the_configured_secret(monkeypatch):
+    monkeypatch.setenv("OPS_API_TOKEN", "s3cret")
+    assert auth.verify_ops_token("s3cret") is True
+
+
+def test_verify_ops_token_rejects_a_wrong_token(monkeypatch):
+    monkeypatch.setenv("OPS_API_TOKEN", "s3cret")
+    assert auth.verify_ops_token("wrong") is False
+
+
+def test_verify_ops_token_raises_when_not_configured(monkeypatch):
+    monkeypatch.delenv("OPS_API_TOKEN", raising=False)
+    with pytest.raises(auth.AuthNotConfigured):
+        auth.verify_ops_token("anything")
+
+
+def test_require_ops_access_401s_with_no_token():
+    with pytest.raises(HTTPException) as exc:
+        api.require_ops_access(creds=None)
+    assert exc.value.status_code == 401
+
+
+def test_require_ops_access_403s_with_the_wrong_token(monkeypatch):
+    monkeypatch.setenv("OPS_API_TOKEN", "s3cret")
+    with pytest.raises(HTTPException) as exc:
+        api.require_ops_access(creds=_creds("wrong"))
+    assert exc.value.status_code == 403
+
+
+def test_require_ops_access_passes_with_the_correct_token(monkeypatch):
+    monkeypatch.setenv("OPS_API_TOKEN", "s3cret")
+    assert api.require_ops_access(creds=_creds("s3cret")) is None
+
+
+def test_a_regular_clerk_session_does_not_satisfy_require_ops_access(monkeypatch):
+    # A valid Clerk token isn't even checked against Clerk here — it's just
+    # some string that isn't the ops secret, and must fail the same way any
+    # other wrong token would (403, not treated as a valid tenant session).
+    monkeypatch.setenv("OPS_API_TOKEN", "s3cret")
+    with pytest.raises(HTTPException) as exc:
+        api.require_ops_access(creds=_creds("a-real-looking.clerk.jwt"))
+    assert exc.value.status_code == 403
