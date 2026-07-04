@@ -93,11 +93,12 @@ def get_current_tenant_id(
 def require_ops_access(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> None:
-    """Gate for operational endpoints (health, reports) that carry
-    cross-tenant operational data, not a single tenant's business data — a
-    static service token (OPS_API_TOKEN), not any tenant's Clerk session,
-    since no regular user login should be able to pull every tenant's
-    ingest health or the latest run's report.
+    """Gate for operational endpoints that carry cross-tenant operational
+    data, not a single tenant's business data — currently just
+    GET /api/reports/latest (NOT /api/health, which despite its name is the
+    Phase-1 tenant-facing Portal Health panel — see get_health()). A static
+    service token (OPS_API_TOKEN), not any tenant's Clerk session, since no
+    regular user login should be able to pull the latest run's report.
 
     401 with no token at all (no credentials presented); 403 if a token was
     presented but doesn't match (wrong privilege, not "who are you").
@@ -268,10 +269,14 @@ _PORTAL_META = [
 ]
 
 @app.get("/api/health")
-def get_health(_: None = Depends(require_ops_access)):
-    # Ops-gated, not tenant-gated (see require_ops_access) — also unrelated
-    # to the pre-existing gap that _last_run()/LAST_RUN_PATH is a single
-    # shared file rather than tenant-scoped; that's still not fixed here.
+def get_health(tenant_id: int = Depends(get_current_tenant_id)):
+    # Tenant-gated, not ops-gated: this is the Scout Dashboard's Portal
+    # Health panel (TENDERIZER_HANDOFF.md §6/§8) — real, Phase-1,
+    # tenant-facing data, unlike /api/reports/latest. tenant_id isn't used
+    # yet: _last_run()/LAST_RUN_PATH is a single shared file, not
+    # tenant-scoped (a pre-existing gap from before tenant_id existed, still
+    # not fixed here) — but the route itself needs a regular tenant session,
+    # not the ops secret.
     last_run_health = _last_run().get("health", {})
     result = []
     for portal in _PORTAL_META:

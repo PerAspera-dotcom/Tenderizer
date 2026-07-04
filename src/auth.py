@@ -10,11 +10,12 @@ Two independent schemes:
     https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json (found
     on the Clerk dashboard, or derivable from the publishable key).
   - verify_ops_token(): a static shared secret (OPS_API_TOKEN) for
-    operational endpoints (health, reports) that carry cross-tenant
-    operational data, not a single tenant's business data — no tenant's
-    Clerk login should be sufficient to pull every tenant's ingest health,
-    and these are exactly the kind of endpoint an uptime monitor or internal
-    dashboard hits without a human user session at all.
+    operational endpoints that carry cross-tenant operational data, not a
+    single tenant's business data — GET /api/reports/latest is the current
+    example (not /api/health, which despite its name is the Phase-1
+    tenant-facing Portal Health panel, gated on a regular Clerk session like
+    everything else). These are the kind of endpoint an uptime monitor or
+    internal dashboard hits without a human user session at all.
 """
 import hmac
 import os
