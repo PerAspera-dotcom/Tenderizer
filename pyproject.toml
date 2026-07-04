@@ -7,6 +7,9 @@ dependencies = [
     "pyyaml",
     "openpyxl",
     "python-dotenv",
+    "sqlalchemy",
+    "alembic",
+    "psycopg2-binary",
 ]
 
 [tool.setuptools.packages.find]
