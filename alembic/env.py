@@ -9,6 +9,7 @@ from alembic import context
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 import db as app_db  # noqa: E402
+import schema as app_schema  # noqa: E402
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -23,9 +24,7 @@ config.set_main_option("sqlalchemy.url", app_db.database_url())
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Step 2 (SQLAlchemy Core port of store.py) will define this in src/schema.py
-# and import it here for autogenerate support.
-target_metadata = None
+target_metadata = app_schema.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
