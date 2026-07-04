@@ -15,8 +15,9 @@ load_dotenv()
 
 import store, config
 import run as engine
+from schema import DEFAULT_TENANT_ID
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -53,6 +54,16 @@ def _db():
     return store.init_db(DB_PATH)
 
 
+def get_current_tenant_id() -> int:
+    """Placeholder tenant resolver (Phase 2/3 step 3) — always the single
+    default tenant. Step 6 replaces this function's body with real Clerk
+    session verification (401 on missing/invalid token); every route below
+    already depends on this function rather than a hardcoded value, so that
+    swap touches only this one place, not every route signature.
+    """
+    return DEFAULT_TENANT_ID
+
+
 def _last_run() -> dict:
     if os.path.exists(LAST_RUN_PATH):
         with open(LAST_RUN_PATH, encoding="utf-8") as f:
@@ -82,8 +93,9 @@ def list_tenders(
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
     sort:   str = "deadline",
+    tenant_id: int = Depends(get_current_tenant_id),
 ):
-    records = store.all_records(_db())
+    records = store.all_records(_db(), tenant_id)
 
     # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
     # default so they don't surface here even though the report already hid
@@ -126,8 +138,9 @@ def list_tenders(
 
 
 @app.get("/api/tenders/{pub_number}")
-def get_tender(pub_number: str, include_excluded: bool = False):
-    for r in store.all_records(_db()):
+def get_tender(pub_number: str, include_excluded: bool = False,
+               tenant_id: int = Depends(get_current_tenant_id)):
+    for r in store.all_records(_db(), tenant_id):
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
                 break
@@ -141,21 +154,22 @@ class StatusBody(BaseModel):
 _VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed"}
 
 @app.patch("/api/tenders/{pub_number}")
-def patch_tender(pub_number: str, body: StatusBody):
+def patch_tender(pub_number: str, body: StatusBody,
+                  tenant_id: int = Depends(get_current_tenant_id)):
     if body.status not in _VALID_STATUSES:
         raise HTTPException(422, f"status must be one of {_VALID_STATUSES}")
     conn = _db()
-    if not any(r["pub_number"] == pub_number for r in store.all_records(conn)):
+    if not any(r["pub_number"] == pub_number for r in store.all_records(conn, tenant_id)):
         raise HTTPException(404, "Tender not found")
-    store.set_status(conn, pub_number, body.status)
+    store.set_status(conn, tenant_id, pub_number, body.status)
     return {"pub_number": pub_number, "status": body.status}
 
 
 # ── Stats & health ────────────────────────────────────────────────────────────
 
 @app.get("/api/stats")
-def get_stats():
-    records  = store.all_records(_db())
+def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
+    records  = store.all_records(_db(), tenant_id)
     last_run = _last_run()
     today    = date.today().isoformat()
 
@@ -214,16 +228,16 @@ def get_health():
 
 # ── Run now ───────────────────────────────────────────────────────────────────
 
-def _do_run():
+def _do_run(tenant_id):
     os.makedirs(str(ROOT / "data"), exist_ok=True)
     os.makedirs(str(ROOT / "reports"), exist_ok=True)
     since   = date.today() - timedelta(days=30)
     sources = engine._default_sources(since)
-    engine.run_pipeline(sources, DB_PATH, REPORT_PATH)
+    engine.run_pipeline(sources, DB_PATH, REPORT_PATH, tenant_id=tenant_id)
 
 @app.post("/api/run")
-def post_run(background: BackgroundTasks):
-    background.add_task(_do_run)
+def post_run(background: BackgroundTasks, tenant_id: int = Depends(get_current_tenant_id)):
+    background.add_task(_do_run, tenant_id)
     return {"status": "started"}
 
 
@@ -291,8 +305,8 @@ def get_latest_report():
 # ── Portal: pipeline & follow-up ──────────────────────────────────────────────
 
 @app.get("/api/pipeline")
-def get_pipeline():
-    return store.get_pipeline_entries(_db())
+def get_pipeline(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_pipeline_entries(_db(), tenant_id)
 
 
 class PipelinePatch(BaseModel):
@@ -304,19 +318,20 @@ class PipelinePatch(BaseModel):
 _VALID_SUBMISSION = {"not_started", "drafting", "submitted"}
 
 @app.patch("/api/pipeline/{pub_number}")
-def patch_pipeline(pub_number: str, body: PipelinePatch):
+def patch_pipeline(pub_number: str, body: PipelinePatch,
+                    tenant_id: int = Depends(get_current_tenant_id)):
     if body.submission_status and body.submission_status not in _VALID_SUBMISSION:
         raise HTTPException(422, f"submission_status must be one of {_VALID_SUBMISSION}")
     conn   = _db()
-    store.ensure_pipeline_entry(conn, pub_number)
+    store.ensure_pipeline_entry(conn, tenant_id, pub_number)
     fields = body.model_dump(exclude_none=True)
-    store.set_pipeline_entry(conn, pub_number, fields)
+    store.set_pipeline_entry(conn, tenant_id, pub_number, fields)
     return {"pub_number": pub_number, **fields}
 
 
 @app.get("/api/followup")
-def get_followup():
-    return store.get_followup_entries(_db())
+def get_followup(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_followup_entries(_db(), tenant_id)
 
 
 class FollowupPatch(BaseModel):
@@ -325,12 +340,13 @@ class FollowupPatch(BaseModel):
 _VALID_OUTCOMES = {"pending", "won", "lost"}
 
 @app.patch("/api/followup/{pub_number}")
-def patch_followup(pub_number: str, body: FollowupPatch):
+def patch_followup(pub_number: str, body: FollowupPatch,
+                    tenant_id: int = Depends(get_current_tenant_id)):
     if body.outcome not in _VALID_OUTCOMES:
         raise HTTPException(422, f"outcome must be one of {_VALID_OUTCOMES}")
     conn = _db()
-    store.ensure_pipeline_entry(conn, pub_number)
-    store.set_pipeline_entry(conn, pub_number, {"outcome": body.outcome})
+    store.ensure_pipeline_entry(conn, tenant_id, pub_number)
+    store.set_pipeline_entry(conn, tenant_id, pub_number, {"outcome": body.outcome})
     return {"pub_number": pub_number, "outcome": body.outcome}
 
 

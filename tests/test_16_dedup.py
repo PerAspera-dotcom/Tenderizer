@@ -98,6 +98,7 @@ def test_unrelated_third_party_notice_is_untouched():
 # ── store.mark_superseded ─────────────────────────────────────────────────────
 
 import normalize, store
+from conftest import TEST_TENANT_ID
 
 
 def _stored_rec(pub_number, buyer, tag_line, deadline):
@@ -112,12 +113,12 @@ def test_mark_superseded_sets_reason_and_supersedes_list(tmp_path):
     conn = store.init_db(str(tmp_path / "t.db"))
     kept = _stored_rec("RO-2", "Ministry X", "Tents", "2026-07-10T12:00:00+00:00")
     old = _stored_rec("RO-1", "Ministry X", "Tents", "2026-07-10T12:00:00+00:00")
-    store.upsert(conn, kept)
-    store.upsert(conn, old)
+    store.upsert(conn, TEST_TENANT_ID, kept)
+    store.upsert(conn, TEST_TENANT_ID, old)
 
-    store.mark_superseded(conn, "RO-2", [dict(old, supersedes=[])])
+    store.mark_superseded(conn, TEST_TENANT_ID, "RO-2", [dict(old, supersedes=[])])
 
-    records = {r["pub_number"]: r for r in store.all_records(conn)}
+    records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
     assert records["RO-1"]["exclude_reason"] == "superseded"
     assert records["RO-2"]["supersedes"] == ["RO-1"]
     assert records["RO-2"]["exclude_reason"] == ""   # the kept record stays surfaced
@@ -128,11 +129,13 @@ def test_mark_superseded_accumulates_multi_generation_chain(tmp_path):
     # RO-2 — RO-3's supersedes list should show the full chain, not just RO-2.
     conn = store.init_db(str(tmp_path / "t.db"))
     for pub in ("RO-1", "RO-2", "RO-3"):
-        store.upsert(conn, _stored_rec(pub, "Ministry X", "Tents", "2026-07-10T12:00:00+00:00"))
-    store.mark_superseded(conn, "RO-2", [dict(_stored_rec("RO-1", "Ministry X", "Tents",
-                                                            "2026-07-10T12:00:00+00:00"), supersedes=[])])
-    ro2 = next(r for r in store.all_records(conn) if r["pub_number"] == "RO-2")
-    store.mark_superseded(conn, "RO-3", [ro2])
+        store.upsert(conn, TEST_TENANT_ID,
+                     _stored_rec(pub, "Ministry X", "Tents", "2026-07-10T12:00:00+00:00"))
+    store.mark_superseded(conn, TEST_TENANT_ID, "RO-2",
+                           [dict(_stored_rec("RO-1", "Ministry X", "Tents",
+                                              "2026-07-10T12:00:00+00:00"), supersedes=[])])
+    ro2 = next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == "RO-2")
+    store.mark_superseded(conn, TEST_TENANT_ID, "RO-3", [ro2])
 
-    ro3 = next(r for r in store.all_records(conn) if r["pub_number"] == "RO-3")
+    ro3 = next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == "RO-3")
     assert set(ro3["supersedes"]) == {"RO-1", "RO-2"}

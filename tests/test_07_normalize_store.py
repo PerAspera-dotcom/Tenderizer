@@ -1,5 +1,6 @@
 """Step 7 — normalisation + storage (against the REAL multilingual TED structure)."""
 import normalize, store
+from conftest import TEST_TENANT_ID
 
 REQUIRED_KEYS = {"source","pub_number","tag_line","buyer","country","place","category",
                  "procedure","pub_date","deadline","cpv_codes","matched_terms",
@@ -57,25 +58,25 @@ def test_record_hash_differs_by_pub_number(raw_ted_supply, raw_ted_services):
 
 def test_upsert_new_returns_true(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
-    assert store.upsert(conn, normalize.normalize_ted(raw_ted_supply)) is True
+    assert store.upsert(conn, TEST_TENANT_ID, normalize.normalize_ted(raw_ted_supply)) is True
 
 def test_upsert_duplicate_returns_false_and_adds_no_row(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     rec = normalize.normalize_ted(raw_ted_supply)
-    store.upsert(conn, rec)
-    assert store.upsert(conn, rec) is False
-    assert len(store.all_records(conn)) == 1
+    store.upsert(conn, TEST_TENANT_ID, rec)
+    assert store.upsert(conn, TEST_TENANT_ID, rec) is False
+    assert len(store.all_records(conn, TEST_TENANT_ID)) == 1
 
 def test_first_seen_preserved_on_reinsert(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     rec = normalize.normalize_ted(raw_ted_supply); rec["first_seen"] = "2026-01-15"
-    store.upsert(conn, rec); store.upsert(conn, rec)
-    assert store.all_records(conn)[0]["first_seen"] == "2026-01-15"
+    store.upsert(conn, TEST_TENANT_ID, rec); store.upsert(conn, TEST_TENANT_ID, rec)
+    assert store.all_records(conn, TEST_TENANT_ID)[0]["first_seen"] == "2026-01-15"
 
 def test_stored_record_roundtrips_cpv_list(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
-    store.upsert(conn, normalize.normalize_ted(raw_ted_supply))
-    assert store.all_records(conn)[0]["cpv_codes"] == ["39522530", "39522500"]
+    store.upsert(conn, TEST_TENANT_ID, normalize.normalize_ted(raw_ted_supply))
+    assert store.all_records(conn, TEST_TENANT_ID)[0]["cpv_codes"] == ["39522530", "39522500"]
 
 def test_cpv_codes_deduped_at_ingest(raw_ted_supply):
     # CR-001 R2: TED can list the same CPV code twice (e.g. main + additional
@@ -113,3 +114,38 @@ def test_language_falls_back_when_no_english_translation(raw_ted_supply):
 def test_boamp_language_always_fra(raw_boamp_supply):
     # BOAMP is French-only, single-language (per the connector's own docs)
     assert normalize.normalize_boamp(raw_boamp_supply)["language"] == "fra"
+
+
+# ── Phase 2/3 step 3: tenant isolation ───────────────────────────────────────
+
+def test_two_tenants_can_store_the_same_notice_independently(tmp_path, raw_ted_supply):
+    # Two different tenant companies legitimately watching the SAME public TED
+    # notice would produce the same hash — the PK is (tenant_id, hash), not
+    # hash alone, specifically so this doesn't collide.
+    conn = store.init_db(str(tmp_path/"t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    assert store.upsert(conn, 1, rec) is True
+    assert store.upsert(conn, 2, rec) is True  # same hash, different tenant -> not a duplicate
+    assert len(store.all_records(conn, 1)) == 1
+    assert len(store.all_records(conn, 2)) == 1
+
+def test_tenant_never_sees_another_tenants_records(tmp_path, raw_ted_supply, raw_ted_services):
+    conn = store.init_db(str(tmp_path/"t.db"))
+    store.upsert(conn, 1, normalize.normalize_ted(raw_ted_supply))
+    store.upsert(conn, 2, normalize.normalize_ted(raw_ted_services))
+    tenant_1_pubs = {r["pub_number"] for r in store.all_records(conn, 1)}
+    tenant_2_pubs = {r["pub_number"] for r in store.all_records(conn, 2)}
+    assert tenant_1_pubs == {"381972-2026"}
+    assert tenant_2_pubs == {"381999-2026"}
+    assert tenant_1_pubs.isdisjoint(tenant_2_pubs)
+
+def test_set_status_only_affects_the_calling_tenants_row(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path/"t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    store.upsert(conn, 1, rec)
+    store.upsert(conn, 2, rec)
+    store.set_status(conn, 1, rec["pub_number"], "shortlisted")
+    t1 = store.all_records(conn, 1)[0]
+    t2 = store.all_records(conn, 2)[0]
+    assert t1["status"] == "shortlisted"
+    assert t2["status"] == "new"

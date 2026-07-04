@@ -1,13 +1,16 @@
 """Step 11 — end-to-end run / scheduler entrypoint.
 Interface:
-  run.run_pipeline(sources, db_path, out_path, now=None, fx_rates=None) -> health(dict)
+  run.run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID,
+                    now=None, fx_rates=None) -> health(dict)
   where each source = {"name":str, "fetch":callable->list[raw], "normalize":callable}
   A failing source must NOT abort the run; it is recorded in health.
   `fx_rates` defaults to a live ECB fetch (CR-001 D2) — tests pass a fixed
   snapshot so the suite doesn't depend on network access.
+  `tenant_id` (Phase 2/3 step 3) scopes every store.py read/write.
 """
 from openpyxl import load_workbook
 import run
+from conftest import TEST_TENANT_ID
 
 FX_RATES = {"date": "2026-07-01", "rates": {"EUR": 1.0, "SEK": 11.23}}
 
@@ -21,23 +24,25 @@ def _src_boom():
 
 def test_end_to_end_produces_report(tmp_path, raw_ted_supply):
     health = run.run_pipeline([_src_ok(raw_ted_supply)],
-                              str(tmp_path/"t.db"), str(tmp_path/"r.xlsx"), fx_rates=FX_RATES)
+                              str(tmp_path/"t.db"), str(tmp_path/"r.xlsx"),
+                              tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
     assert "ok" in health["TED"]
     assert load_workbook(str(tmp_path/"r.xlsx"))
 
 def test_failing_source_is_isolated(tmp_path, raw_ted_supply):
     health = run.run_pipeline([_src_ok(raw_ted_supply), _src_boom()],
-                              str(tmp_path/"t.db"), str(tmp_path/"r.xlsx"), fx_rates=FX_RATES)
+                              str(tmp_path/"t.db"), str(tmp_path/"r.xlsx"),
+                              tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
     assert "ok" in health["TED"]            # good source still ran
     assert "error" in health["BROKEN"]      # bad source captured, not fatal
 
 def test_run_is_idempotent(tmp_path, raw_ted_supply):
     import store
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, fx_rates=FX_RATES)
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, fx_rates=FX_RATES)   # second run, same data
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
     conn = store.init_db(db)
-    assert len(store.all_records(conn)) == 1               # no duplicate
+    assert len(store.all_records(conn, TEST_TENANT_ID)) == 1               # no duplicate
 
 def test_excluded_notice_is_stored_but_not_reported(tmp_path, raw_ted_supply):
     # CR-001 F3: container/modular/prefab notices are auditable (kept in the DB with
@@ -49,10 +54,10 @@ def test_excluded_notice_is_stored_but_not_reported(tmp_path, raw_ted_supply):
     raw["classification-cpv"] = ["44211100"]
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     conn = store.init_db(db)
-    stored = store.all_records(conn)
+    stored = store.all_records(conn, TEST_TENANT_ID)
     assert stored[0]["exclude_reason"] == "container_modular_prefab"  # auditable, not deleted
 
     wb = load_workbook(out)
@@ -68,10 +73,10 @@ def test_below_value_floor_is_excluded_after_fx_conversion(tmp_path, raw_ted_sup
     raw["estimated-value-cur-proc"] = "SEK"
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     conn = store.init_db(db)
-    stored = store.all_records(conn)[0]
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
     assert stored["exclude_reason"] == "below_value_floor"
     assert stored["fx_rate_date"] == "2026-07-01"   # conversion is reproducible (D2)
 
@@ -83,10 +88,10 @@ def test_above_value_floor_is_kept(tmp_path, raw_ted_supply):
     raw["estimated-value-cur-proc"] = "SEK"
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     conn = store.init_db(db)
-    assert store.all_records(conn)[0]["exclude_reason"] == ""
+    assert store.all_records(conn, TEST_TENANT_ID)[0]["exclude_reason"] == ""
 
 def test_republished_notices_collapse_via_full_pipeline(tmp_path, raw_ted_supply):
     # CR-001 D-DUP's own example: the same tender republished under a new
@@ -105,10 +110,10 @@ def test_republished_notices_collapse_via_full_pipeline(tmp_path, raw_ted_supply
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     conn = store.init_db(db)
-    records = {r["pub_number"]: r for r in store.all_records(conn)}
+    records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
     assert records["111111-2026"]["exclude_reason"] == "superseded"
     assert records["222222-2026"]["supersedes"] == ["111111-2026"]
 
@@ -131,10 +136,10 @@ def test_genuinely_different_tenders_same_buyer_are_not_merged(tmp_path, raw_ted
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     conn = store.init_db(db)
-    records = {r["pub_number"]: r for r in store.all_records(conn)}
+    records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
     assert records["333333-2026"]["exclude_reason"] == ""
     assert records["444444-2026"]["exclude_reason"] == ""
 
@@ -152,10 +157,10 @@ def test_non_english_notice_is_translated(tmp_path, raw_ted_supply, monkeypatch)
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     import store
-    stored = store.all_records(store.init_db(db))[0]
+    stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
     assert stored["language"] == "fra"
     assert stored["translation_status"] == "ok"
     assert stored["tag_line_en"] == "[EN] Suède - Fourniture de tentes militaires"
@@ -167,10 +172,10 @@ def test_english_notice_is_never_sent_to_translate(tmp_path, raw_ted_supply, mon
     monkeypatch.setattr(translate, "translate_to_english", boom)
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     import store
-    stored = store.all_records(store.init_db(db))[0]
+    stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
     assert stored["language"] == "eng"
     assert stored["translation_status"] == ""
 
@@ -189,10 +194,10 @@ def test_excluded_notice_is_never_translated(tmp_path, raw_ted_supply, monkeypat
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
 
     import store
-    stored = store.all_records(store.init_db(db))[0]
+    stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
     assert stored["exclude_reason"] == "rental"
     assert stored["translation_status"] == ""   # never attempted
 
@@ -207,11 +212,27 @@ def test_translation_failure_does_not_break_the_pipeline(tmp_path, raw_ted_suppl
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    health = run.run_pipeline([src], db, out, fx_rates=FX_RATES)   # must not raise
+    health = run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)   # must not raise
 
     assert "ok" in health["TED"]
     import store
-    stored = store.all_records(store.init_db(db))[0]
+    stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
     assert stored["translation_status"] == "unavailable"
     assert stored["exclude_reason"] == ""   # a translation outage never excludes a tender
     assert load_workbook(out)               # report still builds fine
+
+
+# ── Phase 2/3 step 3: tenant isolation through the full pipeline ────────────
+
+def test_two_tenants_running_the_same_source_stay_isolated(tmp_path, raw_ted_supply):
+    import store, copy
+    raw = copy.deepcopy(raw_ted_supply)
+    db = str(tmp_path/"t.db"); out1 = str(tmp_path/"r1.xlsx"); out2 = str(tmp_path/"r2.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+
+    run.run_pipeline([src], db, out1, tenant_id=1, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out2, tenant_id=2, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    assert len(store.all_records(conn, 1)) == 1
+    assert len(store.all_records(conn, 2)) == 1

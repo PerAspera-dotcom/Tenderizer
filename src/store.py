@@ -1,12 +1,13 @@
-"""SQLAlchemy-backed storage with hash-based dedup.
+"""SQLAlchemy-backed storage with hash-based dedup — tenant-scoped.
 
-Step 2 of the Postgres/multi-tenancy migration: ported from raw sqlite3 to
-SQLAlchemy Core (see schema.py for the table definitions), but every function
-signature and behavior is unchanged — `conn` is now a SQLAlchemy Engine
-instead of a sqlite3.Connection, but callers never touch it directly, they
-only ever pass it back into store.*() functions, so this swap is invisible
-to them. Still SQLite-only at this step; tenant_id and the Postgres cutover
-are steps 3-4.
+Step 3 of the Postgres/multi-tenancy migration: every function below now
+takes a `tenant_id`, and reads/writes are scoped to it (see schema.py for
+why the primary keys became composite (tenant_id, hash) /
+(tenant_id, pub_number) rather than just adding a column). `conn` is still
+a SQLAlchemy Engine — still SQLite at this step, Postgres cutover is step 4.
+
+get_cached_translation/cache_translation are the one exception: the
+translation cache is deliberately NOT tenant-scoped (see schema.py).
 """
 import json
 from datetime import date
@@ -16,8 +17,8 @@ from sqlalchemy.exc import OperationalError
 
 import db
 from normalize import record_hash
-from schema import TENDERS_COLUMNS as COLUMNS
-from schema import metadata, pipeline, tenders, translations
+from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
+from schema import metadata, pipeline, tenants, tenders, translations
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -54,18 +55,34 @@ def init_db(path):
                 conn.execute(text(stmt))
         except OperationalError:
             pass
+    ensure_tenant(engine, DEFAULT_TENANT_ID)
     return engine
 
 
-def upsert(conn, record):
+def ensure_tenant(conn, tenant_id, clerk_user_id=None, email=None):
+    """Create a `tenants` row if `tenant_id` doesn't exist yet. Used both for
+    the migrated single-tenant default (init_db, unconditionally) and for
+    auto-provisioning a new tenant on a Clerk user's first login (step 6).
+    """
+    with conn.begin() as c:
+        exists = c.execute(select(tenants.c.id).where(tenants.c.id == tenant_id)).fetchone()
+        if not exists:
+            c.execute(insert(tenants).values(
+                id=tenant_id, clerk_user_id=clerk_user_id, email=email,
+                created_at=date.today().isoformat()))
+
+
+def upsert(conn, tenant_id, record):
     h = record_hash(record)
     with conn.begin() as c:
-        if c.execute(select(tenders.c.hash).where(tenders.c.hash == h)).fetchone():
+        exists = c.execute(select(tenders.c.hash).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.hash == h))).fetchone()
+        if exists:
             return False
         fs = record.get("first_seen") or date.today().isoformat()
-        values = {"hash": h, "first_seen": fs}
+        values = {"tenant_id": tenant_id, "hash": h, "first_seen": fs}
         for col in COLUMNS:
-            if col in ("hash", "first_seen"):
+            if col in ("tenant_id", "hash", "first_seen"):
                 continue
             elif col == "status":
                 values[col] = record.get("status", "new")
@@ -79,9 +96,10 @@ def upsert(conn, record):
     return True
 
 
-def all_records(conn):
+def all_records(conn, tenant_id):
     with conn.connect() as c:
-        rows = c.execute(select(*[tenders.c[col] for col in COLUMNS])).fetchall()
+        rows = c.execute(select(*[tenders.c[col] for col in COLUMNS])
+                          .where(tenders.c.tenant_id == tenant_id)).fetchall()
     out = []
     for r in rows:
         rec = dict(zip(COLUMNS, r))
@@ -91,18 +109,21 @@ def all_records(conn):
     return out
 
 
-def set_status(conn, pub_number, status):
+def set_status(conn, tenant_id, pub_number, status):
     with conn.begin() as c:
-        c.execute(update(tenders).where(tenders.c.pub_number == pub_number).values(status=status))
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        ).values(status=status))
 
 
-def set_translation(conn, pub_number, tag_line_en, description_en, status):
+def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, status):
     with conn.begin() as c:
-        c.execute(update(tenders).where(tenders.c.pub_number == pub_number).values(
-            tag_line_en=tag_line_en, description_en=description_en, translation_status=status))
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        ).values(tag_line_en=tag_line_en, description_en=description_en, translation_status=status))
 
 
-def mark_superseded(conn, kept_pub_number, superseded_records):
+def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
     """CR-001 D-DUP: collapse republished duplicates into `kept_pub_number`.
 
     Each record in `superseded_records` (full record dicts, so their own prior
@@ -116,17 +137,20 @@ def mark_superseded(conn, kept_pub_number, superseded_records):
         for r in superseded_records:
             all_superseded.append(r["pub_number"])
             all_superseded.extend(r.get("supersedes") or [])
-            c.execute(update(tenders).where(tenders.c.pub_number == r["pub_number"])
-                      .values(exclude_reason="superseded"))
-        row = c.execute(select(tenders.c.supersedes)
-                         .where(tenders.c.pub_number == kept_pub_number)).fetchone()
+            c.execute(update(tenders).where(
+                (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == r["pub_number"])
+            ).values(exclude_reason="superseded"))
+        row = c.execute(select(tenders.c.supersedes).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == kept_pub_number)
+        )).fetchone()
         existing = json.loads(row[0]) if row and row[0] else []
         merged = sorted(set(existing) | set(all_superseded))
-        c.execute(update(tenders).where(tenders.c.pub_number == kept_pub_number)
-                  .values(supersedes=json.dumps(merged)))
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == kept_pub_number)
+        ).values(supersedes=json.dumps(merged)))
 
 
-# ── Translation cache (CR-001 R3/C1) ─────────────────────────────────────────
+# ── Translation cache (CR-001 R3/C1) — global, NOT tenant-scoped ────────────
 
 def get_cached_translation(conn, content_hash):
     with conn.connect() as c:
@@ -149,32 +173,37 @@ def cache_translation(conn, content_hash, translated_text):
 
 # ── Portal workflow store (§5.4) ─────────────────────────────────────────────
 
-def ensure_pipeline_entry(conn, pub_number):
+def ensure_pipeline_entry(conn, tenant_id, pub_number):
     with conn.begin() as c:
-        exists = c.execute(select(pipeline.c.pub_number)
-                            .where(pipeline.c.pub_number == pub_number)).fetchone()
+        exists = c.execute(select(pipeline.c.pub_number).where(
+            (pipeline.c.tenant_id == tenant_id) & (pipeline.c.pub_number == pub_number)
+        )).fetchone()
         if not exists:
-            c.execute(insert(pipeline).values(pub_number=pub_number))
+            c.execute(insert(pipeline).values(tenant_id=tenant_id, pub_number=pub_number))
 
 
-def set_pipeline_entry(conn, pub_number, fields):
+def set_pipeline_entry(conn, tenant_id, pub_number, fields):
     valid = {k: v for k, v in fields.items() if k in PIPELINE_FIELDS}
     if not valid:
         return
     with conn.begin() as c:
-        c.execute(update(pipeline).where(pipeline.c.pub_number == pub_number).values(**valid))
+        c.execute(update(pipeline).where(
+            (pipeline.c.tenant_id == tenant_id) & (pipeline.c.pub_number == pub_number)
+        ).values(**valid))
 
 
-def get_pipeline_entries(conn):
-    """Shortlisted tenders joined with their pipeline state."""
+def get_pipeline_entries(conn, tenant_id):
+    """Shortlisted tenders joined with their pipeline state (this tenant only)."""
     p_cols = ["submission_status", "deadline_override", "owner", "notes"]
     cols = [tenders.c[col] for col in COLUMNS] + [
         func.coalesce(pipeline.c.submission_status, "not_started").label("submission_status"),
         pipeline.c.deadline_override, pipeline.c.owner, pipeline.c.notes,
     ]
+    join_cond = ((tenders.c.pub_number == pipeline.c.pub_number)
+                 & (tenders.c.tenant_id == pipeline.c.tenant_id))
     stmt = (select(*cols)
-            .select_from(tenders.outerjoin(pipeline, tenders.c.pub_number == pipeline.c.pub_number))
-            .where(tenders.c.status == "shortlisted"))
+            .select_from(tenders.outerjoin(pipeline, join_cond))
+            .where((tenders.c.tenant_id == tenant_id) & (tenders.c.status == "shortlisted")))
     with conn.connect() as c:
         rows = c.execute(stmt).fetchall()
     out = []
@@ -186,14 +215,16 @@ def get_pipeline_entries(conn):
     return out
 
 
-def get_followup_entries(conn):
-    """Pipeline entries with submission_status='submitted' joined with tender data."""
+def get_followup_entries(conn, tenant_id):
+    """Pipeline entries with submission_status='submitted' (this tenant only)."""
     p_cols = ["submission_status", "deadline_override", "owner", "notes",
               "submitted_date", "result_due", "outcome"]
     cols = [tenders.c[col] for col in COLUMNS] + [pipeline.c[pc] for pc in p_cols]
+    join_cond = ((tenders.c.pub_number == pipeline.c.pub_number)
+                 & (tenders.c.tenant_id == pipeline.c.tenant_id))
     stmt = (select(*cols)
-            .select_from(tenders.join(pipeline, tenders.c.pub_number == pipeline.c.pub_number))
-            .where(pipeline.c.submission_status == "submitted"))
+            .select_from(tenders.join(pipeline, join_cond))
+            .where((tenders.c.tenant_id == tenant_id) & (pipeline.c.submission_status == "submitted")))
     with conn.connect() as c:
         rows = c.execute(stmt).fetchall()
     out = []

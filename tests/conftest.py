@@ -1,5 +1,9 @@
 import pytest
 
+# Phase 2/3 multi-tenancy: any tenant_id works for tests since it's just a
+# scoping key, but tests share this one constant for consistency/readability.
+TEST_TENANT_ID = 1
+
 @pytest.fixture
 def raw_ted_supply():
     # real TED shape: multilingual dicts, list-valued fields

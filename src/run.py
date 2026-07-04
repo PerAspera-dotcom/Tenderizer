@@ -18,6 +18,7 @@ import filters
 import currency
 import dedup
 import translate
+from schema import DEFAULT_TENANT_ID
 from report import build_report
 import json, os
 from datetime import datetime, date, timezone
@@ -33,7 +34,7 @@ def _tag(rec, full_keywords, cpv_set):
     return rec
 
 
-def run_pipeline(sources, db_path, out_path, now=None, fx_rates=None):
+def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=None, fx_rates=None):
     conn = store.init_db(db_path)
     full_keywords = config.keywords()
     cpv_set = set(config.cpv_codes())
@@ -57,23 +58,24 @@ def run_pipeline(sources, db_path, out_path, now=None, fx_rates=None):
                 rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
                     rec.get("value"), rec.get("value_currency"), fx_rates)
                 rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
-                store.upsert(conn, rec)
+                store.upsert(conn, tenant_id, rec)
             health[name] = f"ok ({len(raws)})"
         except Exception as e:                       # one source failing must not abort the run
             health[name] = f"error: {e}"
 
     # CR-001 D-DUP: cross-record pass, so it runs once here over everything
     # ingested so far — not per-record like the filters above.
-    for group in dedup.find_duplicate_groups(store.all_records(conn)):
+    for group in dedup.find_duplicate_groups(store.all_records(conn, tenant_id)):
         kept, *superseded = group
-        store.mark_superseded(conn, kept["pub_number"], superseded)
+        store.mark_superseded(conn, tenant_id, kept["pub_number"], superseded)
 
     # CR-001 R3 (D1 — DeepL, Free tier): translate non-English SURFACED tenders
     # only — after dedup, so a just-superseded record never spends DeepL quota.
     # 'ok' records are skipped (already done); 'unavailable' ones are retried
     # in case DeepL is back up. translate_cached() itself dedupes by content
-    # hash, so identical text across notices is never sent twice either.
-    for r in store.all_records(conn):
+    # hash (and is deliberately NOT tenant-scoped — see schema.py), so identical
+    # text across notices, or across tenants, is never sent twice either.
+    for r in store.all_records(conn, tenant_id):
         if r.get("exclude_reason") or not r.get("language") or r["language"] == "eng":
             continue
         if r.get("translation_status") == "ok":
@@ -81,9 +83,9 @@ def run_pipeline(sources, db_path, out_path, now=None, fx_rates=None):
         tag_en, tag_status = translate.translate_cached(conn, r.get("tag_line"))
         desc_en, desc_status = translate.translate_cached(conn, r.get("description"))
         status = "ok" if tag_status == "ok" and desc_status == "ok" else "unavailable"
-        store.set_translation(conn, r["pub_number"], tag_en or "", desc_en or "", status)
+        store.set_translation(conn, tenant_id, r["pub_number"], tag_en or "", desc_en or "", status)
 
-    records = store.all_records(conn)
+    records = store.all_records(conn, tenant_id)
     surfaced = [r for r in records if not r.get("exclude_reason")]
     build_report(surfaced, health, out_path)
     _write_last_run(db_path, health, records)

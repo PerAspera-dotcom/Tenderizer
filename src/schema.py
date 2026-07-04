@@ -1,19 +1,40 @@
 """SQLAlchemy Core table definitions — single source of truth for the schema,
 shared by store.py (application reads/writes) and Alembic (migrations).
 
-Step 2 of the Postgres/multi-tenancy migration: mirrors the exact current
-SQLite schema (same columns, all TEXT-typed, same defaults) — no tenant_id
-yet (that's step 3), no JSONB (cpv_codes/matched_terms/supersedes stay
-TEXT-encoded JSON, matching current store.py behavior; migrating those to a
-native JSON type is a separate, later improvement).
+Step 3 of the Postgres/multi-tenancy migration: adds `tenants` and a
+`tenant_id` column on `tenders`/`pipeline`. Composite primary keys, not just
+an added column — two different tenants can legitimately track the same
+public TED/BOAMP notice (same source|pub_number, same `hash`), so `hash`
+alone can no longer be unique on its own; the PK becomes (tenant_id, hash).
+Same reasoning for pipeline's (tenant_id, pub_number).
+
+`translations` (the DeepL cache) deliberately has NO tenant_id — see the
+phase2/3 plan: it's a pure content-hash cache of arbitrary text, and two
+tenants translating the same French phrase should share one cached result
+rather than each spending their own DeepL quota on it.
 """
-from sqlalchemy import Column, MetaData, String, Table, Text
+from sqlalchemy import (Column, ForeignKey, Integer, MetaData,
+                         PrimaryKeyConstraint, String, Table, Text)
 
 metadata = MetaData()
 
+# 1 Clerk user = 1 tenant (confirmed choice — no Organization concept). Column
+# is named tenant_id everywhere rather than clerk_user_id so a future move to
+# shared/org-based tenants is a smaller migration if ever needed.
+DEFAULT_TENANT_ID = 1
+
+tenants = Table(
+    "tenants", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("clerk_user_id", String, nullable=True, unique=True),
+    Column("email", Text, nullable=True),
+    Column("created_at", Text, nullable=False, server_default=""),
+)
+
 tenders = Table(
     "tenders", metadata,
-    Column("hash", String, primary_key=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("hash", String, nullable=False),
     Column("source", Text, nullable=False, server_default=""),
     Column("pub_number", Text, nullable=False, server_default=""),
     Column("tag_line", Text, nullable=False, server_default=""),
@@ -41,6 +62,7 @@ tenders = Table(
     Column("tag_line_en", Text, nullable=False, server_default=""),
     Column("description_en", Text, nullable=False, server_default=""),
     Column("translation_status", Text, nullable=False, server_default=""),
+    PrimaryKeyConstraint("tenant_id", "hash"),
 )
 
 # Column order matters to callers that build dicts positionally — keep it
@@ -49,7 +71,8 @@ TENDERS_COLUMNS = [c.name for c in tenders.columns]
 
 pipeline = Table(
     "pipeline", metadata,
-    Column("pub_number", String, primary_key=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", String, nullable=False),
     Column("submission_status", Text, nullable=False, server_default="not_started"),
     Column("deadline_override", Text, nullable=True),
     Column("owner", Text, nullable=True),
@@ -57,6 +80,7 @@ pipeline = Table(
     Column("submitted_date", Text, nullable=True),
     Column("result_due", Text, nullable=True),
     Column("outcome", Text, nullable=False, server_default="pending"),
+    PrimaryKeyConstraint("tenant_id", "pub_number"),
 )
 
 PIPELINE_COLUMNS = [c.name for c in pipeline.columns]
