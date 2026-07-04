@@ -99,3 +99,17 @@ def test_boamp_value_always_absent(raw_boamp_supply):
     # BOAMP's live schema has no value/amount field at all (verified live)
     r = normalize.normalize_boamp(raw_boamp_supply)
     assert r["value"] == "" and r["value_currency"] == ""
+
+def test_language_is_eng_when_ted_provides_english(raw_ted_supply):
+    # CR-001 R3: 'eng' present in notice-title -> no translation needed
+    assert normalize.normalize_ted(raw_ted_supply)["language"] == "eng"
+
+def test_language_falls_back_when_no_english_translation(raw_ted_supply):
+    # TED didn't provide an English title for this notice -> falls back to
+    # whatever LANG_PREF/first-available finds; here that's 'fra'
+    del raw_ted_supply["notice-title"]["eng"]
+    assert normalize.normalize_ted(raw_ted_supply)["language"] == "fra"
+
+def test_boamp_language_always_fra(raw_boamp_supply):
+    # BOAMP is French-only, single-language (per the connector's own docs)
+    assert normalize.normalize_boamp(raw_boamp_supply)["language"] == "fra"

@@ -6,7 +6,8 @@ from normalize import record_hash
 COLUMNS = ["hash", "source", "pub_number", "tag_line", "description", "buyer", "country",
            "place", "category", "procedure", "pub_date", "deadline", "cpv_codes",
            "matched_terms", "match_source", "url", "first_seen", "status", "exclude_reason",
-           "value", "value_currency", "value_eur", "fx_rate_date", "supersedes"]
+           "value", "value_currency", "value_eur", "fx_rate_date", "supersedes",
+           "language", "tag_line_en", "description_en", "translation_status"]
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
@@ -23,14 +24,43 @@ def init_db(path):
                  "ALTER TABLE tenders ADD COLUMN value_currency TEXT DEFAULT ''",
                  "ALTER TABLE tenders ADD COLUMN value_eur TEXT DEFAULT ''",
                  "ALTER TABLE tenders ADD COLUMN fx_rate_date TEXT DEFAULT ''",
-                 "ALTER TABLE tenders ADD COLUMN supersedes TEXT DEFAULT '[]'"):
+                 "ALTER TABLE tenders ADD COLUMN supersedes TEXT DEFAULT '[]'",
+                 "ALTER TABLE tenders ADD COLUMN language TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN tag_line_en TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN description_en TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN translation_status TEXT DEFAULT ''"):
         try:
             conn.execute(stmt)
         except sqlite3.OperationalError:
             pass
     conn.commit()
     init_pipeline(conn)
+    init_translations(conn)
     return conn
+
+def init_translations(conn):
+    """CR-001 R3/C1: translation cache, keyed by content hash (sha256 of the
+    source text) — so the same notice/document text is never sent to DeepL
+    twice, across runs. Generic (not tied to `tenders`): also usable by
+    Composer's document-ingest translation once that pipeline exists.
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS translations(
+        content_hash TEXT PRIMARY KEY,
+        translated_text TEXT,
+        cached_at TEXT
+    )""")
+    conn.commit()
+
+def get_cached_translation(conn, content_hash):
+    row = conn.execute("SELECT translated_text FROM translations WHERE content_hash=?",
+                        (content_hash,)).fetchone()
+    return row[0] if row else None
+
+def cache_translation(conn, content_hash, translated_text):
+    conn.execute(
+        "INSERT OR REPLACE INTO translations(content_hash, translated_text, cached_at) VALUES (?,?,?)",
+        (content_hash, translated_text, date.today().isoformat()))
+    conn.commit()
 
 def init_pipeline(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS pipeline(
@@ -60,8 +90,9 @@ def upsert(conn, record):
             values.append(record.get("status", "new"))
         elif c in _JSON:
             values.append(json.dumps(record.get(c, [])))
-        elif c in ("value", "value_currency", "value_eur", "fx_rate_date"):
-            values.append(record.get(c) or "")  # None (no value/no conversion) -> ''
+        elif c in ("value", "value_currency", "value_eur", "fx_rate_date",
+                   "language", "tag_line_en", "description_en", "translation_status"):
+            values.append(record.get(c) or "")  # None (no value/not translated) -> ''
         else:
             values.append(record.get(c, ""))
     cols_str = ", ".join(COLUMNS)
@@ -81,6 +112,16 @@ def all_records(conn):
 
 def set_status(conn, pub_number, status):
     conn.execute("UPDATE tenders SET status=? WHERE pub_number=?", (status, pub_number))
+    conn.commit()
+
+def set_translation(conn, pub_number, tag_line_en, description_en, status):
+    """CR-001 R3: record a translation attempt's outcome. status is 'ok' or
+    'unavailable' — the fields are stored either way so a partially-successful
+    attempt (e.g. title translated, description call failed) isn't discarded.
+    """
+    conn.execute(
+        "UPDATE tenders SET tag_line_en=?, description_en=?, translation_status=? WHERE pub_number=?",
+        (tag_line_en, description_en, status, pub_number))
     conn.commit()
 
 def mark_superseded(conn, kept_pub_number, superseded_records):

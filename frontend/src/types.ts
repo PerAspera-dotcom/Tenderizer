@@ -17,6 +17,10 @@ export interface Tender {
   url: string;
   first_seen: string;
   status: string;
+  language: string;
+  tag_line_en: string;
+  description_en: string;
+  translation_status: string;
 }
 
 export interface TenderListResponse {

@@ -33,15 +33,21 @@ def _first(v):
     return v if v is not None else ""
 
 def _pick_lang(field):
-    """Pick a language from a multilingual dict; value may be str or [str]."""
+    """Pick a language from a multilingual dict; value may be str or [str].
+
+    Returns (text, lang_code). lang_code is '' when the source has no language
+    metadata (a plain string field) — CR-001 R3 uses this to decide whether a
+    notice needs translation (tag_line's lang_code != 'eng').
+    """
     if isinstance(field, str):
-        return field
+        return field, ""
     if not isinstance(field, dict) or not field:
-        return ""
+        return "", ""
     for lg in LANG_PREF:
         if lg in field:
-            return _first(field[lg])
-    return _first(next(iter(field.values())))
+            return _first(field[lg]), lg
+    lang, value = next(iter(field.items()))
+    return _first(value), lang
 
 def _is_country_code(code):
     return isinstance(code, str) and len(code) == 3 and code.isalpha()
@@ -78,12 +84,15 @@ def _dedupe(codes):
 
 
 def normalize_ted(raw):
+    tag_line, tag_lang = _pick_lang(raw.get("notice-title", {}))
+    description, _desc_lang = _pick_lang(raw.get("description-proc", {}))
+    buyer, _buyer_lang = _pick_lang(raw.get("buyer-name", {}))
     return {
         "source": "TED",
         "pub_number": raw.get("publication-number", ""),
-        "tag_line": _pick_lang(raw.get("notice-title", {})),
-        "description": _pick_lang(raw.get("description-proc", {})),
-        "buyer": _pick_lang(raw.get("buyer-name", {})),
+        "tag_line": tag_line,
+        "description": description,
+        "buyer": buyer,
         "country": _country(raw),
         "place": _place(raw),
         "category": map_category(_first(raw.get("contract-nature"))),
@@ -99,6 +108,11 @@ def normalize_ted(raw):
         # most notices — value disclosure is optional under EU procurement rules.
         "value": raw.get("estimated-value-proc") or "",
         "value_currency": raw.get("estimated-value-cur-proc") or "",
+        # CR-001 R3: language tag_line/description were picked in (assumes both
+        # fields share a language, true for TED's parallel per-language dicts).
+        # 'eng' when TED provided an English translation, else whatever
+        # LANG_PREF/fallback found — anything != 'eng' needs translation.
+        "language": tag_lang,
     }
 
 def record_hash(record):
@@ -139,4 +153,7 @@ def normalize_boamp(raw):
         # OpenDataSoft schema) — always absent, so F6 never excludes on BOAMP alone.
         "value": "",
         "value_currency": "",
+        # BOAMP is French-only, single-language (per the connector's own docs) —
+        # no per-notice detection needed, always translate (CR-001 R3).
+        "language": "fra",
     }

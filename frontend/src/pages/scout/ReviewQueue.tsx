@@ -35,12 +35,28 @@ function confidenceLabel(ms: string | null | undefined): string {
   return ms;
 }
 
+// CR-001 R3: a tender needs translation when its source language isn't English.
+function needsTranslation(t: Tender): boolean {
+  return !!t.language && t.language !== 'eng' && t.language !== 'en';
+}
+
+function displayTagLine(t: Tender, showOriginal: boolean): string {
+  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.tag_line;
+  return t.tag_line_en || t.tag_line;
+}
+
+function displayDescription(t: Tender, showOriginal: boolean): string {
+  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.description;
+  return t.description_en || t.description;
+}
+
 export default function ReviewQueue() {
   const [tenders, setTenders] = useState<Tender[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Tender | null>(null);
   const [patching, setPatching] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
 
   function load() {
     listTenders({ limit: 500, sort: 'deadline' }).then(r => {
@@ -60,6 +76,11 @@ export default function ReviewQueue() {
       });
     }).catch(() => setError('Failed to load tenders'))
       .finally(() => setLoading(false));
+  }
+
+  function selectTender(t: Tender) {
+    setSelected(t);
+    setShowOriginal(false);   // CR-001 R3: default to the translation on a new selection
   }
 
   useEffect(() => { load(); }, []);
@@ -107,10 +128,11 @@ export default function ReviewQueue() {
               const isActive = selected?.pub_number === t.pub_number;
               const dotColor = statusDotColor(t.status);
               const barColor = conf >= 80 ? '#2EE6D4' : '#e3b341';
+              const translated = needsTranslation(t) && t.translation_status === 'ok';
               return (
                 <div
                   key={t.pub_number}
-                  onClick={() => setSelected(t)}
+                  onClick={() => selectTender(t)}
                   style={{
                     padding: '12px 14px', cursor: 'pointer', borderBottom: '1px solid #1a2334',
                     background: isActive ? 'rgba(46,230,212,0.05)' : 'transparent',
@@ -120,8 +142,12 @@ export default function ReviewQueue() {
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                     <div style={{ width: 10, height: 10, borderRadius: '50%', border: `2px solid ${dotColor}`, background: t.status !== 'new' ? dotColor : 'transparent', marginTop: 3, flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isActive ? '#e2e8f0' : '#c8d0de' }}>
-                        {t.tag_line}
+                      <div
+                        title={translated ? `Original: ${t.tag_line}` : undefined}
+                        style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isActive ? '#e2e8f0' : '#c8d0de' }}
+                      >
+                        {translated && <span title="Translated from source language" style={{ marginRight: 4 }}>🌐</span>}
+                        {displayTagLine(t, false)}
                       </div>
                       <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2 }}>
                         {t.source} · {t.country}
@@ -158,7 +184,35 @@ export default function ReviewQueue() {
                     <StatusBadge status={selected.status} />
                   </div>
                 </div>
-                <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 20, lineHeight: 1.3 }}>{selected.tag_line}</h2>
+                <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: needsTranslation(selected) ? 6 : 20, lineHeight: 1.3 }}>
+                  {displayTagLine(selected, showOriginal)}
+                </h2>
+
+                {needsTranslation(selected) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+                    {selected.translation_status === 'ok' ? (
+                      <>
+                        <span style={{ color: '#8892a4', fontSize: 12 }}>
+                          🌐 {showOriginal ? `Original (${selected.language})` : 'Translated to English'}
+                        </span>
+                        <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }}
+                                onClick={() => setShowOriginal(o => !o)}>
+                          {showOriginal ? 'Show translation' : 'Show original'}
+                        </button>
+                      </>
+                    ) : (
+                      <span style={{ color: '#e3b341', fontSize: 12, background: 'rgba(227,179,65,0.1)', border: '1px solid rgba(227,179,65,0.3)', borderRadius: 4, padding: '2px 8px' }}>
+                        ⚠ Translation unavailable — showing original ({selected.language})
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {selected.description && (
+                  <p style={{ color: '#c8d0de', fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>
+                    {displayDescription(selected, showOriginal)}
+                  </p>
+                )}
 
                 {/* Core elements */}
                 <div style={{ marginBottom: 20 }}>

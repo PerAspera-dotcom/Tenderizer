@@ -137,3 +137,81 @@ def test_genuinely_different_tenders_same_buyer_are_not_merged(tmp_path, raw_ted
     records = {r["pub_number"]: r for r in store.all_records(conn)}
     assert records["333333-2026"]["exclude_reason"] == ""
     assert records["444444-2026"]["exclude_reason"] == ""
+
+
+# ── CR-001 R3: translation (DeepL mocked — no real network call) ────────────
+
+def test_non_english_notice_is_translated(tmp_path, raw_ted_supply, monkeypatch):
+    import translate, copy
+    monkeypatch.setattr(translate, "translate_to_english",
+                         lambda text, api_key=None, timeout=15: (f"[EN] {text}", "ok"))
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "555555-2026"
+    del raw["notice-title"]["eng"]   # no English title -> normalize picks 'fra'
+    raw["notice-title"]["fra"] = "Suède - Fourniture de tentes militaires"
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+
+    import store
+    stored = store.all_records(store.init_db(db))[0]
+    assert stored["language"] == "fra"
+    assert stored["translation_status"] == "ok"
+    assert stored["tag_line_en"] == "[EN] Suède - Fourniture de tentes militaires"
+
+def test_english_notice_is_never_sent_to_translate(tmp_path, raw_ted_supply, monkeypatch):
+    import translate
+    def boom(*a, **k):
+        raise AssertionError("should not translate an already-English notice")
+    monkeypatch.setattr(translate, "translate_to_english", boom)
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, fx_rates=FX_RATES)
+
+    import store
+    stored = store.all_records(store.init_db(db))[0]
+    assert stored["language"] == "eng"
+    assert stored["translation_status"] == ""
+
+def test_excluded_notice_is_never_translated(tmp_path, raw_ted_supply, monkeypatch):
+    # CR-001: translation runs after filters/dedup — don't spend DeepL quota
+    # on a notice that won't surface anyway.
+    import translate, copy
+    def boom(*a, **k):
+        raise AssertionError("should not translate an excluded notice")
+    monkeypatch.setattr(translate, "translate_to_english", boom)
+
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "666666-2026"
+    del raw["notice-title"]["eng"]
+    raw["notice-title"]["fra"] = "Location de tentes"   # F2 rental exclude
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+
+    import store
+    stored = store.all_records(store.init_db(db))[0]
+    assert stored["exclude_reason"] == "rental"
+    assert stored["translation_status"] == ""   # never attempted
+
+def test_translation_failure_does_not_break_the_pipeline(tmp_path, raw_ted_supply, monkeypatch):
+    import translate, copy
+    monkeypatch.setattr(translate, "translate_to_english",
+                         lambda text, api_key=None, timeout=15: (None, "unavailable"))
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "999000-2026"
+    del raw["notice-title"]["eng"]
+    raw["notice-title"]["fra"] = "Suède - Fourniture de tentes militaires"
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    health = run.run_pipeline([src], db, out, fx_rates=FX_RATES)   # must not raise
+
+    assert "ok" in health["TED"]
+    import store
+    stored = store.all_records(store.init_db(db))[0]
+    assert stored["translation_status"] == "unavailable"
+    assert stored["exclude_reason"] == ""   # a translation outage never excludes a tender
+    assert load_workbook(out)               # report still builds fine

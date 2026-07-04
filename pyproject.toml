@@ -6,6 +6,7 @@ dependencies = [
     "requests",
     "pyyaml",
     "openpyxl",
+    "python-dotenv",
 ]
 
 [tool.setuptools.packages.find]

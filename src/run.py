@@ -17,6 +17,7 @@ import normalize
 import filters
 import currency
 import dedup
+import translate
 from report import build_report
 import json, os
 from datetime import datetime, date, timezone
@@ -66,6 +67,21 @@ def run_pipeline(sources, db_path, out_path, now=None, fx_rates=None):
     for group in dedup.find_duplicate_groups(store.all_records(conn)):
         kept, *superseded = group
         store.mark_superseded(conn, kept["pub_number"], superseded)
+
+    # CR-001 R3 (D1 — DeepL, Free tier): translate non-English SURFACED tenders
+    # only — after dedup, so a just-superseded record never spends DeepL quota.
+    # 'ok' records are skipped (already done); 'unavailable' ones are retried
+    # in case DeepL is back up. translate_cached() itself dedupes by content
+    # hash, so identical text across notices is never sent twice either.
+    for r in store.all_records(conn):
+        if r.get("exclude_reason") or not r.get("language") or r["language"] == "eng":
+            continue
+        if r.get("translation_status") == "ok":
+            continue
+        tag_en, tag_status = translate.translate_cached(conn, r.get("tag_line"))
+        desc_en, desc_status = translate.translate_cached(conn, r.get("description"))
+        status = "ok" if tag_status == "ok" and desc_status == "ok" else "unavailable"
+        store.set_translation(conn, r["pub_number"], tag_en or "", desc_en or "", status)
 
     records = store.all_records(conn)
     surfaced = [r for r in records if not r.get("exclude_reason")]
