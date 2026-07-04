@@ -47,14 +47,26 @@ _TENDERS_MIGRATIONS = [
 
 
 def init_db(path):
-    engine = db.get_engine(f"sqlite:///{path}")
+    """`path` is a SQLite file path, used unless DATABASE_URL is explicitly
+    configured (step 4: Postgres cutover) — in which case that takes over and
+    `path` is ignored for connection purposes (callers still use it to derive
+    e.g. last_run.json's directory). Tests never set DATABASE_URL (see
+    conftest.py), so they keep getting isolated per-test SQLite files.
+    """
+    engine = db.get_engine(db.configured_url() or f"sqlite:///{path}")
     metadata.create_all(engine, checkfirst=True)
-    for stmt in _TENDERS_MIGRATIONS:
-        try:
-            with engine.begin() as conn:
-                conn.execute(text(stmt))
-        except OperationalError:
-            pass
+    if engine.dialect.name == "sqlite":
+        # Additive fixups for existing on-disk SQLite files that predate later
+        # columns. Not needed on Postgres: a fresh DB already has every column
+        # via metadata.create_all() above, and re-running these against
+        # Postgres would raise (it doesn't consider "column exists" an
+        # OperationalError like SQLite does).
+        for stmt in _TENDERS_MIGRATIONS:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(stmt))
+            except OperationalError:
+                pass
     ensure_tenant(engine, DEFAULT_TENANT_ID)
     return engine
 

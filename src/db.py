@@ -1,10 +1,8 @@
-"""SQLAlchemy engine factory (Postgres/multi-tenancy migration, step 1).
+"""SQLAlchemy engine factory (Postgres/multi-tenancy migration).
 
 Single source of truth for how the app connects to its database. Defaults to
 a local SQLite file for backward compatibility / fast unit tests; production
 points DATABASE_URL at Postgres (see docker-compose.yml's `postgres` service).
-
-Scaffolding only at this step — nothing calls get_engine() yet.
 """
 import os
 from dotenv import load_dotenv
@@ -17,6 +15,18 @@ DEFAULT_SQLITE_URL = "sqlite:///data/tenders.db"
 
 def database_url():
     return os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
+
+
+def configured_url():
+    """The explicitly-configured DATABASE_URL, or None if unset.
+
+    Distinct from database_url(), which always returns a URL (falling back to
+    the SQLite default) — Alembic needs that. store.init_db() needs to tell
+    "no DATABASE_URL set" apart from "set to the SQLite default" so it can
+    keep using its caller-supplied per-run SQLite path (tests rely on this
+    for isolation) unless a real DATABASE_URL is configured.
+    """
+    return os.getenv("DATABASE_URL")
 
 
 def get_engine(url=None):

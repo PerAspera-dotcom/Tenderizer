@@ -4,6 +4,17 @@ import pytest
 # scoping key, but tests share this one constant for consistency/readability.
 TEST_TENANT_ID = 1
 
+
+@pytest.fixture(autouse=True)
+def _no_database_url_env(monkeypatch):
+    """Force every test onto its own isolated SQLite file regardless of what's
+    in the developer's environment/.env — store.init_db() switches to
+    DATABASE_URL when it's configured (step 4: Postgres cutover), and tests
+    must never share a real database or lose per-test isolation because a
+    dev happens to have Postgres configured locally.
+    """
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
 @pytest.fixture
 def raw_ted_supply():
     # real TED shape: multilingual dicts, list-valued fields
