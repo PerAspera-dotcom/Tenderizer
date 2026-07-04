@@ -17,9 +17,11 @@ D5_CODES = {"44211000", "44211100", "44211110", "44211200",
             "45223800", "45223810", "34221000"}
 
 
-def _rec(tag_line="", description="", cpv_codes=None, deadline="", value_eur=None):
+def _rec(tag_line="", description="", cpv_codes=None, deadline="", value_eur=None,
+         match_source=None, matched_terms=None):
     return {"tag_line": tag_line, "description": description,
-            "cpv_codes": cpv_codes or [], "deadline": deadline, "value_eur": value_eur}
+            "cpv_codes": cpv_codes or [], "deadline": deadline, "value_eur": value_eur,
+            "match_source": match_source, "matched_terms": matched_terms or []}
 
 
 def test_prefab_cpv_code_is_excluded():
@@ -202,3 +204,43 @@ def test_f4_retired_codes_removed_from_active_cpv_set():
     # the active list (see cpv.yaml's F4 note) — no point matching on a dead code.
     retired = {"45216129", "45216230", "45421144"}
     assert retired.isdisjoint(set(config.cpv_codes()))
+
+
+# ── F5: core-signal narrowing (D4 core list confirmed) ───────────────────────
+
+def test_cpv_match_is_always_core_regardless_of_terms():
+    rec = _rec("Tent supply", cpv_codes=["39522530"], match_source="cpv", matched_terms=[])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_both_match_is_core():
+    rec = _rec("Tent supply", cpv_codes=["39522530"], match_source="both",
+                matched_terms=["tent"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_keyword_only_with_distinctive_term_is_kept():
+    # 'tent' is in the distinctive subset — a real core signal even without CPV.
+    rec = _rec("Tent supply", match_source="keyword", matched_terms=["tent"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_keyword_only_with_generic_term_is_demoted():
+    # 'bivouac' is in the broad terms library but NOT the distinctive subset —
+    # mechanical noise per the CR, not a real tent/shelter signal on its own.
+    rec = _rec("Bivouac equipment maintenance", match_source="keyword",
+                matched_terms=["bivouac"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "no_core_signal"
+
+
+def test_keyword_only_mixed_generic_and_distinctive_is_kept():
+    # as long as ONE matched term is distinctive, the record is core.
+    rec = _rec("Tent and canopy supply", match_source="keyword",
+                matched_terms=["canopy", "tent"])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_no_match_source_is_untouched_by_this_check():
+    # match_source=None means nothing matched at all — not F5's concern.
+    rec = _rec("Unrelated notice", match_source=None, matched_terms=[])
+    assert filters.apply_filters(rec, EXCLUSIONS) is None

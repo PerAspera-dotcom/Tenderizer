@@ -9,6 +9,7 @@ Every check shares the signature (rec, exclusions, now) so they can share one
 loop in apply_filters, even though most ignore `now` and F1 ignores `exclusions`.
 """
 from datetime import datetime, timedelta, timezone
+import config
 import match
 
 DEADLINE_FLOOR = timedelta(hours=72)
@@ -92,8 +93,27 @@ def check_construction_works(rec, exclusions, now=None):
     return None
 
 
+def check_no_core_signal(rec, exclusions, now=None):
+    """F5 (D4 core-list confirmed) — a notice must carry a real CPV signal or at
+    least one DISTINCTIVE keyword to surface. A record whose only hit is a
+    broad/adjacent safeguard term (canopy, gazebo, bivouac, camouflage, ...) from
+    the full keywords.yaml 'terms' library — but not the tight 'distinctive'
+    subset — is mechanical/noise, not a real tent-shelter signal, per the CR's
+    "core tent/shelter signal (CPV or distinctive keyword)" wording. CPV itself
+    is never further narrowed here — it's already the curated, customer-
+    confirmed active set (config.cpv_codes(), post F3/F4/F7).
+    """
+    if rec.get("match_source") in ("cpv", "both"):
+        return None
+    if rec.get("match_source") != "keyword":
+        return None  # no signal at all — not this check's concern
+    if set(rec.get("matched_terms") or []) & set(config.distinctive_keywords()):
+        return None
+    return "no_core_signal"
+
+
 CHECKS = [check_container_modular_prefab, check_rental, check_deadline_too_soon,
-          check_value_floor, check_construction_works]
+          check_value_floor, check_construction_works, check_no_core_signal]
 
 
 def apply_filters(rec, exclusions, now=None):
