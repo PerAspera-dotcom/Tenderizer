@@ -87,3 +87,53 @@ def test_above_value_floor_is_kept(tmp_path, raw_ted_supply):
 
     conn = store.init_db(db)
     assert store.all_records(conn)[0]["exclude_reason"] == ""
+
+def test_republished_notices_collapse_via_full_pipeline(tmp_path, raw_ted_supply):
+    # CR-001 D-DUP's own example: the same tender republished under a new
+    # pub_number should collapse to one surfaced record.
+    import store, copy
+    raw_a = copy.deepcopy(raw_ted_supply)
+    raw_a["publication-number"] = "111111-2026"
+    raw_a["notice-title"] = {"eng": "Romania - Tents - Corturi si Generatoare"}
+    raw_a["publication-date"] = "20260601"
+
+    raw_b = copy.deepcopy(raw_ted_supply)
+    raw_b["publication-number"] = "222222-2026"
+    raw_b["notice-title"] = {"eng": "Romania - Tents - Corturi si Generatoare"}
+    raw_b["publication-date"] = "20260615"   # republished two weeks later
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
+           "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    records = {r["pub_number"]: r for r in store.all_records(conn)}
+    assert records["111111-2026"]["exclude_reason"] == "superseded"
+    assert records["222222-2026"]["supersedes"] == ["111111-2026"]
+
+    wb = load_workbook(out)
+    pub_numbers = [c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row]
+    assert "111111-2026" not in pub_numbers      # collapsed, not shown twice
+    assert "222222-2026" in pub_numbers          # the kept (latest) version surfaces
+
+def test_genuinely_different_tenders_same_buyer_are_not_merged(tmp_path, raw_ted_supply):
+    import store, copy
+    raw_a = copy.deepcopy(raw_ted_supply)
+    raw_a["publication-number"] = "333333-2026"
+    raw_a["notice-title"] = {"eng": "Sweden - Supply of military tents"}
+
+    raw_b = copy.deepcopy(raw_ted_supply)
+    raw_b["publication-number"] = "444444-2026"
+    raw_b["notice-title"] = {"eng": "Sweden - Catering services for field camps"}
+    raw_b["classification-cpv"] = ["39522530", "55520000"]
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
+           "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    records = {r["pub_number"]: r for r in store.all_records(conn)}
+    assert records["333333-2026"]["exclude_reason"] == ""
+    assert records["444444-2026"]["exclude_reason"] == ""

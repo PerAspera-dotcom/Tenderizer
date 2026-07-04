@@ -6,8 +6,8 @@ from normalize import record_hash
 COLUMNS = ["hash", "source", "pub_number", "tag_line", "description", "buyer", "country",
            "place", "category", "procedure", "pub_date", "deadline", "cpv_codes",
            "matched_terms", "match_source", "url", "first_seen", "status", "exclude_reason",
-           "value", "value_currency", "value_eur", "fx_rate_date"]
-_JSON = {"cpv_codes", "matched_terms"}
+           "value", "value_currency", "value_eur", "fx_rate_date", "supersedes"]
+_JSON = {"cpv_codes", "matched_terms", "supersedes"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
                    "submitted_date", "result_due", "outcome"}
@@ -22,7 +22,8 @@ def init_db(path):
                  "ALTER TABLE tenders ADD COLUMN value TEXT DEFAULT ''",
                  "ALTER TABLE tenders ADD COLUMN value_currency TEXT DEFAULT ''",
                  "ALTER TABLE tenders ADD COLUMN value_eur TEXT DEFAULT ''",
-                 "ALTER TABLE tenders ADD COLUMN fx_rate_date TEXT DEFAULT ''"):
+                 "ALTER TABLE tenders ADD COLUMN fx_rate_date TEXT DEFAULT ''",
+                 "ALTER TABLE tenders ADD COLUMN supersedes TEXT DEFAULT '[]'"):
         try:
             conn.execute(stmt)
         except sqlite3.OperationalError:
@@ -80,6 +81,29 @@ def all_records(conn):
 
 def set_status(conn, pub_number, status):
     conn.execute("UPDATE tenders SET status=? WHERE pub_number=?", (status, pub_number))
+    conn.commit()
+
+def mark_superseded(conn, kept_pub_number, superseded_records):
+    """CR-001 D-DUP: collapse republished duplicates into `kept_pub_number`.
+
+    Each record in `superseded_records` (full record dicts, so their own prior
+    `supersedes` can be folded in — a multi-generation republish chain still
+    shows full version history on the latest kept record) gets
+    exclude_reason='superseded' (auditable, not deleted). The kept record's
+    `supersedes` accumulates their pub_numbers.
+    """
+    all_superseded = []
+    for r in superseded_records:
+        all_superseded.append(r["pub_number"])
+        all_superseded.extend(r.get("supersedes") or [])
+        conn.execute("UPDATE tenders SET exclude_reason=? WHERE pub_number=?",
+                     ("superseded", r["pub_number"]))
+    row = conn.execute("SELECT supersedes FROM tenders WHERE pub_number=?",
+                        (kept_pub_number,)).fetchone()
+    existing = json.loads(row[0]) if row and row[0] else []
+    merged = sorted(set(existing) | set(all_superseded))
+    conn.execute("UPDATE tenders SET supersedes=? WHERE pub_number=?",
+                 (json.dumps(merged), kept_pub_number))
     conn.commit()
 
 # ── Portal workflow store (§5.4) ─────────────────────────────────────────────

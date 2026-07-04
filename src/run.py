@@ -16,6 +16,7 @@ import match
 import normalize
 import filters
 import currency
+import dedup
 from report import build_report
 import json, os
 from datetime import datetime, date, timezone
@@ -59,6 +60,12 @@ def run_pipeline(sources, db_path, out_path, now=None, fx_rates=None):
             health[name] = f"ok ({len(raws)})"
         except Exception as e:                       # one source failing must not abort the run
             health[name] = f"error: {e}"
+
+    # CR-001 D-DUP: cross-record pass, so it runs once here over everything
+    # ingested so far — not per-record like the filters above.
+    for group in dedup.find_duplicate_groups(store.all_records(conn)):
+        kept, *superseded = group
+        store.mark_superseded(conn, kept["pub_number"], superseded)
 
     records = store.all_records(conn)
     surfaced = [r for r in records if not r.get("exclude_reason")]
