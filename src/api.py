@@ -13,13 +13,13 @@ if str(_HERE) not in sys.path:
 
 load_dotenv()
 
-import store, config
+import store, config, auth
 import run as engine
-from schema import DEFAULT_TENANT_ID
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from typing import Optional
 
@@ -54,14 +54,40 @@ def _db():
     return store.init_db(DB_PATH)
 
 
-def get_current_tenant_id() -> int:
-    """Placeholder tenant resolver (Phase 2/3 step 3) — always the single
-    default tenant. Step 6 replaces this function's body with real Clerk
-    session verification (401 on missing/invalid token); every route below
-    already depends on this function rather than a hardcoded value, so that
-    swap touches only this one place, not every route signature.
+# auto_error=False so a missing header reaches get_current_tenant_id() as
+# `None` rather than FastAPI's HTTPBearer raising its own 403 — we want 401
+# for every auth failure (missing, malformed, expired, or bad-signature
+# token), not a mix of 403/401 depending on which layer caught it.
+_bearer = HTTPBearer(auto_error=False)
+
+
+def get_current_tenant_id(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> int:
+    """Real Clerk session-token resolver (phase2/3 step 6) — every route
+    below depends on this function rather than a hardcoded value, so this is
+    the only place that changed when the step 3 stub became real auth.
+
+    401 on a missing or invalid/expired token. A Clerk user seen for the
+    first time is auto-provisioned a new tenant (1 Clerk user = 1 tenant,
+    confirmed choice — see schema.py) rather than rejected.
     """
-    return DEFAULT_TENANT_ID
+    if creds is None:
+        raise HTTPException(401, "Missing bearer token")
+    try:
+        claims = auth.verify_token(creds.credentials)
+    except auth.AuthError as e:
+        raise HTTPException(401, f"Invalid or expired token: {e}")
+    # auth.AuthNotConfigured (CLERK_JWKS_URL unset) deliberately propagates
+    # uncaught -> FastAPI's default 500 — that's a server misconfiguration,
+    # not a bad token, and every token would fail identically until fixed.
+
+    clerk_user_id = claims["sub"]
+    conn = _db()
+    tenant_id = store.get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
+    if tenant_id is None:
+        tenant_id = store.create_tenant_for_clerk_user(conn, clerk_user_id, claims.get("email"))
+    return tenant_id
 
 
 def _last_run() -> dict:
@@ -140,11 +166,16 @@ def list_tenders(
 @app.get("/api/tenders/{pub_number}")
 def get_tender(pub_number: str, include_excluded: bool = False,
                tenant_id: int = Depends(get_current_tenant_id)):
-    for r in store.all_records(_db(), tenant_id):
+    conn = _db()
+    for r in store.all_records(conn, tenant_id):
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
-                break
+                raise HTTPException(404, "Tender not found")
             return r
+    # Own tenant has no such record: 403 if it belongs to another tenant
+    # (exists, just not yours) vs 404 if it doesn't exist anywhere.
+    if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+        raise HTTPException(403, "Forbidden")
     raise HTTPException(404, "Tender not found")
 
 
@@ -160,6 +191,8 @@ def patch_tender(pub_number: str, body: StatusBody,
         raise HTTPException(422, f"status must be one of {_VALID_STATUSES}")
     conn = _db()
     if not any(r["pub_number"] == pub_number for r in store.all_records(conn, tenant_id)):
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
         raise HTTPException(404, "Tender not found")
     store.set_status(conn, tenant_id, pub_number, body.status)
     return {"pub_number": pub_number, "status": body.status}
@@ -215,7 +248,11 @@ _PORTAL_META = [
 ]
 
 @app.get("/api/health")
-def get_health():
+def get_health(tenant_id: int = Depends(get_current_tenant_id)):
+    # tenant_id isn't used yet: _last_run()/LAST_RUN_PATH is a single shared
+    # file, not tenant-scoped (a pre-existing gap from before tenant_id
+    # existed, out of scope for step 6's auth work) — but the route must
+    # still require a valid token like everything else.
     last_run_health = _last_run().get("health", {})
     result = []
     for portal in _PORTAL_META:
@@ -297,7 +334,9 @@ def put_keywords_config(body: KeywordsBody, tenant_id: int = Depends(get_current
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/reports/latest")
-def get_latest_report():
+def get_latest_report(tenant_id: int = Depends(get_current_tenant_id)):
+    # Same pre-existing gap as get_health(): REPORT_PATH is a single shared
+    # file, not tenant-scoped yet — out of scope here, but still auth-gated.
     if not os.path.exists(REPORT_PATH):
         raise HTTPException(404, "No report found — run the pipeline first")
     return FileResponse(

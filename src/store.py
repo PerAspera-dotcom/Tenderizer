@@ -78,6 +78,29 @@ def init_db(path):
     return engine
 
 
+def get_tenant_id_by_clerk_user_id(conn, clerk_user_id):
+    """The tenant id for an already-provisioned Clerk user, or None (step 6:
+    caller should then provision one via create_tenant_for_clerk_user).
+    """
+    with conn.connect() as c:
+        row = c.execute(select(tenants.c.id).where(
+            tenants.c.clerk_user_id == clerk_user_id)).fetchone()
+    return row[0] if row else None
+
+
+def create_tenant_for_clerk_user(conn, clerk_user_id, email=None):
+    """Auto-provision a brand-new tenant on a Clerk user's first login (step
+    6) — unlike ensure_tenant(), the id isn't known ahead of time; the DB
+    assigns it. Seeds the new tenant's config same as ensure_tenant().
+    """
+    with conn.begin() as c:
+        result = c.execute(insert(tenants).values(
+            clerk_user_id=clerk_user_id, email=email, created_at=date.today().isoformat()))
+        new_id = result.inserted_primary_key[0]
+    _seed_tenant_config(conn, new_id)
+    return new_id
+
+
 def ensure_tenant(conn, tenant_id, clerk_user_id=None, email=None):
     """Create a `tenants` row if `tenant_id` doesn't exist yet. Used both for
     the migrated single-tenant default (init_db, unconditionally) and for
@@ -223,6 +246,18 @@ def all_records(conn, tenant_id):
             rec[col] = json.loads(rec[col])
         out.append(rec)
     return out
+
+
+def pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+    """True if `pub_number` belongs to some tenant other than `tenant_id`
+    (step 6: distinguishes "doesn't exist" (404) from "exists, but not
+    yours" (403) at the API layer).
+    """
+    with conn.connect() as c:
+        row = c.execute(select(tenders.c.tenant_id).where(
+            (tenders.c.pub_number == pub_number) & (tenders.c.tenant_id != tenant_id)
+        ).limit(1)).fetchone()
+    return row is not None
 
 
 def set_status(conn, tenant_id, pub_number, status):

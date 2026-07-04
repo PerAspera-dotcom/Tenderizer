@@ -10,6 +10,7 @@ dependencies = [
     "sqlalchemy",
     "alembic",
     "psycopg2-binary",
+    "pyjwt[crypto]",
 ]
 
 [tool.setuptools.packages.find]

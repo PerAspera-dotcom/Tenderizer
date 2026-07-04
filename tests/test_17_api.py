@@ -81,6 +81,41 @@ def test_tenant_isolation_at_the_api_layer(tmp_path, monkeypatch):
     assert "OTHER-TENANT-1" not in pub_numbers
 
 
+# ── Cross-tenant access (phase 2/3 step 6) — 403, not 404 ───────────────────
+
+def test_get_tender_belonging_to_another_tenant_is_403(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    other_conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(other_conn, 999, _rec("OTHER-TENANT-1"))
+
+    try:
+        api.get_tender("OTHER-TENANT-1", tenant_id=TEST_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 403
+
+
+def test_get_tender_that_truly_does_not_exist_is_still_404(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    try:
+        api.get_tender("NEVER-EXISTED", tenant_id=TEST_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+
+
+def test_patch_tender_belonging_to_another_tenant_is_403(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    other_conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(other_conn, 999, _rec("OTHER-TENANT-1"))
+
+    try:
+        api.patch_tender("OTHER-TENANT-1", api.StatusBody(status="reviewed"), tenant_id=TEST_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 403
+
+
 # ── CORS lockdown (phase 2/3 prep) ───────────────────────────────────────────
 
 def test_parse_allowed_origins_splits_and_trims():
