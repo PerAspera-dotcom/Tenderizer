@@ -55,18 +55,26 @@ def health_check():
 
 @app.get("/api/tenders")
 def list_tenders(
-    source:       Optional[str]  = None,
-    category:     Optional[str]  = None,
-    match_source: Optional[str]  = None,
-    country:      Optional[str]  = None,
-    q:            Optional[str]  = None,
-    status:       Optional[str]  = None,
-    has_deadline: Optional[bool] = None,
+    source:           Optional[str]  = None,
+    category:         Optional[str]  = None,
+    match_source:     Optional[str]  = None,
+    country:          Optional[str]  = None,
+    q:                Optional[str]  = None,
+    status:           Optional[str]  = None,
+    has_deadline:     Optional[bool] = None,
+    include_excluded: bool           = False,
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
     sort:   str = "deadline",
 ):
     records = store.all_records(_db())
+
+    # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
+    # default so they don't surface here even though the report already hid
+    # them (run.py's `surfaced`). include_excluded=true is the audit escape
+    # hatch (e.g. to show why a notice didn't make the cut).
+    if not include_excluded:
+        records = [r for r in records if not r.get("exclude_reason")]
 
     if source:
         records = [r for r in records if (r.get("source") or "").upper() == source.upper()]
@@ -102,9 +110,11 @@ def list_tenders(
 
 
 @app.get("/api/tenders/{pub_number}")
-def get_tender(pub_number: str):
+def get_tender(pub_number: str, include_excluded: bool = False):
     for r in store.all_records(_db()):
         if r["pub_number"] == pub_number:
+            if r.get("exclude_reason") and not include_excluded:
+                break
             return r
     raise HTTPException(404, "Tender not found")
 
