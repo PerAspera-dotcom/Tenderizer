@@ -102,12 +102,21 @@ def check_no_core_signal(rec, exclusions, now=None):
     "core tent/shelter signal (CPV or distinctive keyword)" wording. CPV itself
     is never further narrowed here — it's already the curated, customer-
     confirmed active set (config.cpv_codes(), post F3/F4/F7).
+
+    Phase2/3 step 5: run.py injects the calling tenant's own distinctive
+    keyword list into exclusions["_distinctive_keywords"] (config.py's copy is
+    now only the seed default for a new tenant, not the live config). Falls
+    back to config.distinctive_keywords() for callers that pass a plain
+    exclusions.yaml dict with no tenant context (e.g. this module's own tests).
     """
     if rec.get("match_source") in ("cpv", "both"):
         return None
     if rec.get("match_source") != "keyword":
         return None  # no signal at all — not this check's concern
-    if set(rec.get("matched_terms") or []) & set(config.distinctive_keywords()):
+    distinctive = exclusions.get("_distinctive_keywords")
+    if distinctive is None:
+        distinctive = config.distinctive_keywords()
+    if set(rec.get("matched_terms") or []) & set(distinctive):
         return None
     return "no_core_signal"
 

@@ -236,3 +236,30 @@ def test_two_tenants_running_the_same_source_stay_isolated(tmp_path, raw_ted_sup
     conn = store.init_db(db)
     assert len(store.all_records(conn, 1)) == 1
     assert len(store.all_records(conn, 2)) == 1
+
+
+# ── Phase 2/3 step 5: per-tenant CPV/keywords/portals config ───────────────
+
+def test_tenant_cpv_customization_affects_matching(tmp_path, raw_ted_supply):
+    # raw_ted_supply's title mentions "tents" (a distinctive keyword) even
+    # with an empty CPV set, so it still matches — just via keyword, not CPV.
+    import store
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    conn = store.init_db(db)
+    store.ensure_tenant(conn, TEST_TENANT_ID)
+    store.set_tenant_cpv(conn, TEST_TENANT_ID, [])
+    src = {"name": "TED", "fetch": lambda: [raw_ted_supply], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["match_source"] == "keyword"
+
+
+def test_default_sources_filters_by_enabled_portals(tmp_path):
+    import store
+    conn = store.init_db(str(tmp_path/"t.db"))
+    store.ensure_tenant(conn, TEST_TENANT_ID)
+    store.set_tenant_portal_enabled(conn, TEST_TENANT_ID, "BOAMP", False)
+
+    sources = run._default_sources(conn, TEST_TENANT_ID, since=None)
+    assert [s["name"] for s in sources] == ["TED"]

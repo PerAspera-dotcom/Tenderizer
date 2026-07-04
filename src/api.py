@@ -232,7 +232,9 @@ def _do_run(tenant_id):
     os.makedirs(str(ROOT / "data"), exist_ok=True)
     os.makedirs(str(ROOT / "reports"), exist_ok=True)
     since   = date.today() - timedelta(days=30)
-    sources = engine._default_sources(since)
+    conn    = _db()
+    store.ensure_tenant(conn, tenant_id)
+    sources = engine._default_sources(conn, tenant_id, since)
     engine.run_pipeline(sources, DB_PATH, REPORT_PATH, tenant_id=tenant_id)
 
 @app.post("/api/run")
@@ -244,8 +246,8 @@ def post_run(background: BackgroundTasks, tenant_id: int = Depends(get_current_t
 # ── Config ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/config/cpv")
-def get_cpv_config():
-    active = set(config.cpv_codes())
+def get_cpv_config(tenant_id: int = Depends(get_current_tenant_id)):
+    active = set(store.get_tenant_cpv(_db(), tenant_id))
     ref    = config.cpv_reference()
     return [
         {
@@ -266,11 +268,15 @@ class CpvBody(BaseModel):
     codes: list[str]
 
 @app.put("/api/config/cpv")
-def put_cpv_config(body: CpvBody):
+def put_cpv_config(body: CpvBody, tenant_id: int = Depends(get_current_tenant_id)):
     import warnings
+    ref = config.cpv_reference()  # official reference stays global, not per-tenant
+    unknown = [c for c in body.codes if c not in ref]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        config.write_cpv(body.codes)
+        if unknown:
+            warnings.warn(f"Unknown CPV codes (not in cpv_reference.json): {unknown}")
+    store.set_tenant_cpv(_db(), tenant_id, body.codes)
     return {"saved": True, "warnings": [str(w.message) for w in caught]}
 
 
@@ -279,13 +285,12 @@ class KeywordsBody(BaseModel):
     distinctive: Optional[list] = None
 
 @app.get("/api/config/keywords")
-def get_keywords_config():
-    kw = config._load("keywords.yaml")
-    return {"terms": kw.get("terms", {}), "distinctive": kw.get("distinctive", [])}
+def get_keywords_config(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_tenant_keywords(_db(), tenant_id)
 
 @app.put("/api/config/keywords")
-def put_keywords_config(body: KeywordsBody):
-    config.write_keywords(body.model_dump(exclude_none=True))
+def put_keywords_config(body: KeywordsBody, tenant_id: int = Depends(get_current_tenant_id)):
+    store.set_tenant_keywords(_db(), tenant_id, body.model_dump(exclude_none=True))
     return {"saved": True}
 
 

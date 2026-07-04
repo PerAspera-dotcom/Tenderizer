@@ -11,6 +11,7 @@ filtered on exclude_reason at all — every F1-F8/D-DUP exclusion was cosmetic
 in the .xlsx report only, and still fully visible in the live Review Queue /
 Tender Feed via the API.
 """
+import config
 import store
 import api
 from conftest import TEST_TENANT_ID
@@ -99,3 +100,39 @@ def test_parse_allowed_origins_defaults_when_unset():
 def test_parse_allowed_origins_single_value():
     assert api.parse_allowed_origins("https://app.tenderizer.example") == \
         ["https://app.tenderizer.example"]
+
+
+# ── Per-tenant config (phase 2/3 step 5) ────────────────────────────────────
+
+def test_get_cpv_config_reflects_tenant_customization(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = store.init_db(db_path)
+    store.set_tenant_cpv(conn, TEST_TENANT_ID, ["39522530"])
+
+    result = api.get_cpv_config(tenant_id=TEST_TENANT_ID)
+    assert {r["code"] for r in result} == {"39522530"}
+
+
+def test_put_cpv_config_only_affects_calling_tenant(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = store.init_db(db_path)
+    store.ensure_tenant(conn, 999)
+
+    api.put_cpv_config(api.CpvBody(codes=["39522530"]), tenant_id=TEST_TENANT_ID)
+
+    assert store.get_tenant_cpv(conn, TEST_TENANT_ID) == ["39522530"]
+    assert set(store.get_tenant_cpv(conn, 999)) == set(config.cpv_codes())  # untouched
+
+
+def test_keywords_config_round_trips_per_tenant(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = store.init_db(db_path)
+    store.ensure_tenant(conn, 999)
+
+    api.put_keywords_config(api.KeywordsBody(distinctive=["widget"]), tenant_id=TEST_TENANT_ID)
+
+    assert api.get_keywords_config(tenant_id=TEST_TENANT_ID)["distinctive"] == ["widget"]
+    assert api.get_keywords_config(tenant_id=999)["distinctive"] != ["widget"]  # untouched

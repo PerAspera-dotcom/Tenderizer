@@ -3,11 +3,16 @@
 Step 3 of the Postgres/multi-tenancy migration: every function below now
 takes a `tenant_id`, and reads/writes are scoped to it (see schema.py for
 why the primary keys became composite (tenant_id, hash) /
-(tenant_id, pub_number) rather than just adding a column). `conn` is still
-a SQLAlchemy Engine — still SQLite at this step, Postgres cutover is step 4.
+(tenant_id, pub_number) rather than just adding a column). `conn` is a
+SQLAlchemy Engine, pointed at SQLite or Postgres depending on DATABASE_URL
+(step 4).
 
 get_cached_translation/cache_translation are the one exception: the
 translation cache is deliberately NOT tenant-scoped (see schema.py).
+
+Step 5 adds per-tenant CPV/keywords/portals config (tenant_cpv,
+tenant_keywords, tenant_portals) — see ensure_tenant() and the get_tenant_*/
+set_tenant_* functions below.
 """
 import json
 from datetime import date
@@ -15,10 +20,12 @@ from datetime import date
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.exc import OperationalError
 
+import config
 import db
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
-from schema import metadata, pipeline, tenants, tenders, translations
+from schema import metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
+from schema import tenants, tenders, translations
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -75,6 +82,11 @@ def ensure_tenant(conn, tenant_id, clerk_user_id=None, email=None):
     """Create a `tenants` row if `tenant_id` doesn't exist yet. Used both for
     the migrated single-tenant default (init_db, unconditionally) and for
     auto-provisioning a new tenant on a Clerk user's first login (step 6).
+
+    Also seeds this tenant's CPV/keywords/portals config (step 5) from the
+    shipped config/*.yaml defaults — but only the tables that don't already
+    have a row for this tenant, so calling this again (e.g. every init_db)
+    never clobbers a tenant's own customisations.
     """
     with conn.begin() as c:
         exists = c.execute(select(tenants.c.id).where(tenants.c.id == tenant_id)).fetchone()
@@ -82,6 +94,98 @@ def ensure_tenant(conn, tenant_id, clerk_user_id=None, email=None):
             c.execute(insert(tenants).values(
                 id=tenant_id, clerk_user_id=clerk_user_id, email=email,
                 created_at=date.today().isoformat()))
+    _seed_tenant_config(conn, tenant_id)
+
+
+def _seed_tenant_config(conn, tenant_id):
+    """Seed once, on first sight of this tenant — gated on tenant_keywords
+    having a row, since that table has exactly one row per seeded tenant
+    (unlike tenant_cpv/tenant_portals, whose *row count* can legitimately hit
+    zero after a tenant customises them down to nothing, which must not look
+    like "never seeded" and trigger a reset back to the YAML defaults).
+    """
+    with conn.connect() as c:
+        already_seeded = c.execute(select(tenant_keywords.c.tenant_id).where(
+            tenant_keywords.c.tenant_id == tenant_id)).first()
+    if already_seeded:
+        return
+
+    set_tenant_cpv(conn, tenant_id, config.cpv_codes())
+    kw = config._load("keywords.yaml")
+    set_tenant_keywords(conn, tenant_id,
+                         {"terms": kw.get("terms", {}), "distinctive": kw.get("distinctive", [])})
+    with conn.begin() as c:
+        for portal in config.portals():
+            c.execute(insert(tenant_portals).values(
+                tenant_id=tenant_id, name=portal["name"],
+                type=portal.get("type", "api"), enabled=bool(portal.get("enabled", True))))
+
+
+# ── Per-tenant config (step 5) ───────────────────────────────────────────────
+
+def get_tenant_cpv(conn, tenant_id):
+    """This tenant's active CPV code list — same shape as config.cpv_codes()."""
+    with conn.connect() as c:
+        rows = c.execute(select(tenant_cpv.c.code).where(
+            tenant_cpv.c.tenant_id == tenant_id)).fetchall()
+    return [r[0] for r in rows]
+
+
+def set_tenant_cpv(conn, tenant_id, codes):
+    """Overwrite (not merge) this tenant's active CPV set — mirrors config.write_cpv()."""
+    with conn.begin() as c:
+        c.execute(tenant_cpv.delete().where(tenant_cpv.c.tenant_id == tenant_id))
+        if codes:
+            c.execute(insert(tenant_cpv), [{"tenant_id": tenant_id, "code": code} for code in codes])
+
+
+def get_tenant_keywords(conn, tenant_id):
+    """{"terms": {lang: [...]}, "distinctive": [...]} — same shape as keywords.yaml."""
+    with conn.connect() as c:
+        row = c.execute(select(tenant_keywords.c.terms, tenant_keywords.c.distinctive).where(
+            tenant_keywords.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return {"terms": {}, "distinctive": []}
+    return {"terms": json.loads(row[0]), "distinctive": json.loads(row[1])}
+
+
+def set_tenant_keywords(conn, tenant_id, data):
+    """Merge semantics — mirrors config.write_keywords(): only overwrites the
+    keys present in `data` ('terms' and/or 'distinctive'), leaving the other
+    untouched.
+    """
+    current = get_tenant_keywords(conn, tenant_id)
+    if "terms" in data:
+        current["terms"] = data["terms"]
+    if "distinctive" in data:
+        current["distinctive"] = data["distinctive"]
+    values = {"terms": json.dumps(current["terms"]), "distinctive": json.dumps(current["distinctive"])}
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_keywords.c.tenant_id).where(
+            tenant_keywords.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_keywords).where(
+                tenant_keywords.c.tenant_id == tenant_id).values(**values))
+        else:
+            c.execute(insert(tenant_keywords).values(tenant_id=tenant_id, **values))
+
+
+def get_tenant_portals(conn, tenant_id):
+    with conn.connect() as c:
+        rows = c.execute(select(tenant_portals.c.name, tenant_portals.c.type, tenant_portals.c.enabled)
+                          .where(tenant_portals.c.tenant_id == tenant_id)).fetchall()
+    return [{"name": r[0], "type": r[1], "enabled": bool(r[2])} for r in rows]
+
+
+def get_enabled_portal_names(conn, tenant_id):
+    return {p["name"] for p in get_tenant_portals(conn, tenant_id) if p["enabled"]}
+
+
+def set_tenant_portal_enabled(conn, tenant_id, name, enabled):
+    with conn.begin() as c:
+        c.execute(update(tenant_portals).where(
+            (tenant_portals.c.tenant_id == tenant_id) & (tenant_portals.c.name == name)
+        ).values(enabled=enabled))
 
 
 def upsert(conn, tenant_id, record):

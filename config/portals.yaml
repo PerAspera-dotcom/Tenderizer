@@ -1,6 +1,10 @@
+# Was never read anywhere in the code before phase2/3 step 5 (nothing wired
+# _default_sources to it) — BOAMP's `enabled: false` here was stale, left over
+# from before its connector was built; it has run live since CR-001. Fixed
+# now that store.py actually seeds new tenants' portal config from this file.
 - name: TED
   type: api
   enabled: true
 - name: BOAMP
   type: api
-  enabled: false
+  enabled: true

@@ -36,9 +36,15 @@ def _tag(rec, full_keywords, cpv_set):
 
 def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=None, fx_rates=None):
     conn = store.init_db(db_path)
-    full_keywords = config.keywords()
-    cpv_set = set(config.cpv_codes())
-    exclusions = config.exclusions()
+    store.ensure_tenant(conn, tenant_id)  # make sure this tenant (and its default config) exists
+    tenant_kw = store.get_tenant_keywords(conn, tenant_id)
+    full_keywords = [w for lang in tenant_kw["terms"].values() for w in lang]
+    cpv_set = set(store.get_tenant_cpv(conn, tenant_id))
+    # config.exclusions() stays global (not a per-tenant config per the build
+    # doc) — only distinctive keywords are tenant-scoped, injected here so
+    # filters.check_no_core_signal doesn't need its own tenant_id/conn.
+    exclusions = dict(config.exclusions())
+    exclusions["_distinctive_keywords"] = tenant_kw["distinctive"]
     now = now or datetime.now(timezone.utc)  # one snapshot for the whole run
     # ECB daily rates (D2) — fetch once per run, never per tender. `fx_rates` is
     # injectable for tests; production (no arg) does one live fetch here.
@@ -112,17 +118,23 @@ def _write_last_run(db_path, health, records):
         json.dump(meta, f, indent=2)
 
 
-def _default_sources(since):
-    """The real TED + BOAMP sources for a scheduled run."""
+def _default_sources(conn, tenant_id, since):
+    """The TED + BOAMP sources for a scheduled run, scoped to this tenant's
+    CPV/keyword config and filtered to their enabled portals (step 5).
+    """
     from connectors import ted, boamp
-    return [
+    cpv_codes = store.get_tenant_cpv(conn, tenant_id)
+    distinctive = store.get_tenant_keywords(conn, tenant_id)["distinctive"]
+    enabled = store.get_enabled_portal_names(conn, tenant_id)
+    sources = [
         {"name": "TED",
-         "fetch": lambda: ted.fetch(config.cpv_codes(), config.distinctive_keywords(), since),
+         "fetch": lambda: ted.fetch(cpv_codes, distinctive, since),
          "normalize": normalize.normalize_ted},
         {"name": "BOAMP",
-         "fetch": lambda: boamp.fetch(config.distinctive_keywords(), config.cpv_codes(), since),
+         "fetch": lambda: boamp.fetch(distinctive, cpv_codes, since),
          "normalize": normalize.normalize_boamp},
     ]
+    return [s for s in sources if s["name"] in enabled]
 
 
 if __name__ == "__main__":
@@ -131,7 +143,10 @@ if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
     os.makedirs("reports", exist_ok=True)
     since = date.today() - timedelta(days=30)
-    health = run_pipeline(_default_sources(since), "data/tenders.db", "reports/tenders.xlsx")
+    conn = store.init_db("data/tenders.db")
+    store.ensure_tenant(conn, DEFAULT_TENANT_ID)
+    sources = _default_sources(conn, DEFAULT_TENANT_ID, since)
+    health = run_pipeline(sources, "data/tenders.db", "reports/tenders.xlsx")
     print("run complete:")
     for name, status in health.items():
         print(f"  {name}: {status}")

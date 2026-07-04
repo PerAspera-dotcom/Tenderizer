@@ -13,7 +13,7 @@ phase2/3 plan: it's a pure content-hash cache of arbitrary text, and two
 tenants translating the same French phrase should share one cached result
 rather than each spending their own DeepL quota on it.
 """
-from sqlalchemy import (Column, ForeignKey, Integer, MetaData,
+from sqlalchemy import (Boolean, Column, ForeignKey, Integer, MetaData,
                          PrimaryKeyConstraint, String, Table, Text)
 
 metadata = MetaData()
@@ -90,4 +90,33 @@ translations = Table(
     Column("content_hash", String, primary_key=True),
     Column("translated_text", Text, nullable=True),
     Column("cached_at", Text, nullable=True),
+)
+
+# Step 5 of the Postgres/multi-tenancy migration: per-tenant config rows for
+# CPV set, keywords, and enabled portals. A new tenant is seeded from the
+# shipped config/*.yaml defaults (see store.ensure_tenant) and can then
+# customise independently — the YAML files remain the *default* content, not
+# the live config, once a tenant has its own rows.
+
+tenant_cpv = Table(
+    "tenant_cpv", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("code", String, nullable=False),
+    PrimaryKeyConstraint("tenant_id", "code"),
+)
+
+tenant_keywords = Table(
+    "tenant_keywords", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("terms", Text, nullable=False, server_default="{}"),        # JSON: {lang: [terms]}
+    Column("distinctive", Text, nullable=False, server_default="[]"),  # JSON: [terms]
+)
+
+tenant_portals = Table(
+    "tenant_portals", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("type", Text, nullable=False, server_default="api"),
+    Column("enabled", Boolean, nullable=False),
+    PrimaryKeyConstraint("tenant_id", "name"),
 )
