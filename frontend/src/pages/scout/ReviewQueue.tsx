@@ -148,7 +148,13 @@ export default function ReviewQueue() {
                   <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>{selected.source}</span>
                   <span style={{ fontSize: 16 }}>{countryFlag(selected.country)}</span>
                   <span style={{ color: '#8892a4', fontSize: 13 }}>{selected.country}</span>
-                  <div style={{ marginLeft: 'auto' }}>
+                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {selected.url && (
+                      <a href={selected.url} target="_blank" rel="noopener noreferrer"
+                         className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>
+                        Open ↗
+                      </a>
+                    )}
                     <StatusBadge status={selected.status} />
                   </div>
                 </div>
