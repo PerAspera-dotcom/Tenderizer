@@ -6,9 +6,12 @@ Verified live (June 2026):
   Response: {"total_count": N, "results": [ {flat fields}, ... ]}.
   No API key. Notices are French, single-language (no multilingual nesting).
 
-BOAMP exposes no clean CPV field (it uses its own 'descripteur' taxonomy), so relevance
-here is keyword full-text on the notice. cpv_codes is accepted for interface parity with
-the TED connector but is not used in the query — BOAMP matches are tagged keyword-based.
+The flat top-level fields have no clean CPV field (just BOAMP's own 'descripteur'
+taxonomy) — but CPV codes ARE present, buried in the `donnees` field (a JSON-encoded
+string of the notice's full source XML); normalize.normalize_boamp's _boamp_cpv_codes
+extracts them (verified live, 2026-07 — see its docstring for the schema shapes).
+cpv_codes is still accepted here for interface parity with the TED connector but isn't
+used in the query — BOAMP's search API has no CPV filter, only full-text `where`.
 """
 import requests
 

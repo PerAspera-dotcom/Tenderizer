@@ -11,6 +11,7 @@ TED multilingual fields use 3-letter language keys (eng, fra, deu, nld, pol, ...
   classification-cpv              : ["39522530", ...]
 """
 import hashlib
+import json
 
 LANG_PREF = ["eng", "fra", "deu", "nld"]
 
@@ -126,10 +127,54 @@ def _boamp_place(raw):
     return ", ".join(f"FR-{d}" for d in depts)
 
 
+def _boamp_cpv_codes(raw):
+    """CPV codes buried in BOAMP's `donnees` field — a JSON-encoded string of
+    the notice's full source XML (verified live, 2026-07). Contrary to this
+    module's earlier assumption ("no CPV, keyword source only"), BOAMP does
+    carry CPV — it's just never at the flat top level, and its shape depends
+    on the notice's schema/vintage:
+      - Current EU eForms notices tag it as {"@listName": "cpv", "#text": CODE}
+        (main + additional commodity classifications, incl. per-lot).
+      - Older FNSimple/MAPA notices nest it as
+        {"codeCPV"|"CPV": {"objetPrincipal": {"classPrincipale": CODE}}}.
+      - Pre-2024 legacy notices (Boamp_v230.xsd) carry no CPV field at all —
+        that gap is real and permanent for archived data, not a bug; keyword
+        matching (and F4's category/term checks) remain the fallback for it.
+    Walking the whole tree rather than hardcoding one path per schema, since
+    OpenDataSoft mixes several notice-type/vintage shapes in the same feed.
+    """
+    donnees = raw.get("donnees")
+    if not donnees:
+        return []
+    try:
+        data = json.loads(donnees)
+    except (TypeError, ValueError):
+        return []
+
+    codes = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("@listName") == "cpv" and node.get("#text"):
+                codes.append(node["#text"])
+            principal = node.get("objetPrincipal")
+            if isinstance(principal, dict) and principal.get("classPrincipale"):
+                codes.append(principal["classPrincipale"])
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(data)
+    return _dedupe(codes)
+
+
 def normalize_boamp(raw):
     """Normalise a BOAMP record into the SAME schema as normalize_ted.
 
-    BOAMP fields are flat/single-language. Country is always FR; no CPV (keyword source).
+    BOAMP's flat fields are single-language; CPV isn't among them (see
+    _boamp_cpv_codes for where it actually lives).
     """
     idweb = raw.get("idweb", "")
     return {
@@ -144,7 +189,7 @@ def normalize_boamp(raw):
         "procedure": raw.get("procedure_libelle") or "",
         "pub_date": raw.get("dateparution") or "",
         "deadline": raw.get("datelimitereponse") or "",
-        "cpv_codes": [],
+        "cpv_codes": _boamp_cpv_codes(raw),
         "matched_terms": [],
         "match_source": None,
         "url": f'https://www.boamp.fr/pages/avis/?q=idweb:%22{idweb}%22' if idweb else "",
