@@ -166,6 +166,22 @@ def test_same_clerk_user_resolves_to_the_same_tenant_every_time(tmp_path, monkey
     assert first == second
 
 
+def test_concurrent_first_requests_for_a_new_clerk_user_dont_500(tmp_path):
+    """A brand-new user's first page load fires several API calls at once,
+    each resolving get_tenant_id_by_clerk_user_id -> None before any of them
+    has committed a tenant row, so more than one calls create_tenant_for_...
+    for the same clerk_user_id. The loser must resolve to the winner's row,
+    not raise the unique-constraint IntegrityError (which previously reached
+    the browser as a CORS error, not a 401/500 — see store.py).
+    """
+    db_path = str(tmp_path / "t.db")
+    conn = store.init_db(db_path)
+
+    first = store.create_tenant_for_clerk_user(conn, "user_racing")
+    second = store.create_tenant_for_clerk_user(conn, "user_racing")
+    assert first == second
+
+
 # ── auth.verify_ops_token() / api.require_ops_access() ──────────────────────
 # Operational endpoints (health, reports) are gated on a static service
 # token, not any tenant's Clerk session — a regular tenant login must never

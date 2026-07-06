@@ -149,3 +149,32 @@ def test_set_status_only_affects_the_calling_tenants_row(tmp_path, raw_ted_suppl
     t2 = store.all_records(conn, 2)[0]
     assert t1["status"] == "shortlisted"
     assert t2["status"] == "new"
+
+def test_update_tagging_rewrites_an_existing_records_match_fields(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path/"t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    rec["cpv_codes"] = []
+    rec["match_source"] = None
+    store.upsert(conn, 1, rec)
+
+    store.update_tagging(conn, 1, rec["pub_number"],
+                          cpv_codes=["45111100"], matched_terms=["tent"],
+                          match_source="both", exclude_reason="construction_works")
+
+    updated = store.all_records(conn, 1)[0]
+    assert updated["cpv_codes"] == ["45111100"]
+    assert updated["matched_terms"] == ["tent"]
+    assert updated["match_source"] == "both"
+    assert updated["exclude_reason"] == "construction_works"
+
+def test_update_tagging_only_affects_the_calling_tenants_row(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path/"t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    store.upsert(conn, 1, rec)
+    store.upsert(conn, 2, rec)
+    store.update_tagging(conn, 1, rec["pub_number"],
+                          cpv_codes=["45111100"], matched_terms=[],
+                          match_source="cpv", exclude_reason="construction_works")
+    t2 = store.all_records(conn, 2)[0]
+    assert t2["cpv_codes"] == rec["cpv_codes"]
+    assert t2["exclude_reason"] == ""

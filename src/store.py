@@ -18,7 +18,7 @@ import json
 from datetime import date
 
 from sqlalchemy import func, insert, select, text, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 import config
 import db
@@ -92,11 +92,23 @@ def create_tenant_for_clerk_user(conn, clerk_user_id, email=None):
     """Auto-provision a brand-new tenant on a Clerk user's first login (step
     6) — unlike ensure_tenant(), the id isn't known ahead of time; the DB
     assigns it. Seeds the new tenant's config same as ensure_tenant().
+
+    A brand-new user's first page load fires several API calls at once
+    (Layout's stats/health/tenders + the page's own), each hitting
+    get_current_tenant_id -> this function concurrently before any of them
+    has committed a row. Only one insert wins the `clerk_user_id` unique
+    constraint; the rest must resolve to that row instead of 500ing (an
+    uncaught IntegrityError here previously surfaced to the browser as a
+    CORS error, since Starlette's error middleware sits outside CORSMiddleware
+    and its fallback response carries no CORS headers).
     """
-    with conn.begin() as c:
-        result = c.execute(insert(tenants).values(
-            clerk_user_id=clerk_user_id, email=email, created_at=date.today().isoformat()))
-        new_id = result.inserted_primary_key[0]
+    try:
+        with conn.begin() as c:
+            result = c.execute(insert(tenants).values(
+                clerk_user_id=clerk_user_id, email=email, created_at=date.today().isoformat()))
+            new_id = result.inserted_primary_key[0]
+    except IntegrityError:
+        new_id = get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
     _seed_tenant_config(conn, new_id)
     return new_id
 
@@ -272,6 +284,23 @@ def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, st
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
         ).values(tag_line_en=tag_line_en, description_en=description_en, translation_status=status))
+
+
+def update_tagging(conn, tenant_id, pub_number, cpv_codes, matched_terms, match_source, exclude_reason):
+    """Overwrite an already-stored record's match/filter fields in place.
+
+    upsert() is deliberately insert-only (a normal pipeline run must never
+    silently rewrite a record another run already tagged) — this is the
+    escape hatch for the one genuine exception: a one-off backfill re-scoring
+    already-stored rows after a normalize.py extraction fix (e.g. BOAMP CPV
+    codes, 2026-07), where the underlying source data didn't change but what
+    we know about it did.
+    """
+    with conn.begin() as c:
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        ).values(cpv_codes=json.dumps(cpv_codes), matched_terms=json.dumps(matched_terms),
+                  match_source=match_source, exclude_reason=exclude_reason or ""))
 
 
 def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
