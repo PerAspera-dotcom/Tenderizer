@@ -39,6 +39,13 @@ export interface Stats {
   portals_active: string;
 }
 
+export interface CpvConfigEntry {
+  code: string;
+  labels: { en: string | null; fr: string | null; nl: string | null; de: string | null };
+  group: string | null;
+  category: string | null;
+}
+
 export interface PortalHealth {
   name: string;
   region: string;

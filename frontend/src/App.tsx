@@ -9,6 +9,7 @@ import PortalFollowup from './pages/portal/PortalFollowup';
 import Dashboard from './pages/scout/Dashboard';
 import TenderFeed from './pages/scout/TenderFeed';
 import ReviewQueue from './pages/scout/ReviewQueue';
+import CpvConfig from './pages/scout/CpvConfig';
 import VaultLibrary from './pages/vault/VaultLibrary';
 import ComposerIngest from './pages/composer/ComposerIngest';
 import ProposalReview from './pages/composer/ProposalReview';
@@ -26,7 +27,7 @@ function Router() {
     '/scout/tender-feed': <Layout><TenderFeed /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
     '/scout/portals': <Layout><StubPage title="Portals & Health" subtitle="Per-portal throughput and ToS compliance" /></Layout>,
-    '/scout/cpv': <Layout><StubPage title="CPV Config" subtitle="Manage your CPV code watchlist" /></Layout>,
+    '/scout/cpv': <Layout><CpvConfig /></Layout>,
     '/scout/keywords': <Layout><StubPage title="Keywords" subtitle="Multilingual keyword library" /></Layout>,
     '/scout/reports': <Layout><StubPage title="Reports" subtitle="Weekly digest and Excel export" /></Layout>,
     '/scout/settings': <Layout><StubPage title="Settings" subtitle="Schedule, notifications and run window" /></Layout>,

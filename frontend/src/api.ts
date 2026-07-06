@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession, CpvConfigEntry } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -93,6 +93,25 @@ export function patchFollowup(pub_number: string, outcome: string): Promise<unkn
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ outcome }),
+  });
+}
+
+// ── CPV config ────────────────────────────────────────────────────────────────
+
+export function getCpvConfig(): Promise<CpvConfigEntry[]> {
+  return apiFetch<CpvConfigEntry[]>('/api/config/cpv');
+}
+
+export interface PutCpvResult {
+  saved: boolean;
+  warnings: string[];
+}
+
+export function putCpvConfig(codes: string[]): Promise<PutCpvResult> {
+  return apiFetch<PutCpvResult>('/api/config/cpv', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ codes }),
   });
 }
 
