@@ -190,6 +190,27 @@ mechanism from D1. Don't block Phase 1 on it.
 
 ---
 
+## Status log
+
+- **2026-07-06 — Audit + §5.4 test-coverage gap closed.** Reconciled this
+  file's static text against actual repo state (git history + code): F1–F8,
+  D-DUP, R1, R2, R3 were all already implemented and committed (`git log
+  --oneline | grep cr-001`), each with its own test coverage — this section
+  had simply never been kept up to date. Only C1 (Composer ingest
+  translation) remains not started, correctly deferred (phase 2, needs D1).
+  One process gap found: TENDERIZER_HANDOFF.md §5.4's Portal `pipeline` table
+  (`store.ensure_pipeline_entry`/`set_pipeline_entry`/`get_pipeline_entries`/
+  `get_followup_entries`, `/api/pipeline`, `/api/followup`) was fully built
+  and wired into the frontend's PortalPipeline screen, but had never gotten
+  its own unit tests. Added `tests/test_22_pipeline.py` (17 tests: default
+  row creation, idempotency, invalid-field guarding, shortlisted/submitted
+  scoping, tenant isolation at both the store and API layer) — no behaviour
+  changed. `pytest -q`: 243 passed (226 + 17 new). Open question surfaced
+  earlier by the F5 commit (`900d341`) still stands: the CR references a
+  "CPV Scope Worksheet" that doesn't exist in this repo — F5 mapped "core"
+  onto `config.cpv_codes()` + `distinctive_keywords()` instead; worth
+  confirming with the customer that matches their intent.
+
 ## Suggested order (safest first)
 
 1. R2 (CPV display dedupe) — pure frontend, low risk.
