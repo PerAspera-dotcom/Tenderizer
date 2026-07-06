@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
+import { SignedIn, SignedOut, SignIn, useAuth } from '@clerk/clerk-react';
 import { HashRouter, Navigate, useLocation } from './router';
+import { setTokenGetter } from './authToken';
 import Layout from './components/Layout';
 import PortalHome from './pages/portal/PortalHome';
 import PortalPipeline from './pages/portal/PortalPipeline';
@@ -46,10 +49,31 @@ function Router() {
   return <>{routes[pathname]}</>;
 }
 
+// Bridges Clerk's getToken (only available via hook, inside the provider
+// tree) out to api.ts's plain async functions — see authToken.ts.
+function TokenBridge() {
+  const { getToken } = useAuth();
+  useEffect(() => {
+    setTokenGetter(getToken);
+    return () => setTokenGetter(null);
+  }, [getToken]);
+  return null;
+}
+
 export default function App() {
   return (
-    <HashRouter>
-      <Router />
-    </HashRouter>
+    <>
+      <SignedIn>
+        <TokenBridge />
+        <HashRouter>
+          <Router />
+        </HashRouter>
+      </SignedIn>
+      <SignedOut>
+        <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#0f1623' }}>
+          <SignIn />
+        </div>
+      </SignedOut>
+    </>
   );
 }

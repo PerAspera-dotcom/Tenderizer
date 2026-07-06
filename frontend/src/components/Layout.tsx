@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { UserButton } from '@clerk/clerk-react';
 import { useNavigate, useLocation, Link } from '../router';
 import { getStats, getHealth, postRun, listTenders } from '../api';
 import type { Stats, PortalHealth } from '../types';
@@ -275,9 +276,7 @@ export default function Layout({ children }: Props) {
             >
               {running ? '⟳' : '↺'} {running ? 'Running…' : 'Run now'}
             </button>
-            <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#2EE6D4', color: '#0f1623', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 12 }}>
-              PA
-            </div>
+            <UserButton appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }} />
           </div>
         </header>
 

@@ -1,9 +1,13 @@
 import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession } from './types';
+import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(BASE + path, init);
+  const token = await getAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const r = await fetch(BASE + path, { ...init, headers });
   if (!r.ok) throw new Error(`${r.status} ${path}`);
   return r.json() as Promise<T>;
 }
