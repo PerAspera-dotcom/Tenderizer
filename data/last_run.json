@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-01T13:25:42",
+  "timestamp": "2026-07-06T18:26:22",
   "health": {
-    "TED": "ok (398)",
-    "BOAMP": "ok (563)"
+    "TED": "ok (246)",
+    "BOAMP": "ok (527)"
   },
-  "notices_scanned": 961,
-  "matched_total": 408
+  "notices_scanned": 773,
+  "matched_total": 127
 }
