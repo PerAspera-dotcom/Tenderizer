@@ -141,7 +141,7 @@ def _default_sources(conn, tenant_id, since):
          "fetch": lambda: ted.fetch(cpv_codes, distinctive, since),
          "normalize": normalize.normalize_ted},
         {"name": "BOAMP",
-         "fetch": lambda: boamp.fetch(distinctive, cpv_codes, since),
+         "fetch": lambda: boamp.fetch(cpv_codes, distinctive, since),
          "normalize": normalize.normalize_boamp},
     ]
     return [s for s in sources if s["name"] in enabled]

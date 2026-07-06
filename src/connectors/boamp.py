@@ -18,8 +18,14 @@ import requests
 ENDPOINT = "https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets/boamp/records"
 
 
-def build_params(keywords, cpv_codes, since, limit=100, offset=0):
-    """Build the ODS request params: distinctive keywords (full text) since `since`."""
+def build_params(cpv_codes, keywords, since, limit=100, offset=0):
+    """Build the ODS request params: distinctive keywords (full text) since `since`.
+
+    Argument order (cpv_codes, keywords, since) matches ted.fetch/build_query
+    for interface parity between the two connectors — cpv_codes itself isn't
+    used in the query (see module docstring), it's accepted purely so a
+    caller can invoke both connectors the same way.
+    """
     terms = " OR ".join(f'"{k}"' for k in keywords)
     where = f"({terms}) AND dateparution >= date'{since.isoformat()}'"
     return {"where": where, "limit": limit, "offset": offset, "order_by": "dateparution desc"}
@@ -30,11 +36,11 @@ def parse_response(json_data):
     return json_data.get("results") or []
 
 
-def fetch(keywords, cpv_codes, since, limit=100, max_records=2000):
+def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     """Live, paginated pull (offset paging). max_records is a safety cap."""
     out, offset = [], 0
     while True:
-        params = build_params(keywords, cpv_codes, since, limit=limit, offset=offset)
+        params = build_params(cpv_codes, keywords, since, limit=limit, offset=offset)
         resp = requests.get(ENDPOINT, params=params, timeout=60)
         resp.raise_for_status()
         results = parse_response(resp.json())

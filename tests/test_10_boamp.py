@@ -1,6 +1,6 @@
 """Step 10 — BOAMP connector + cross-source schema consistency.
 Interface:
-  connectors.boamp.build_params(keywords, cpv_codes, since) -> dict
+  connectors.boamp.build_params(cpv_codes, keywords, since) -> dict
   connectors.boamp.parse_response(json_data) -> list[dict]
   normalize.normalize_boamp(raw) -> normalised record (SAME schema as TED)
 """
@@ -25,9 +25,25 @@ def test_boamp_and_ted_share_identical_schema(raw_boamp_supply, raw_ted_supply):
            set(normalize.normalize_ted(raw_ted_supply))
 
 def test_build_params_includes_date_and_keyword():
-    p = boamp.build_params(["tente"], ["35521000"], date(2026,6,1))
+    p = boamp.build_params(["35521000"], ["tente"], date(2026,6,1))
     blob = str(p)
     assert "2026-06-01" in blob and "tente" in blob
+
+
+def test_build_params_and_fetch_share_ted_connectors_argument_order():
+    """Found during a repo audit: ted.fetch/build_query take
+    (cpv_codes, keywords, since, ...) but boamp.fetch/build_params used to take
+    (keywords, cpv_codes, since, ...) — same shape, swapped order. Nothing
+    caught it because run.py's lambda happened to match each connector's own
+    order. Locks in (cpv_codes, keywords, since, ...) for both connectors via
+    inspect.signature, so a future connector can't silently reintroduce the
+    swap.
+    """
+    import inspect
+    from connectors import ted
+    ted_params = list(inspect.signature(ted.fetch).parameters)[:3]
+    boamp_params = list(inspect.signature(boamp.fetch).parameters)[:3]
+    assert ted_params == boamp_params == ["cpv_codes", "keywords", "since"]
 
 
 # ── CPV extraction from `donnees` (verified live 2026-07 — see

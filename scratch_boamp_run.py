@@ -15,7 +15,7 @@ import normalize
 
 since = date.today() - timedelta(days=30)
 print("fetching from BOAMP ...")
-raws = boamp.fetch(config.distinctive_keywords(), config.cpv_codes(), since)
+raws = boamp.fetch(config.cpv_codes(), config.distinctive_keywords(), since)
 print(f"  {len(raws)} records")
 
 records = [normalize.normalize_boamp(r) for r in raws]
