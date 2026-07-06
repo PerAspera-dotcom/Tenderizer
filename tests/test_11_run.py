@@ -263,3 +263,49 @@ def test_default_sources_filters_by_enabled_portals(tmp_path):
 
     sources = run._default_sources(conn, TEST_TENANT_ID, since=None)
     assert [s["name"] for s in sources] == ["TED"]
+
+
+# ── last_run.json: matched_total must stay scoped to "this run", matching
+# notices_scanned — not store.all_records()'s cumulative, all-time set (a
+# stats-reconciliation bug: the dashboard's "N scanned / N matched" pairing
+# would otherwise drift further apart every run as the tenders table grows).
+
+def _last_run_json(tmp_path):
+    import json
+    with open(tmp_path / "last_run.json") as f:
+        return json.load(f)
+
+
+def test_matched_total_is_scoped_to_this_runs_own_fetch(tmp_path, raw_ted_supply):
+    import copy
+    non_matching = copy.deepcopy(raw_ted_supply)
+    non_matching["publication-number"] = "999998-2026"
+    non_matching["notice-title"] = {"eng": "Sweden – Office furniture supply"}
+    non_matching["description-proc"] = {"eng": "Desks and chairs for a government office."}
+    non_matching["classification-cpv"] = ["39130000"]
+
+    db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw_ted_supply, non_matching],
+           "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    meta = _last_run_json(tmp_path)
+    assert meta["notices_scanned"] == 2
+    assert meta["matched_total"] == 1   # only the tent notice matched
+
+
+def test_matched_total_does_not_accumulate_across_runs(tmp_path, raw_ted_supply):
+    # Re-running with nothing new to fetch must report 0 matched this run,
+    # not the 1 match already sitting in the tenders table from run #1 —
+    # that cumulative count was the actual bug (see test above's docstring).
+    db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw_ted_supply],
+           "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    empty_src = {"name": "TED", "fetch": lambda: [], "normalize": src["normalize"]}
+    run.run_pipeline([empty_src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    meta = _last_run_json(tmp_path)
+    assert meta["notices_scanned"] == 0
+    assert meta["matched_total"] == 0

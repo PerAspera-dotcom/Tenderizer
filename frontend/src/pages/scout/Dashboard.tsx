@@ -9,7 +9,6 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [health, setHealth] = useState<PortalHealth[]>([]);
   const [topTenders, setTopTenders] = useState<Tender[]>([]);
-  const [totalMatched, setTotalMatched] = useState(0);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -23,7 +22,6 @@ export default function Dashboard() {
       setStats(s);
       setHealth(h);
       setTopTenders(t.results.filter(r => r.status !== 'dismissed'));
-      setTotalMatched(s.matched_total);
     }).catch(() => {}).finally(() => setLoading(false));
   }
 
@@ -61,6 +59,10 @@ export default function Dashboard() {
 
   const cpvMatched = (stats?.by_match.cpv ?? 0) + (stats?.by_match.both ?? 0);
   const kwOnly = stats?.by_match.keyword ?? 0;
+  // All-time matched pool (by_match is a live, cumulative count) — distinct
+  // from stats.matched_total, which is scoped to just the last sync (see the
+  // "Last sync" strip below) and would understate the Tender Feed's actual pool.
+  const allTimeMatched = cpvMatched + kwOnly;
 
   function healthDot(s: string) {
     if (s === 'live') return <span className="dot-live" />;
@@ -127,7 +129,7 @@ export default function Dashboard() {
               <div style={{ padding: '14px 16px', borderBottom: '1px solid #1a2334', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ fontWeight: 600, fontSize: 15 }}>Tender Feed</span>
                 <span style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 9999 }}>✓ LIVE</span>
-                <span style={{ marginLeft: 'auto', color: '#8892a4', fontSize: 12 }}>Showing {topTenders.length} of {totalMatched} matched</span>
+                <span style={{ marginLeft: 'auto', color: '#8892a4', fontSize: 12 }}>Showing {topTenders.length} of {allTimeMatched} matched</span>
               </div>
               <table>
                 <thead>

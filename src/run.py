@@ -50,6 +50,12 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     # injectable for tests; production (no arg) does one live fetch here.
     fx_rates = fx_rates or currency.fetch_ecb_rates_or_fallback()
     health = {}
+    # Only this run's own fetches — kept separate from store.all_records()'s
+    # cumulative, all-time set so _write_last_run's matched_total stays paired
+    # with notices_scanned at the same scope (both "this run"), not one per-run
+    # and one all-time (previously: matched_total silently drifted further from
+    # notices_scanned every run as the tenant's tenders table grew).
+    this_run_records = []
 
     for src in sources:
         name = src["name"]
@@ -65,6 +71,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
                     rec.get("value"), rec.get("value_currency"), fx_rates)
                 rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
                 store.upsert(conn, tenant_id, rec)
+                this_run_records.append(rec)
             health[name] = f"ok ({len(raws)})"
         except Exception as e:                       # one source failing must not abort the run
             health[name] = f"error: {e}"
@@ -94,11 +101,11 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     records = store.all_records(conn, tenant_id)
     surfaced = [r for r in records if not r.get("exclude_reason")]
     build_report(surfaced, health, out_path)
-    _write_last_run(db_path, health, records)
+    _write_last_run(db_path, health, this_run_records)
     return health
 
 
-def _write_last_run(db_path, health, records):
+def _write_last_run(db_path, health, this_run_records):
     notices_scanned = 0
     for v in health.values():
         if v.startswith("ok ("):
@@ -106,7 +113,10 @@ def _write_last_run(db_path, health, records):
                 notices_scanned += int(v[4:-1])
             except ValueError:
                 pass
-    matched_total = sum(1 for r in records if r.get("match_source") not in (None, "None", ""))
+    # Scoped to this_run_records (this run's own fetches), matching
+    # notices_scanned's scope — NOT store.all_records()'s cumulative, all-time
+    # set (see run_pipeline's this_run_records comment for why that was a bug).
+    matched_total = sum(1 for r in this_run_records if r.get("match_source") not in (None, "None", ""))
     meta = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "health": health,
