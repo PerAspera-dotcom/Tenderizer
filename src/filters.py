@@ -86,9 +86,20 @@ def check_construction_works(rec, exclusions, now=None):
     """F4 (D3 hard exclude) — any CPV division 45 (construction work) code drops
     the notice entirely, no tent-signal override (customer confirmed). This is a
     prefix rule, not an enumerable code list — division 45 is open-ended.
+
+    Also trips on the source's own declared contract nature (`category`,
+    see normalize.py's map_category) and a narrow multi-word term list — both
+    added post-launch to cover BOAMP, which never supplies CPV codes at all
+    (see config/exclusions.yaml's note on this for why terms stays phrase-only,
+    not bare words like 'travaux').
     """
-    prefix = exclusions["construction_works"]["cpv_prefix"]
-    if any(c.startswith(prefix) for c in (rec.get("cpv_codes") or [])):
+    cfg = exclusions["construction_works"]
+    if any(c.startswith(cfg["cpv_prefix"]) for c in (rec.get("cpv_codes") or [])):
+        return "construction_works"
+    if rec.get("category") == cfg["category"]:
+        return "construction_works"
+    terms = [w for lang in cfg["terms"].values() for w in lang]
+    if match.match_keywords(_text(rec), terms):
         return "construction_works"
     return None
 

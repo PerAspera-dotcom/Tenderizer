@@ -18,10 +18,11 @@ D5_CODES = {"44211000", "44211100", "44211110", "44211200",
 
 
 def _rec(tag_line="", description="", cpv_codes=None, deadline="", value_eur=None,
-         match_source=None, matched_terms=None):
+         match_source=None, matched_terms=None, category=None):
     return {"tag_line": tag_line, "description": description,
             "cpv_codes": cpv_codes or [], "deadline": deadline, "value_eur": value_eur,
-            "match_source": match_source, "matched_terms": matched_terms or []}
+            "match_source": match_source, "matched_terms": matched_terms or [],
+            "category": category}
 
 
 def test_prefab_cpv_code_is_excluded():
@@ -108,6 +109,28 @@ def test_german_miete_is_excluded():
 def test_dutch_huur_is_excluded():
     rec = _rec("Huur van tenten voor evenementen", cpv_codes=["39522530"])
     assert filters.apply_filters(rec, EXCLUSIONS) == "rental"
+
+
+def test_french_rental_elided_form_is_excluded():
+    # real gap found 2026-07 via the calibration export: "location d'engins"
+    # (elided) wasn't caught by the "location de" phrase term — match.py now
+    # folds French "d'" -> "de " before matching (see test_08_matcher.py for
+    # the actual TED/BOAMP notice text this was missing).
+    rec = _rec("Location d'engins et de materiels pour evenements", cpv_codes=["39522530"])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "rental"
+
+
+# Elision-folding lives in match.match_keywords itself, so every exclusion
+# category gets it automatically, not just rental — proven here against a
+# synthetic term (none of F3/F4's *current* real terms happen to end in "de",
+# so this exercises the shared mechanism directly rather than relying on
+# today's yaml wording never changing).
+def test_elision_folding_applies_to_other_exclusion_categories_too():
+    synthetic = dict(EXCLUSIONS)
+    synthetic["container_modular_prefab"] = dict(EXCLUSIONS["container_modular_prefab"],
+                                                  terms={"fr": ["assemblage de"]})
+    rec = _rec("Assemblage d'elements modulaires sur site")
+    assert filters.apply_filters(rec, synthetic) == "container_modular_prefab"
 
 
 # ── F1: deadline lead-time floor ─────────────────────────────────────────────
@@ -204,6 +227,43 @@ def test_f4_retired_codes_removed_from_active_cpv_set():
     # the active list (see cpv.yaml's F4 note) — no point matching on a dead code.
     retired = {"45216129", "45216230", "45421144"}
     assert retired.isdisjoint(set(config.cpv_codes()))
+
+
+# ── F4 post-launch refinement: BOAMP never carries CPV codes at all, so
+# cpv_prefix alone can't catch its construction notices — category and a
+# narrow term list close that gap (see config/exclusions.yaml's note).
+
+def test_works_category_is_excluded_even_with_no_cpv_code_at_all():
+    # BOAMP shape: no CPV, category comes from its own type_marche field.
+    rec = _rec("Travaux de renovation des ateliers techniques CLSH", category="Works")
+    assert filters.apply_filters(rec, EXCLUSIONS) == "construction_works"
+
+
+def test_construction_phrase_is_excluded_even_when_category_is_wrong():
+    # real BOAMP case: title says "Marche de travaux..." but type_marche was
+    # mis-tagged as Fournitures (Supply) at the source.
+    rec = _rec("Marche de travaux dans le cadre de la renaturation du campus", category="Supply")
+    assert filters.apply_filters(rec, EXCLUSIONS) == "construction_works"
+
+
+def test_bare_travaux_mention_in_a_services_notice_is_kept():
+    # a project-management/oversight "mission" that merely mentions travaux in
+    # passing is not itself a works contract — category says Services, and the
+    # term list deliberately only matches multi-word construction phrases, not
+    # the bare word (same shape as F2's rental scoping).
+    rec = _rec("Mission de maitrise d'oeuvre pour la realisation de travaux de mise en securite",
+               category="Services")
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_bare_realisation_mention_in_a_supply_notice_is_kept():
+    rec = _rec("Marche de fournitures pour les travaux en regie", category="Supply")
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+
+
+def test_tent_notice_with_non_works_category_is_kept():
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], category="Supply")
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
 
 
 # ── F5: core-signal narrowing (D4 core list confirmed) ───────────────────────

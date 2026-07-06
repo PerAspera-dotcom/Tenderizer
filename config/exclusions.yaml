@@ -28,7 +28,10 @@ container_modular_prefab:
 # ('location de', 'en location') rather than the bare word: 'location' alone is also
 # plain French for "place", and a bare-word match would misfire on a tent PURCHASE
 # notice that happens to use the word that way (see CR §F2 Watch note; tested by
-# "Acquisition de tentes" staying kept in tests/test_12_filters.py).
+# "Acquisition de tentes" staying kept in tests/test_12_filters.py). "location de" also
+# catches the elided "location d'engins"/"location d'équipements" form — match.py folds
+# French "d'" -> "de " before matching (real live gap found 2026-07: a TED/BOAMP rental
+# notice worded "location d'engins" wasn't excluded until this fold was added).
 rental:
   terms:
     en: [rental]
@@ -50,5 +53,31 @@ value_floor:
 # drops the notice entirely, no tent-signal override (customer confirmed). This
 # also retired three of our own codes from the active set (see cpv.yaml F4 note):
 # 45216129, 45216230, 45421144 would always trip this, so they'd never surface.
+#
+# Post-launch refinement: BOAMP (French portal) never provides CPV codes at all
+# (see normalize.normalize_boamp) — cpv_prefix alone can't touch it, so pure
+# construction/works notices from BOAMP were reaching the Review Queue as
+# unmatched "Low confidence" noise. Two more signals close that gap:
+#   - `category`: BOAMP/TED both classify a notice's own contract nature
+#     (BOAMP's type_marche / TED's contract-nature, mapped in normalize.py's
+#     _CAT) — "Works" is the source's own declaration, independent of CPV, and
+#     in a live sample of 747 notices caught the leak with zero false
+#     positives (101/101 category=="Works" leaks were genuine construction).
+#   - `terms`: a narrow multi-word phrase list for the residual case where
+#     category is missing or wrong (BOAMP occasionally mis-tags — e.g. a
+#     "Marché de travaux..." notice filed as type_marche=Fournitures). Bare
+#     words like "travaux" or "réalisation" were tried and rejected: in the
+#     same sample they misfired on 27 genuinely different Supply/Services
+#     notices that only mention the word in passing (a maintenance-oversight
+#     "mission", a medical-prevention services contract, etc.) — the same
+#     false-positive shape F2's rental scoping already guards against, so
+#     these stay full phrases, not bare words.
 construction_works:
   cpv_prefix: "45"
+  category: "Works"
+  terms:
+    en: [construction works, renovation works, refurbishment works, design and build]
+    fr: [travaux de construction, travaux de renovation, travaux de rehabilitation,
+         marche de travaux, conception-realisation]
+    nl: [bouwwerkzaamheden, renovatiewerken, verbouwingswerken]
+    de: [Bauarbeiten, Renovierungsarbeiten, Sanierungsarbeiten]

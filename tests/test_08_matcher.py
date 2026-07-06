@@ -37,3 +37,30 @@ def test_classify_both():
 
 def test_classify_none_when_nothing_matched():
     assert classify_match(False, []) is None
+
+
+# ── French elision ("d'X" -> "de X") — real gap found 2026-07 via the
+# calibration export: a phrase term ending in "de" was missing notices worded
+# with the elided "d'" form (used before a vowel-starting word).
+
+def test_elision_matches_the_apostrophe_form():
+    assert match_keywords("Location d'engins de chantier", ["location de"]) == ["location de"]
+
+def test_elision_does_not_break_the_unelided_form():
+    assert match_keywords("Location de materiel", ["location de"]) == ["location de"]
+
+def test_elision_the_actual_boamp_notice_that_was_missed():
+    # real title (TED's English-page copy of a BOAMP notice) that slipped past
+    # F2's rental exclusion before match.py folded elision — see
+    # config/exclusions.yaml's rental note.
+    tag_line = ("LOCATION D'ENGINS ET DE MATERIELS, DE VEHICULES UTILITAIRES, "
+                "DE MOBILIER, DE MATERIELS DIVERS POUR LES RECEPTIONS ET EVENEMENTS "
+                "DE LA VILLE DE TOURS ET DE TOURS METROPOLE VAL DE LOIRE")
+    assert match_keywords(tag_line, ["location de", "en location"]) == ["location de"]
+
+def test_elision_fold_does_not_fire_mid_word():
+    # "aujourd'hui" has no word boundary before its "d'" (preceded by "r") —
+    # must be left alone, not rewritten into nonsense like "aujourde hui".
+    from match import _fold
+    assert _fold("aujourd'hui") == "aujourd'hui"
+    assert _fold("Location d'engins") == "location de engins"
