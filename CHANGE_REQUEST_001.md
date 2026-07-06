@@ -211,6 +211,22 @@ mechanism from D1. Don't block Phase 1 on it.
   onto `config.cpv_codes()` + `distinctive_keywords()` instead; worth
   confirming with the customer that matches their intent.
 
+- **2026-07-06 — CR-001 fully worked through; C1 scoping mismatch flagged.**
+  F1–F8, D-DUP, R1, R2, R3 are all done and tested (`pytest -q`: 243
+  passing). C1 (Composer ingest translation) is correctly left not-started:
+  checked `frontend/src/pages/composer/ComposerIngest.tsx` and there is no
+  ingest pipeline to hook translation into yet — it's hardcoded preview
+  data (`PREVIEW_DOCS`/`PREVIEW_REQS` arrays, comment: "API not yet
+  built"), no `/api/composer/*` routes exist in `src/api.py`, and no
+  document-parsing/requirement-extraction code exists anywhere in `src/`.
+  This matches `TENDERIZER_HANDOFF.md` §9 ("Composer... do NOT build now"),
+  but means C1 as CR-001 describes it ("implement behind the existing
+  Composer scaffolding") isn't actually a small addition — it would require
+  building the whole ingest pipeline first. Flagging this scoping mismatch
+  for whoever picks up Composer as a real Phase-2 build later: C1 is not a
+  translation bolt-on, it's blocked on Composer's ingest system not
+  existing yet.
+
 ## Suggested order (safest first)
 
 1. R2 (CPV display dedupe) — pure frontend, low risk.
