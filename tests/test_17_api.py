@@ -173,6 +173,26 @@ def test_keywords_config_round_trips_per_tenant(tmp_path, monkeypatch):
     assert api.get_keywords_config(tenant_id=999)["distinctive"] != ["widget"]  # untouched
 
 
+def test_settings_config_round_trips_per_tenant(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = store.init_db(db_path)
+    store.ensure_tenant(conn, 999)
+
+    api.put_settings_config(
+        api.SettingsBody(run_frequency="weekly", notify_on_complete=True, notify_email="a@b.com"),
+        tenant_id=TEST_TENANT_ID)
+
+    mine = api.get_settings_config(tenant_id=TEST_TENANT_ID)
+    assert mine["run_frequency"] == "weekly"
+    assert mine["notify_on_complete"] is True
+    assert mine["notify_email"] == "a@b.com"
+
+    other = api.get_settings_config(tenant_id=999)
+    assert other["run_frequency"] == "daily"  # untouched
+    assert other["notify_on_complete"] is False
+
+
 # ── Reports (phase2/3 step 6 follow-up) ─────────────────────────────────────
 # GET /api/reports/latest used to be ops-gated (require_ops_access, a static
 # shared secret) with a single shared REPORT_PATH — a pre-multi-tenancy

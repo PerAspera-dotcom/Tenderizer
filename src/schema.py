@@ -120,3 +120,18 @@ tenant_portals = Table(
     Column("enabled", Boolean, nullable=False),
     PrimaryKeyConstraint("tenant_id", "name"),
 )
+
+# Phase2/3 Settings screen follow-up: stored preferences only. There is no
+# scheduler (phase 3, not started — run_frequency/run_window_* are read by
+# nothing yet, runs still happen via POST /api/run or the CLI script) and no
+# email/SMTP provider (notify_on_complete/notify_email are equally inert).
+# Same single-row-per-tenant shape as tenant_keywords.
+tenant_settings = Table(
+    "tenant_settings", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("run_frequency", Text, nullable=False, server_default="daily"),        # "daily" | "weekly" | "paused"
+    Column("run_window_start", Text, nullable=False, server_default="02:00"),     # "HH:MM"
+    Column("run_window_end", Text, nullable=False, server_default="06:00"),       # "HH:MM"
+    Column("notify_on_complete", Boolean, nullable=False, server_default="0"),
+    Column("notify_email", Text, nullable=False, server_default=""),
+)

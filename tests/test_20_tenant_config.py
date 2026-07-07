@@ -76,3 +76,36 @@ def test_two_tenants_have_independent_enabled_portals(tmp_path):
     store.set_tenant_portal_enabled(conn, 2, "BOAMP", False)
     assert store.get_enabled_portal_names(conn, 2) == {"TED"}
     assert store.get_enabled_portal_names(conn, 1) == {"TED", "BOAMP"}  # tenant 1 untouched
+
+
+def test_ensure_tenant_seeds_settings_defaults(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    assert store.get_tenant_settings(conn, 1) == {
+        "run_frequency": "daily", "run_window_start": "02:00", "run_window_end": "06:00",
+        "notify_on_complete": False, "notify_email": "",
+    }
+
+
+def test_set_tenant_settings_merges_only_provided_keys(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.set_tenant_settings(conn, 1, {"notify_on_complete": True, "notify_email": "a@b.com"})
+    after = store.get_tenant_settings(conn, 1)
+    assert after["notify_on_complete"] is True
+    assert after["notify_email"] == "a@b.com"
+    assert after["run_frequency"] == "daily"  # untouched
+    assert after["run_window_start"] == "02:00"  # untouched
+
+
+def test_two_tenants_have_independent_settings(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.ensure_tenant(conn, 2)
+    store.set_tenant_settings(conn, 2, {"run_frequency": "weekly"})
+    assert store.get_tenant_settings(conn, 2)["run_frequency"] == "weekly"
+    assert store.get_tenant_settings(conn, 1)["run_frequency"] == "daily"  # untouched
+
+
+def test_ensure_tenant_does_not_clobber_customised_settings(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.set_tenant_settings(conn, 1, {"run_frequency": "paused"})
+    store.ensure_tenant(conn, 1)
+    assert store.get_tenant_settings(conn, 1)["run_frequency"] == "paused"

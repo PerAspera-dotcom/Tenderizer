@@ -51,6 +51,14 @@ export interface KeywordsConfig {
   distinctive: string[];
 }
 
+export interface SettingsConfig {
+  run_frequency: 'daily' | 'weekly' | 'paused' | string;
+  run_window_start: string;
+  run_window_end: string;
+  notify_on_complete: boolean;
+  notify_email: string;
+}
+
 export interface PortalHealth {
   name: string;
   region: string;

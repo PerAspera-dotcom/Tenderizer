@@ -12,6 +12,7 @@ import ReviewQueue from './pages/scout/ReviewQueue';
 import CpvConfig from './pages/scout/CpvConfig';
 import KeywordsConfig from './pages/scout/KeywordsConfig';
 import Reports from './pages/scout/Reports';
+import Settings from './pages/scout/Settings';
 import VaultLibrary from './pages/vault/VaultLibrary';
 import ComposerIngest from './pages/composer/ComposerIngest';
 import ProposalReview from './pages/composer/ProposalReview';
@@ -32,7 +33,7 @@ function Router() {
     '/scout/cpv': <Layout><CpvConfig /></Layout>,
     '/scout/keywords': <Layout><KeywordsConfig /></Layout>,
     '/scout/reports': <Layout><Reports /></Layout>,
-    '/scout/settings': <Layout><StubPage title="Settings" subtitle="Schedule, notifications and run window" /></Layout>,
+    '/scout/settings': <Layout><Settings /></Layout>,
     '/vault/library': <Layout><VaultLibrary /></Layout>,
     '/vault/rules': <Layout><StubPage title="Metadata Rules" subtitle="Define extraction rules for Vault documents" /></Layout>,
     '/vault/collections': <Layout><StubPage title="Collections" subtitle="Group and tag your document library" /></Layout>,

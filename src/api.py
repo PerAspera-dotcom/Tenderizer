@@ -363,6 +363,25 @@ def put_keywords_config(body: KeywordsBody, tenant_id: int = Depends(get_current
     return {"saved": True}
 
 
+class SettingsBody(BaseModel):
+    run_frequency:      Optional[str]  = None
+    run_window_start:   Optional[str]  = None
+    run_window_end:     Optional[str]  = None
+    notify_on_complete: Optional[bool] = None
+    notify_email:       Optional[str]  = None
+
+@app.get("/api/config/settings")
+def get_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_tenant_settings(_db(), tenant_id)
+
+@app.put("/api/config/settings")
+def put_settings_config(body: SettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
+    # Stored preferences only — no scheduler or email/SMTP infra reads these
+    # yet (see schema.py's tenant_settings comment).
+    store.set_tenant_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
+    return {"saved": True}
+
+
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/reports/latest")

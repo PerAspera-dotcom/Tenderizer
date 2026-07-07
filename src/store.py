@@ -25,7 +25,7 @@ import db
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
 from schema import metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
-from schema import tenants, tenders, translations
+from schema import tenant_settings, tenants, tenders, translations
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -154,6 +154,7 @@ def _seed_tenant_config(conn, tenant_id):
             c.execute(insert(tenant_portals).values(
                 tenant_id=tenant_id, name=portal["name"],
                 type=portal.get("type", "api"), enabled=bool(portal.get("enabled", True))))
+    set_tenant_settings(conn, tenant_id, {})
 
 
 # ── Per-tenant config (step 5) ───────────────────────────────────────────────
@@ -221,6 +222,51 @@ def set_tenant_portal_enabled(conn, tenant_id, name, enabled):
         c.execute(update(tenant_portals).where(
             (tenant_portals.c.tenant_id == tenant_id) & (tenant_portals.c.name == name)
         ).values(enabled=enabled))
+
+
+_DEFAULT_SETTINGS = {
+    "run_frequency": "daily",
+    "run_window_start": "02:00",
+    "run_window_end": "06:00",
+    "notify_on_complete": False,
+    "notify_email": "",
+}
+
+
+def get_tenant_settings(conn, tenant_id):
+    """Stored preferences only — see schema.py's tenant_settings comment for
+    why nothing downstream reads run_frequency/run_window_*/notify_* yet.
+    """
+    with conn.connect() as c:
+        row = c.execute(select(
+            tenant_settings.c.run_frequency, tenant_settings.c.run_window_start,
+            tenant_settings.c.run_window_end, tenant_settings.c.notify_on_complete,
+            tenant_settings.c.notify_email,
+        ).where(tenant_settings.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return dict(_DEFAULT_SETTINGS)
+    return {
+        "run_frequency": row[0], "run_window_start": row[1], "run_window_end": row[2],
+        "notify_on_complete": bool(row[3]), "notify_email": row[4],
+    }
+
+
+def set_tenant_settings(conn, tenant_id, data):
+    """Merge semantics, like set_tenant_keywords: only overwrites the keys
+    present in `data`, leaving the rest untouched.
+    """
+    current = get_tenant_settings(conn, tenant_id)
+    for key in _DEFAULT_SETTINGS:
+        if key in data:
+            current[key] = data[key]
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_settings.c.tenant_id).where(
+            tenant_settings.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_settings).where(
+                tenant_settings.c.tenant_id == tenant_id).values(**current))
+        else:
+            c.execute(insert(tenant_settings).values(tenant_id=tenant_id, **current))
 
 
 def upsert(conn, tenant_id, record):
