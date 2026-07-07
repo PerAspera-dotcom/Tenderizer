@@ -119,16 +119,25 @@ def check_no_core_signal(rec, exclusions, now=None):
     now only the seed default for a new tenant, not the live config). Falls
     back to config.distinctive_keywords() for callers that pass a plain
     exclusions.yaml dict with no tenant context (e.g. this module's own tests).
+
+    match_source == "none"/empty (no CPV, no keyword hit at all) used to be
+    waved through here on the assumption that TED/BOAMP's fetch queries
+    already scope tightly enough that a genuinely signal-less record could
+    never reach this point. Real data proved that false: BOAMP and TED both
+    fetch broadly enough that most of what comes back has no match at all
+    (486 of 568 non-excluded records for one real tenant) — exactly the
+    "notice must carry a real CPV signal or at least one distinctive
+    keyword" case this check exists to catch, so it now falls through to the
+    same no_core_signal exclusion as an unmatched keyword-only hit.
     """
     if rec.get("match_source") in ("cpv", "both"):
         return None
-    if rec.get("match_source") != "keyword":
-        return None  # no signal at all — not this check's concern
-    distinctive = exclusions.get("_distinctive_keywords")
-    if distinctive is None:
-        distinctive = config.distinctive_keywords()
-    if set(rec.get("matched_terms") or []) & set(distinctive):
-        return None
+    if rec.get("match_source") == "keyword":
+        distinctive = exclusions.get("_distinctive_keywords")
+        if distinctive is None:
+            distinctive = config.distinctive_keywords()
+        if set(rec.get("matched_terms") or []) & set(distinctive):
+            return None
     return "no_core_signal"
 
 

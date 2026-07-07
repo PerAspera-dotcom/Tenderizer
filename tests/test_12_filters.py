@@ -18,7 +18,10 @@ D5_CODES = {"44211000", "44211100", "44211110", "44211200",
 
 
 def _rec(tag_line="", description="", cpv_codes=None, deadline="", value_eur=None,
-         match_source=None, matched_terms=None, category=None):
+         match_source="cpv", matched_terms=None, category=None):
+    # match_source defaults to "cpv" (a real signal) so tests of F1/F2/F3/F6
+    # in isolation aren't incidentally caught by F5's core-signal check —
+    # tests of F5 itself (below) always pass match_source explicitly anyway.
     return {"tag_line": tag_line, "description": description,
             "cpv_codes": cpv_codes or [], "deadline": deadline, "value_eur": value_eur,
             "match_source": match_source, "matched_terms": matched_terms or [],
@@ -300,7 +303,20 @@ def test_keyword_only_mixed_generic_and_distinctive_is_kept():
     assert filters.apply_filters(rec, EXCLUSIONS) is None
 
 
-def test_no_match_source_is_untouched_by_this_check():
-    # match_source=None means nothing matched at all — not F5's concern.
+def test_no_match_source_at_all_is_excluded():
+    # match_source=None means no CPV and no keyword hit — the exact case F5's
+    # "must carry a real CPV signal or at least one distinctive keyword" rule
+    # is meant to catch, not an exemption from it. Regression: this used to be
+    # waved through, letting hundreds of genuinely unmatched notices flood the
+    # Review Queue in real data (486 of 568 non-excluded records for one
+    # tenant had match_source == "").
     rec = _rec("Unrelated notice", match_source=None, matched_terms=[])
-    assert filters.apply_filters(rec, EXCLUSIONS) is None
+    assert filters.apply_filters(rec, EXCLUSIONS) == "no_core_signal"
+
+
+def test_empty_string_match_source_is_excluded():
+    # Same case as above but via the empty-string shape match_source actually
+    # takes once round-tripped through the DB (TEXT NOT NULL, default ''),
+    # rather than the Python None used in in-memory tests/fixtures.
+    rec = _rec("Unrelated notice", match_source="", matched_terms=[])
+    assert filters.apply_filters(rec, EXCLUSIONS) == "no_core_signal"
