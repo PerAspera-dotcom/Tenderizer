@@ -25,8 +25,16 @@ from typing import Optional
 
 ROOT          = _HERE.parent
 DB_PATH       = str(ROOT / "data" / "tenders.db")
-REPORT_PATH   = str(ROOT / "reports" / "tenders.xlsx")
 LAST_RUN_PATH = str(ROOT / "data" / "last_run.json")
+
+
+def _report_path(tenant_id: int) -> str:
+    """Per-tenant report path (phase2/3 step 6 follow-up). Used to be a single
+    shared REPORT_PATH constant — a pre-multi-tenancy leftover that meant
+    every tenant's /api/run overwrote the same reports/tenders.xlsx and
+    GET /api/reports/latest served whoever ran last, regardless of caller.
+    """
+    return str(ROOT / "reports" / f"tenders_{tenant_id}.xlsx")
 
 DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
 
@@ -296,7 +304,7 @@ def _do_run(tenant_id):
     conn    = _db()
     store.ensure_tenant(conn, tenant_id)
     sources = engine._default_sources(conn, tenant_id, since)
-    engine.run_pipeline(sources, DB_PATH, REPORT_PATH, tenant_id=tenant_id)
+    engine.run_pipeline(sources, DB_PATH, _report_path(tenant_id), tenant_id=tenant_id)
 
 @app.post("/api/run")
 def post_run(background: BackgroundTasks, tenant_id: int = Depends(get_current_tenant_id)):
@@ -358,14 +366,17 @@ def put_keywords_config(body: KeywordsBody, tenant_id: int = Depends(get_current
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/reports/latest")
-def get_latest_report(_: None = Depends(require_ops_access)):
-    # Ops-gated, not tenant-gated (see require_ops_access) — also unrelated
-    # to the pre-existing gap that REPORT_PATH is a single shared file
-    # rather than tenant-scoped; that's still not fixed here.
-    if not os.path.exists(REPORT_PATH):
+def get_latest_report(tenant_id: int = Depends(get_current_tenant_id)):
+    # Tenant-gated (phase2/3 step 6 follow-up) — was require_ops_access
+    # (a static shared secret), which meant no real tenant's Clerk session
+    # could ever call this. Now paired with _report_path's per-tenant file,
+    # so this also closes the cross-tenant leak a same-path-for-everyone
+    # report would have reopened under a tenant-callable auth check.
+    path = _report_path(tenant_id)
+    if not os.path.exists(path):
         raise HTTPException(404, "No report found — run the pipeline first")
     return FileResponse(
-        REPORT_PATH,
+        path,
         filename="tenders.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )

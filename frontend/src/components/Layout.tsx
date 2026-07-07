@@ -46,7 +46,7 @@ const SCOUT_NAV: NavItem[] = [
 ];
 
 const STUB_PATHS = [
-  '/scout/portals', '/scout/cpv', '/scout/keywords', '/scout/reports', '/scout/settings',
+  '/scout/portals', '/scout/settings',
   '/vault/rules', '/vault/collections', '/vault/settings',
   '/composer/style', '/composer/settings',
 ];

@@ -11,6 +11,7 @@ import TenderFeed from './pages/scout/TenderFeed';
 import ReviewQueue from './pages/scout/ReviewQueue';
 import CpvConfig from './pages/scout/CpvConfig';
 import KeywordsConfig from './pages/scout/KeywordsConfig';
+import Reports from './pages/scout/Reports';
 import VaultLibrary from './pages/vault/VaultLibrary';
 import ComposerIngest from './pages/composer/ComposerIngest';
 import ProposalReview from './pages/composer/ProposalReview';
@@ -30,7 +31,7 @@ function Router() {
     '/scout/portals': <Layout><StubPage title="Portals & Health" subtitle="Per-portal throughput and ToS compliance" /></Layout>,
     '/scout/cpv': <Layout><CpvConfig /></Layout>,
     '/scout/keywords': <Layout><KeywordsConfig /></Layout>,
-    '/scout/reports': <Layout><StubPage title="Reports" subtitle="Weekly digest and Excel export" /></Layout>,
+    '/scout/reports': <Layout><Reports /></Layout>,
     '/scout/settings': <Layout><StubPage title="Settings" subtitle="Schedule, notifications and run window" /></Layout>,
     '/vault/library': <Layout><VaultLibrary /></Layout>,
     '/vault/rules': <Layout><StubPage title="Metadata Rules" subtitle="Define extraction rules for Vault documents" /></Layout>,

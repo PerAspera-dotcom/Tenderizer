@@ -171,3 +171,37 @@ def test_keywords_config_round_trips_per_tenant(tmp_path, monkeypatch):
 
     assert api.get_keywords_config(tenant_id=TEST_TENANT_ID)["distinctive"] == ["widget"]
     assert api.get_keywords_config(tenant_id=999)["distinctive"] != ["widget"]  # untouched
+
+
+# ── Reports (phase2/3 step 6 follow-up) ─────────────────────────────────────
+# GET /api/reports/latest used to be ops-gated (require_ops_access, a static
+# shared secret) with a single shared REPORT_PATH — a pre-multi-tenancy
+# leftover. Now tenant-gated like every other config/data endpoint, backed by
+# _report_path(tenant_id) so one tenant can never be served another tenant's
+# report file.
+
+def test_get_latest_report_serves_only_the_calling_tenants_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "ROOT", tmp_path)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / f"tenders_{TEST_TENANT_ID}.xlsx").write_bytes(b"tenant-1-report")
+    (reports_dir / "tenders_999.xlsx").write_bytes(b"tenant-999-report")
+
+    resp = api.get_latest_report(tenant_id=TEST_TENANT_ID)
+    assert resp.path == str(reports_dir / f"tenders_{TEST_TENANT_ID}.xlsx")
+
+    other = api.get_latest_report(tenant_id=999)
+    assert other.path == str(reports_dir / "tenders_999.xlsx")
+    assert other.path != resp.path
+
+
+def test_get_latest_report_404s_when_this_tenant_has_never_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "ROOT", tmp_path)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "tenders_999.xlsx").write_bytes(b"someone else's report")
+
+    try:
+        api.get_latest_report(tenant_id=TEST_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404

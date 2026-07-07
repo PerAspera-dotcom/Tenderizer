@@ -134,6 +134,20 @@ export function putKeywordsConfig(body: PutKeywordsBody): Promise<{ saved: boole
   });
 }
 
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+export class ReportNotFoundError extends Error {}
+
+export async function getLatestReportBlob(): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const r = await fetch(BASE + '/api/reports/latest', { headers });
+  if (r.status === 404) throw new ReportNotFoundError('No report found');
+  if (!r.ok) throw new Error(`${r.status} /api/reports/latest`);
+  return r.blob();
+}
+
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
 export function listVaultDocs(q?: string): Promise<{ total: number; processing: number; results: VaultDoc[] }> {
