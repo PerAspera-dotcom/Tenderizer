@@ -46,6 +46,11 @@ export interface CpvConfigEntry {
   category: string | null;
 }
 
+export interface KeywordsConfig {
+  terms: Record<string, string[]>;
+  distinctive: string[];
+}
+
 export interface PortalHealth {
   name: string;
   region: string;

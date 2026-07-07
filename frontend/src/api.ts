@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession, CpvConfigEntry } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession, CpvConfigEntry, KeywordsConfig } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -112,6 +112,25 @@ export function putCpvConfig(codes: string[]): Promise<PutCpvResult> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ codes }),
+  });
+}
+
+// ── Keywords config ───────────────────────────────────────────────────────────
+
+export function getKeywordsConfig(): Promise<KeywordsConfig> {
+  return apiFetch<KeywordsConfig>('/api/config/keywords');
+}
+
+export interface PutKeywordsBody {
+  terms?: Record<string, string[]>;
+  distinctive?: string[];
+}
+
+export function putKeywordsConfig(body: PutKeywordsBody): Promise<{ saved: boolean }> {
+  return apiFetch('/api/config/keywords', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 }
 
