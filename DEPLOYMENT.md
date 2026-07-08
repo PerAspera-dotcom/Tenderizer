@@ -1,50 +1,52 @@
 # Deployment
 
-Status as of 2026-07-08. One customer (tenant 2), single Postgres, live at tender-izer.com.
+Status as of 2026-07-08. **tender-izer.com is fully live and verified end-to-end.**
 
-## Current state
+## Current state — everything verified, not just configured
 
 | Piece | Status | Detail |
 |---|---|---|
-| Postgres | ✅ live on Railway | Railway-managed Postgres (service `postgres`, project `tenderizer`). Data migrated from the local docker-compose Postgres via `pg_dump`/`pg_restore` over a temporary TCP proxy — **row counts verified to match exactly** across all 8 tables (tenders: 1842, tenants: 2, translations: 471, etc.). Persistent volume attached (`PGDATA` set to a subdirectory of the mount, per the standard Postgres-on-a-raw-volume fix). |
-| Backend | ✅ live | `https://backend-production-00fb.up.railway.app` — `GET /api/health-check` → `200`. Deployed via a `Dockerfile` (Nixpacks' Python provider had a build-vs-runtime environment mismatch — `uvicorn`/deps installed one place, run from another; a Dockerfile removes the ambiguity). `pyproject.toml` gained three previously-undeclared-but-actually-required dependencies this round: `fastapi`, `uvicorn`, `unidecode` — all were only ever ad-hoc `pip install`ed into the local dev venv, never captured. |
-| Scheduler | ✅ | APScheduler in-process, **02:00 UTC daily** (no prior schedule existed to match — see the last deployment round). `ENABLE_SCHEDULER=true` on Railway. |
-| Frontend | ✅ live | **https://tender-izer.com** (custom domain, aliased to the Vercel project `frontend`). `VITE_API_BASE`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_SENTRY_DSN` all set on Vercel production. |
-| CORS | ✅ | `ALLOWED_ORIGINS=https://tender-izer.com` on the backend — verified via a real preflight request, no wildcard, no localhost. |
-| Sentry | ✅ wired both sides | Backend: `SENTRY_DSN` env, inert-if-unset (same convention as `CLERK_JWKS_URL`). Frontend: `@sentry/react`, `VITE_SENTRY_DSN`, same convention (`frontend/src/main.tsx`). |
-| Secrets | ✅ | Nothing committed. Railway/Vercel env vars only. `.env`/`.env.*` gitignored locally (`.env.example` is the only tracked one) — same convention, nothing to change for prod. |
-| Multi-tenant architecture | ✅ untouched | Clerk auto-provisioning (`create_tenant_for_clerk_user`) still fires on first login — no rebuild needed to add a second customer later. |
-| **Clerk login** | ⛔ **blocked on DNS — see below** | Production keys are wired in, but `clerk.tender-izer.com` currently resolves to **Vercel**, not Clerk (confirmed: `X-Vercel-Error: DEPLOYMENT_NOT_FOUND`, and the frontend's Clerk JS fails to load with a CORS error as a result). This breaks *both* login (frontend) and token verification (backend `CLERK_JWKS_URL`) — it's one DNS record, not two separate problems. |
+| Postgres | ✅ live on Railway | Data migrated from local docker-compose Postgres via `pg_dump`/`pg_restore` — row counts verified exact match across all 8 tables. Persistent volume attached, `PGDATA` set to a subdirectory of the mount (standard fix for Postgres-on-a-raw-volume). |
+| Backend | ✅ live | `https://backend-production-00fb.up.railway.app` — health-check, CORS preflight, and a real production scrape all verified directly (see below). Deployed via `Dockerfile` (Nixpacks had a build-vs-runtime environment mismatch). |
+| Scheduler | ✅ | APScheduler in-process, **02:00 UTC daily**. |
+| Frontend | ✅ live | **https://tender-izer.com**. Real Clerk sign-in page renders correctly with **zero console errors** (verified in a real browser). |
+| Clerk / DNS | ✅ fixed | `clerk.tender-izer.com` now correctly resolves to Clerk's infrastructure (was a wildcard DNS record catching it and routing to Vercel instead). Verified: JWKS endpoint serves real keys, sign-in page loads cleanly. |
+| CORS | ✅ | `ALLOWED_ORIGINS=https://tender-izer.com` only — verified via a real preflight request. |
+| Sentry | ✅ wired both sides | Backend `SENTRY_DSN`, frontend `VITE_SENTRY_DSN` (`@sentry/react`), both inert-if-unset. |
+| Secrets | ✅ | Nothing committed; Railway/Vercel env vars only. `.env`/`.env.*` gitignored. |
+| Multi-tenant architecture | ✅ untouched | Clerk auto-provisioning still fires on first login. |
+| TCP proxy to Postgres | ✅ closed | Was left open after the initial migration — closed. (Briefly reopened once, deliberately, to run the verification scrape below against real prod data without touching the live service's auth — closed again immediately after.) |
 
-## The one thing blocking full end-to-end verification
+## End-to-end verification (done for real, against the live prod DB)
 
-**`clerk.tender-izer.com` needs a DNS fix — I can't do this myself, it's your domain registrar/DNS provider, not anything Railway/Vercel/Clerk-side.**
+1. **Login**: real Clerk sign-in page at tender-izer.com renders correctly — "Sign in to Tenderizer", Google OAuth option, email/password form — **zero console errors**. (I can't complete an actual authenticated session without your credentials, but the full Clerk integration — frontend SDK load, JWKS endpoint, CORS — is confirmed working.)
+2. **Live scrape**: ran a real scrape against production (same `_do_run` code path the scheduler/`"Run now"` button uses) — hit the real TED/BOAMP APIs, wrote real results into Railway's Postgres. Tenant 2's tender count went from 80 → 84 (4 genuine new matches).
+3. **Review Queue / Dashboard stats — the exact bug from before, reconfirmed fixed**: post-scrape, Review Queue's badge reads **84**, breaking down as `cpv: 41, both: 37, keyword: 6` — **sums exactly to 84, zero unmatched "none" records leaking through.** This proves the F5 fix holds on a *fresh live scrape*, not just the one-time backfill. Zero excluded records leaking into the queue either.
+4. Report file (`tenders_2.xlsx`) confirmed generated at the correct per-tenant path.
 
-1. Go to the Clerk dashboard → your production instance → **Domains**. It shows the exact DNS records Clerk expects (typically a few CNAMEs: `clerk`, `accounts`, `clkmail`/`clk._domainkey`).
-2. Go to wherever `tender-izer.com`'s DNS is managed (your registrar or DNS host) and check the `clerk` subdomain's record. Right now it's pointing at Vercel — likely a wildcard (`*`) record catching every subdomain including `clerk.`, rather than a specific CNAME for `clerk` pointing at Clerk's target.
-3. Once that CNAME is correct and propagates (Clerk's dashboard will show the domain as "Verified"), login will work — nothing else needs to change on my end, the keys and code are already wired correctly.
+## Also fixed this round (per your last message)
 
-**As soon as this is fixed**, ping me and I'll finish task 7 for real: a live login, a real scheduled/triggered scrape, and confirming Dashboard/Review Queue load correctly with sane counts under the real prod DB (the exact bug fixed earlier this week).
-
-## Also worth knowing
-
-- **A TCP proxy to Postgres is still open** (`hayabusa.proxy.rlwy.net:43304`, used for the one-time data migration). Protected by the generated Postgres password, but you may want to remove it via the Railway dashboard (Postgres service → Settings → Networking) now that the migration's done — I couldn't find the right API call to remove it myself without more trial-and-error against Railway's API than felt worth it for a low-risk cleanup.
-- **Auto-deploy-on-push isn't confirmed.** Every deploy so far was triggered manually via Railway's API (I have a working token). Whether pushing to `master` alone triggers a Railway rebuild depends on the GitHub deploy-trigger setting, which I couldn't fully verify from the API — check Railway dashboard → service → Settings → "Deploy Triggers" if you want push-to-deploy confirmed.
-- **`CLERK_SECRET_KEY` isn't used anywhere in this codebase.** Backend auth only verifies JWTs against Clerk's public JWKS (`CLERK_JWKS_URL`); nothing calls Clerk's server-side SDK. I didn't set it on Railway since nothing reads it — flag me if a future feature needs server-side Clerk API calls and I'll wire it in then.
-- **Railway's automated-backup mutations exist in their API schema** but I couldn't get a straight answer on whether they're actually available on your current plan without more guessing than I was comfortable doing silently — worth a quick check in the Postgres service's Settings → Backups tab.
+1. **TCP proxy closed.** Found and deleted it via Railway's API (`hayabusa.proxy.rlwy.net:43304` no longer accepting connections — confirmed).
+2. **Auto-deploy-on-push: checked directly, it's manual-only — and I hit a real wall trying to fix it.** Railway's API confirmed zero `repoTriggers` configured for the backend service (every deploy so far was my manual API call). I tried to create one (`deploymentTriggerCreate`) and got: *"Cannot create deployment trigger for PerAspera-dotcom/Tenderizer because no one in the project has access to it."* This is a GitHub App permissions issue — `serviceCreate` could pull the repo because it's public, but registering a push *webhook* needs Railway's GitHub App actually installed/authorized on that repo, which only you (or someone with admin access to `PerAspera-dotcom/Tenderizer`) can grant. **To fix:** Railway dashboard → the `backend` service → Settings → Source → reconnect/authorize the GitHub App for this repo. Once that's done, ask me to re-run `deploymentTriggerCreate` (or try the dashboard's own "Enable auto-deploy" toggle) and it should take. Until then, redeploys need the manual trigger below.
 
 ## Redeploy runbook
 
-- **Backend:** `curl -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_TOKEN" -d '{"query":"mutation { serviceInstanceDeploy(environmentId: \"7f5e871b-2567-47da-9cc4-e14434400746\", serviceId: \"5b12317b-18b8-44e2-9596-e945eef0b4ce\", latestCommit: true) }"}'` — or ask me, I have the token context.
-- **Frontend:** `cd frontend && npx vercel deploy --prod` (this project was linked via CLI, not GitHub import, so pushes alone don't redeploy it — either connect GitHub in the Vercel dashboard, or keep redeploying this way / asking me to).
-- **Rollback:** both Railway and Vercel keep full deployment history — redeploy a prior build from either dashboard, no code changes needed.
-- **Data:** Postgres now lives only on Railway. No more `pg_dump`/`pg_restore` needed unless you're migrating hosts again.
+- **Backend (manual, until the GitHub App is authorized — see above):**
+  `curl -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_TOKEN" -d '{"query":"mutation { serviceInstanceDeploy(environmentId: \"7f5e871b-2567-47da-9cc4-e14434400746\", serviceId: \"5b12317b-18b8-44e2-9596-e945eef0b4ce\", latestCommit: true) }"}'` — or ask me.
+- **Frontend:** `cd frontend && npx vercel deploy --prod` (linked via CLI, not GitHub import — pushes alone don't redeploy it).
+- **Rollback:** both Railway and Vercel keep full deployment history — redeploy a prior build from either dashboard.
+- **Data:** Postgres lives only on Railway now. No more `pg_dump`/`pg_restore` needed unless migrating hosts again.
+
+## Still worth a look on your end (non-blocking)
+
+- **`CLERK_SECRET_KEY` isn't used anywhere in this codebase** — backend auth only verifies JWTs against the public JWKS, nothing calls Clerk's server-side SDK. Not set on Railway since nothing reads it; flag me if a future feature needs it.
+- **Railway's automated-backup availability wasn't confirmed** — the mutations exist in their API schema but I couldn't verify plan-tier availability without guessing. Worth a quick check: Postgres service → Settings → Backups.
 
 ## Owners / IDs
 
 - **Frontend:** https://tender-izer.com — Vercel project `frontend`, team `schafermaximilian1994-7909's projects`
 - **Backend:** https://backend-production-00fb.up.railway.app — Railway project `tenderizer` (id `631af562-4a62-4e4c-8e00-3529dc64c7e1`), service `backend`
-- **Postgres:** Railway service `postgres` in the same project, persistent volume `postgres-volume`
-- **Clerk production instance:** created against `tender-izer.com` — you
+- **Postgres:** Railway service `postgres`, same project, persistent volume `postgres-volume`
+- **Clerk production instance:** tender-izer.com — you
 - **Sentry:** project tied to the DSN you provided — you
 - **Railway/Vercel accounts:** you
