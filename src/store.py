@@ -88,6 +88,20 @@ def get_tenant_id_by_clerk_user_id(conn, clerk_user_id):
     return row[0] if row else None
 
 
+def list_provisioned_tenant_ids(conn):
+    """Tenant ids with a real Clerk user attached — excludes DEFAULT_TENANT_ID's
+    seed/pre-multi-tenancy row (clerk_user_id is empty/None there), which
+    nobody is actually logged into. Used by the in-process daily scheduler
+    (prod) to know which tenants to run — it must not re-scrape on behalf of
+    a tenant no customer owns.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(tenants.c.id).where(
+            (tenants.c.clerk_user_id.isnot(None)) & (tenants.c.clerk_user_id != "")
+        )).fetchall()
+    return [r[0] for r in rows]
+
+
 def create_tenant_for_clerk_user(conn, clerk_user_id, email=None):
     """Auto-provision a brand-new tenant on a Clerk user's first login (step
     6) — unlike ensure_tenant(), the id isn't known ahead of time; the DB

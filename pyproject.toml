@@ -11,6 +11,10 @@ dependencies = [
     "alembic",
     "psycopg2-binary",
     "pyjwt[crypto]",
+    "fastapi",
+    "uvicorn[standard]",
+    "apscheduler",
+    "sentry-sdk[fastapi]",
 ]
 
 [tool.setuptools.packages.find]

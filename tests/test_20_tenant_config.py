@@ -109,3 +109,18 @@ def test_ensure_tenant_does_not_clobber_customised_settings(tmp_path):
     store.set_tenant_settings(conn, 1, {"run_frequency": "paused"})
     store.ensure_tenant(conn, 1)
     assert store.get_tenant_settings(conn, 1)["run_frequency"] == "paused"
+
+
+def test_list_provisioned_tenant_ids_excludes_the_seed_tenant(tmp_path):
+    # DEFAULT_TENANT_ID (1) has no clerk_user_id — nobody is logged into it,
+    # so the prod scheduler must not run a scrape on its behalf.
+    conn = store.init_db(str(tmp_path / "t.db"))
+    assert store.list_provisioned_tenant_ids(conn) == []
+
+
+def test_list_provisioned_tenant_ids_returns_real_clerk_tenants(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.create_tenant_for_clerk_user(conn, "user_abc123")
+    ids = store.list_provisioned_tenant_ids(conn)
+    assert len(ids) == 1
+    assert ids[0] != 1

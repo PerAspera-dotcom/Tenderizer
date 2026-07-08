@@ -3,7 +3,8 @@
 No matching, normalisation, or fetching logic lives here.
 Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
-import sys, pathlib, json, os
+import sys, pathlib, json, logging, os
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from dotenv import load_dotenv
 
@@ -12,6 +13,13 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 load_dotenv()
+
+# Optional — a no-op unless SENTRY_DSN is set (same "unconfigured = inert, not
+# an error" convention as CLERK_JWKS_URL/OPS_API_TOKEN elsewhere in this file).
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
 import store, config, auth
 import run as engine
@@ -49,7 +57,23 @@ def parse_allowed_origins(env_value):
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Tenderizer API")
+_scheduler = None
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    global _scheduler
+    if os.getenv("ENABLE_SCHEDULER", "true").lower() == "true":
+        from apscheduler.schedulers.background import BackgroundScheduler
+        _scheduler = BackgroundScheduler(timezone="UTC")
+        _scheduler.add_job(_run_all_tenants, "cron", hour=2, minute=0, id="daily_scrape")
+        _scheduler.start()
+    yield
+    if _scheduler is not None and _scheduler.running:
+        _scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Tenderizer API", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=parse_allowed_origins(os.getenv("ALLOWED_ORIGINS")),
@@ -310,6 +334,28 @@ def _do_run(tenant_id):
 def post_run(background: BackgroundTasks, tenant_id: int = Depends(get_current_tenant_id)):
     background.add_task(_do_run, tenant_id)
     return {"status": "started"}
+
+
+# ── Scheduled run (prod) ─────────────────────────────────────────────────────
+# Replaces Windows Task Scheduler (local dev never actually had a scheduled
+# task configured — every run so far was a manual "Run now" click, so there
+# was no existing cadence to match). Runs in-process via APScheduler rather
+# than a separate host-level cron job, since a single always-on service is
+# simpler to operate than coordinating two processes for one low-traffic
+# customer. Started/stopped from _lifespan above; ENABLE_SCHEDULER defaults
+# on, set to "false" to disable (e.g. if ever running more than one instance
+# of this service, so only one of them schedules).
+
+def _run_all_tenants():
+    conn = _db()
+    for tenant_id in store.list_provisioned_tenant_ids(conn):
+        try:
+            _do_run(tenant_id)
+        except Exception:
+            # One tenant's failure must not skip the rest. run.py's own
+            # health dict already isolates per-source failures within a
+            # single tenant's run; this is the same principle one level up.
+            logging.exception(f"scheduled run failed for tenant {tenant_id}")
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
