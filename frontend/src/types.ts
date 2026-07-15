@@ -88,6 +88,15 @@ export interface FollowupEntry extends PipelineEntry {
   outcome: string;
 }
 
+// CR-002 E: minimal document upload slice (shortlisted tenders only)
+export interface DocumentEntry {
+  id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+  uploaded_at: string;
+}
+
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
 export interface VaultDoc {

@@ -13,6 +13,7 @@ dependencies = [
     "pyjwt[crypto]",
     "unidecode",
     "fastapi",
+    "python-multipart",
     "uvicorn[standard]",
     "apscheduler",
     "sentry-sdk[fastapi]",

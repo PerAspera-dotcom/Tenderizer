@@ -96,6 +96,24 @@ pipeline = Table(
 
 PIPELINE_COLUMNS = [c.name for c in pipeline.columns]
 
+# CR-002 E (D-C decided: minimal slice now — upload + store only, no
+# requirement parsing/translation; that full pipeline is Composer's Phase 2
+# Ingest & Config, POST /api/composer/ingest, deliberately not built here).
+# `storage_path` is a server-generated (uuid-based) on-disk path, never the
+# user-supplied filename, so a malicious filename can't path-traverse; the
+# original name is kept separately, display-only, in `filename`.
+documents = Table(
+    "documents", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False, server_default=""),
+    Column("size", Integer, nullable=False, server_default="0"),
+    Column("storage_path", Text, nullable=False),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
+)
+
 translations = Table(
     "translations", metadata,
     Column("content_hash", String, primary_key=True),

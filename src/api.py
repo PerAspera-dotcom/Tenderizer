@@ -3,7 +3,7 @@
 No matching, normalisation, or fetching logic lives here.
 Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
-import sys, pathlib, json, logging, os
+import sys, pathlib, json, logging, os, uuid
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ if _sentry_dsn:
 import store, config, auth
 import run as engine
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -43,6 +43,11 @@ def _report_path(tenant_id: int) -> str:
     GET /api/reports/latest served whoever ran last, regardless of caller.
     """
     return str(ROOT / "reports" / f"tenders_{tenant_id}.xlsx")
+
+# CR-002 E: per-tenant upload root, tenant_id in the path itself as a second
+# layer of isolation beyond the DB-row tenant check in get_document().
+UPLOAD_DIR = ROOT / "data" / "uploads"
+MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB — a minimal-slice sanity cap, not a product decision
 
 DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
 
@@ -516,6 +521,72 @@ def patch_followup(pub_number: str, body: FollowupPatch,
     store.ensure_pipeline_entry(conn, tenant_id, pub_number)
     store.set_pipeline_entry(conn, tenant_id, pub_number, {"outcome": body.outcome})
     return {"pub_number": pub_number, "outcome": body.outcome}
+
+
+# ── Documents (CR-002 E) — minimal upload slice, shortlisted tenders only ───
+# D-C decided: upload + store only, no requirement parsing/translation — that
+# full pipeline is Composer's Phase 2 Ingest & Config (POST /api/composer/
+# ingest), deliberately not built here. Scoped tightly to shortlisted tenders
+# so this can't grow into a parallel, untethered upload feature.
+
+def _find_tender(conn, tenant_id, pub_number):
+    for r in store.all_records(conn, tenant_id):
+        if r["pub_number"] == pub_number:
+            return r
+    return None
+
+
+@app.post("/api/tenders/{pub_number}/documents")
+async def upload_document(pub_number: str, file: UploadFile = File(...),
+                           tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    tender = _find_tender(conn, tenant_id, pub_number)
+    if tender is None:
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    if tender.get("status") != "shortlisted":
+        raise HTTPException(409, "Documents can only be uploaded for shortlisted tenders")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, "File too large")
+
+    tenant_dir = UPLOAD_DIR / str(tenant_id) / pub_number
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    # Server-generated name — the user-supplied filename is never used as a
+    # path component (see schema.py's documents comment).
+    ext = pathlib.Path(file.filename or "").suffix[:10]
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    storage_path = tenant_dir / stored_name
+    storage_path.write_bytes(content)
+
+    doc_id = store.add_document(conn, tenant_id, pub_number, file.filename or stored_name,
+                                 file.content_type, len(content), str(storage_path))
+    doc = store.get_document(conn, tenant_id, doc_id)
+    return {"id": doc_id, "filename": doc["filename"], "content_type": doc["content_type"],
+            "size": doc["size"], "uploaded_at": doc["uploaded_at"]}
+
+
+@app.get("/api/tenders/{pub_number}/documents")
+def list_documents(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    if _find_tender(conn, tenant_id, pub_number) is None:
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    return store.list_documents(conn, tenant_id, pub_number)
+
+
+@app.get("/api/documents/{document_id}")
+def download_document(document_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    doc = store.get_document(_db(), tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    if not os.path.exists(doc["storage_path"]):
+        raise HTTPException(404, "Document not found")
+    return FileResponse(doc["storage_path"], filename=doc["filename"],
+                         media_type=doc["content_type"] or "application/octet-stream")
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

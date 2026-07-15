@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, DocumentEntry, VaultDoc, ComposerSession, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -96,6 +96,30 @@ export function patchFollowup(pub_number: string, outcome: string): Promise<unkn
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ outcome }),
   });
+}
+
+// ── Documents (CR-002 E, shortlisted tenders only) ───────────────────────────
+
+export function listDocuments(pub_number: string): Promise<DocumentEntry[]> {
+  return apiFetch<DocumentEntry[]>(`/api/tenders/${encodeURIComponent(pub_number)}/documents`);
+}
+
+export function uploadDocument(pub_number: string, file: File): Promise<DocumentEntry> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetch<DocumentEntry>(`/api/tenders/${encodeURIComponent(pub_number)}/documents`, {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export async function downloadDocumentBlob(id: number): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const r = await fetch(`${BASE}/api/documents/${id}`, { headers });
+  if (!r.ok) throw new Error(`${r.status} /api/documents/${id}`);
+  return r.blob();
 }
 
 // ── CPV config ────────────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ import config
 import db
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
-from schema import metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
+from schema import documents, metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
 from schema import tenant_settings, tenants, tenders, translations
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
@@ -475,6 +475,45 @@ def get_pipeline_entries(conn, tenant_id):
             rec[col] = json.loads(rec[col] or "[]")
         out.append(rec)
     return out
+
+
+def add_document(conn, tenant_id, pub_number, filename, content_type, size, storage_path):
+    with conn.begin() as c:
+        result = c.execute(insert(documents).values(
+            tenant_id=tenant_id, pub_number=pub_number, filename=filename,
+            content_type=content_type or "", size=size, storage_path=storage_path,
+            uploaded_at=date.today().isoformat()))
+        return result.inserted_primary_key[0]
+
+
+def list_documents(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            documents.c.id, documents.c.filename, documents.c.content_type,
+            documents.c.size, documents.c.uploaded_at,
+        ).where(
+            (documents.c.tenant_id == tenant_id) & (documents.c.pub_number == pub_number)
+        ).order_by(documents.c.id)).fetchall()
+    return [{"id": r[0], "filename": r[1], "content_type": r[2], "size": r[3], "uploaded_at": r[4]}
+            for r in rows]
+
+
+def get_document(conn, tenant_id, document_id):
+    """A document row scoped to this tenant, or None — the tenant check lives
+    here (not just at the filesystem layer) so a caller from another tenant
+    can't download by guessing another tenant's document id.
+    """
+    with conn.connect() as c:
+        row = c.execute(select(
+            documents.c.pub_number, documents.c.filename, documents.c.content_type,
+            documents.c.size, documents.c.storage_path, documents.c.uploaded_at,
+        ).where(
+            (documents.c.tenant_id == tenant_id) & (documents.c.id == document_id)
+        )).fetchone()
+    if not row:
+        return None
+    return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
+            "size": row[3], "storage_path": row[4], "uploaded_at": row[5]}
 
 
 def get_followup_entries(conn, tenant_id):
