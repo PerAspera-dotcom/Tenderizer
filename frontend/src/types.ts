@@ -23,6 +23,7 @@ export interface Tender {
   translation_status: string;
   value: string;
   value_currency: string;
+  dismiss_note: string | null;
 }
 
 export interface TenderListResponse {

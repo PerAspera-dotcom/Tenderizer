@@ -234,6 +234,7 @@ def get_tender(pub_number: str, include_excluded: bool = False,
 
 class StatusBody(BaseModel):
     status: str
+    note: Optional[str] = None  # CR-002 C2: optional dismiss note
 
 _VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed"}
 
@@ -247,7 +248,11 @@ def patch_tender(pub_number: str, body: StatusBody,
         if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
             raise HTTPException(403, "Forbidden")
         raise HTTPException(404, "Tender not found")
-    store.set_status(conn, tenant_id, pub_number, body.status)
+    # note is only ever persisted alongside status="dismissed" — a note sent
+    # with any other status is silently ignored rather than 422ing, since the
+    # field only makes sense on the dismiss action (CR-002 C2).
+    note = body.note if body.status == "dismissed" else None
+    store.set_status(conn, tenant_id, pub_number, body.status, dismiss_note=note)
     return {"pub_number": pub_number, "status": body.status}
 
 

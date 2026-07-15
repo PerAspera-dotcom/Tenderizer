@@ -62,6 +62,9 @@ tenders = Table(
     Column("tag_line_en", Text, nullable=False, server_default=""),
     Column("description_en", Text, nullable=False, server_default=""),
     Column("translation_status", Text, nullable=False, server_default=""),
+    # CR-002 C2: optional note captured on dismiss. Nullable, no server_default —
+    # absent means NULL, never '' (see store.upsert's _NULL_DEFAULT handling).
+    Column("dismiss_note", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 

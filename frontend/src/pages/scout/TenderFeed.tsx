@@ -132,6 +132,10 @@ export default function TenderFeed() {
                 <tr key={t.hash}>
                   <td>
                     <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360, fontSize: 13 }}>
+                      {/* CR-002 C2: dismiss note stays visible here after a tender drops out of the Review Queue */}
+                      {t.status === 'dismissed' && t.dismiss_note && (
+                        <span title={`Dismissed: ${t.dismiss_note}`} style={{ marginRight: 4 }}>📝</span>
+                      )}
                       {t.tag_line}
                     </div>
                     <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360 }}>

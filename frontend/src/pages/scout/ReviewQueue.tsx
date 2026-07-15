@@ -78,29 +78,46 @@ export default function ReviewQueue() {
       setTenders(sortTenders(filtered, sortBy));
       setSelected(prev => {
         if (!prev) return filtered[0] ?? null;
-        return filtered.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
+        // CR-002 C2: look up the previous selection in the FULL result set, not
+        // just `filtered` — a tender just dismissed drops out of the left list,
+        // but the detail pane should still show it (with its dismiss note) until
+        // the user picks something else, rather than silently jumping away.
+        return r.results.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
       });
     }).catch(() => setError('Failed to load tenders'))
       .finally(() => setLoading(false));
   }
 
+  // CR-002 C2: dismiss note — inline panel, optional, not required to dismiss.
+  const [dismissOpen, setDismissOpen] = useState(false);
+  const [dismissNote, setDismissNote] = useState('');
+
   function selectTender(t: Tender) {
     setSelected(t);
     setShowOriginal(false);   // CR-001 R3: default to the translation on a new selection
+    setDismissOpen(false);
+    setDismissNote('');
   }
 
   useEffect(() => { load(); }, []);
   useEffect(() => { setTenders(prev => sortTenders(prev, sortBy)); }, [sortBy]);
 
-  async function applyStatus(status: string) {
+  async function applyStatus(status: string, note?: string) {
     if (!selected || patching) return;
     setPatching(true);
     try {
-      await patchTender(selected.pub_number, status);
+      await patchTender(selected.pub_number, status, note);
       load();
     } finally {
       setPatching(false);
     }
+  }
+
+  function confirmDismiss() {
+    const note = dismissNote.trim();
+    applyStatus('dismissed', note || undefined);
+    setDismissOpen(false);
+    setDismissNote('');
   }
 
   const newCount = tenders.filter(t => t.status === 'new').length;
@@ -346,7 +363,7 @@ export default function ReviewQueue() {
                   <button
                     className="btn"
                     disabled={patching}
-                    onClick={() => applyStatus('dismissed')}
+                    onClick={() => selected.status === 'dismissed' ? applyStatus('dismissed') : setDismissOpen(o => !o)}
                     style={{
                       background: selected.status === 'dismissed' ? '#f87171' : 'rgba(248,113,113,0.1)',
                       color: selected.status === 'dismissed' ? '#0f1623' : '#f87171',
@@ -367,6 +384,42 @@ export default function ReviewQueue() {
                     </button>
                   )}
                 </div>
+
+                {/* CR-002 C2: optional note captured on dismiss */}
+                {dismissOpen && selected.status !== 'dismissed' && (
+                  <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 8 }}>
+                      Note (optional)
+                    </div>
+                    <textarea
+                      className="input-field"
+                      style={{ minHeight: 60, resize: 'vertical', width: '100%' }}
+                      placeholder="Why is this being dismissed?"
+                      value={dismissNote}
+                      onChange={e => setDismissNote(e.target.value)}
+                    />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button className="btn" disabled={patching} onClick={confirmDismiss}
+                              style={{ background: '#f87171', color: '#0f1623', fontWeight: 600, fontSize: 12 }}>
+                        Confirm dismiss
+                      </button>
+                      <button className="btn btn-ghost" disabled={patching}
+                              onClick={() => { setDismissOpen(false); setDismissNote(''); }}
+                              style={{ fontSize: 12 }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {selected.status === 'dismissed' && selected.dismiss_note && (
+                  <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 6 }}>
+                      Dismiss note
+                    </div>
+                    <div style={{ fontSize: 13, color: '#c8d0de' }}>{selected.dismiss_note}</div>
+                  </div>
+                )}
               </div>
             </div>
           )}

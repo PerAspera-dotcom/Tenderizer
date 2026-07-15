@@ -30,6 +30,10 @@ from schema import tenant_settings, tenants, tenders, translations
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
                   "language", "tag_line_en", "description_en", "translation_status"}
+# CR-002 C2: dismiss_note stays NULL until a dismiss actually sets it — unlike
+# _EMPTY_DEFAULT's columns, "no note" must stay distinguishable from "" (see
+# schema.py's dismiss_note comment), so a fresh ingest writes real SQL NULL.
+_NULL_DEFAULT = {"dismiss_note"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
                    "submitted_date", "result_due", "outcome"}
@@ -50,6 +54,7 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE tenders ADD COLUMN tag_line_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN description_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN translation_status TEXT DEFAULT ''",
+    "ALTER TABLE tenders ADD COLUMN dismiss_note TEXT DEFAULT NULL",
 ]
 
 
@@ -301,6 +306,8 @@ def upsert(conn, tenant_id, record):
                 values[col] = json.dumps(record.get(col, []))
             elif col in _EMPTY_DEFAULT:
                 values[col] = record.get(col) or ""  # None (no value/not translated) -> ''
+            elif col in _NULL_DEFAULT:
+                values[col] = record.get(col)  # None stays None (no note) — never ''
             else:
                 values[col] = record.get(col, "")
         c.execute(insert(tenders).values(**values))
@@ -332,11 +339,20 @@ def pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
     return row is not None
 
 
-def set_status(conn, tenant_id, pub_number, status):
+def set_status(conn, tenant_id, pub_number, status, dismiss_note=None):
+    """CR-002 C2: `dismiss_note` is only ever written here, alongside the
+    status change that produced it — never as a standalone update — so a note
+    can't outlive or predate the dismiss action it was attached to. Passing
+    None leaves the existing stored note untouched (e.g. a later Shortlist
+    after a dismiss note was recorded doesn't need to clear it).
+    """
+    values = {"status": status}
+    if dismiss_note is not None:
+        values["dismiss_note"] = dismiss_note
     with conn.begin() as c:
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
-        ).values(status=status))
+        ).values(**values))
 
 
 def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, status):

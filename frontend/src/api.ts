@@ -45,11 +45,11 @@ export function getTender(pub_number: string): Promise<Tender> {
   return apiFetch<Tender>(`/api/tenders/${encodeURIComponent(pub_number)}`);
 }
 
-export function patchTender(pub_number: string, status: string): Promise<unknown> {
+export function patchTender(pub_number: string, status: string, note?: string): Promise<unknown> {
   return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(note ? { status, note } : { status }),
   });
 }
 
