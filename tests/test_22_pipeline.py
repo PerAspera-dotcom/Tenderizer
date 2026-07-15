@@ -218,6 +218,34 @@ def test_patch_followup_rejects_invalid_outcome(tmp_path, monkeypatch):
         assert getattr(e, "status_code", None) == 422
 
 
+# ── CR-002 D: shortlist -> pipeline round trip, verified end-to-end ─────────
+# "Shortlist in Review Queue -> gone from queue's `new` list -> appears in
+# Pipeline" exercised through the exact calls the frontend makes: patch_tender
+# (Review Queue's Shortlist button) -> list_tenders(status="new") (the
+# sidebar badge / Review Queue's new count) -> get_pipeline (Portal Home's
+# Accepted Tenders + Pipeline & Deadlines). No gap found; this closes the
+# "confirm it actually works" ask without changing behaviour.
+
+def test_shortlist_round_trip_end_to_end(tmp_path, monkeypatch):
+    conn = _seed_api(tmp_path, monkeypatch, pub_number="ROUNDTRIP-1", status="new")
+
+    # Before: counted as `new`, not yet in the pipeline.
+    assert "ROUNDTRIP-1" in {r["pub_number"] for r in api.list_tenders(
+        status="new", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]}
+    assert api.get_pipeline(tenant_id=TEST_TENANT_ID) == []
+
+    # The Review Queue's Shortlist action.
+    api.patch_tender("ROUNDTRIP-1", api.StatusBody(status="shortlisted"), tenant_id=TEST_TENANT_ID)
+
+    # After: gone from the `new` list/badge count...
+    assert "ROUNDTRIP-1" not in {r["pub_number"] for r in api.list_tenders(
+        status="new", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]}
+    # ...and present in the pipeline (Portal Home's Accepted Tenders / Pipeline & Deadlines).
+    pipeline = api.get_pipeline(tenant_id=TEST_TENANT_ID)
+    assert {r["pub_number"] for r in pipeline} == {"ROUNDTRIP-1"}
+    assert pipeline[0]["submission_status"] == "not_started"
+
+
 def test_patch_followup_only_affects_calling_tenant(tmp_path, monkeypatch):
     conn = _seed_api(tmp_path, monkeypatch)
     store.ensure_tenant(conn, OTHER_TENANT_ID)
