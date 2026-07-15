@@ -29,6 +29,8 @@ interface NavItem {
 }
 
 const PORTAL_NAV: NavItem[] = [
+  // CR-002 F/D-D: Calendar is the first thing you see when opening Portal.
+  { label: 'Calendar', path: '/portal/calendar' },
   { label: 'Home', path: '/portal/home' },
   { label: 'Pipeline & Deadlines', path: '/portal/pipeline' },
   { label: 'Follow-up & Results', path: '/portal/followup' },
@@ -165,7 +167,7 @@ export default function Layout({ children }: Props) {
         {switcherOpen && (
           <div style={{ margin: '4px 10px', background: '#151d2c', border: '1px solid #1a2334', borderRadius: 8, overflow: 'hidden' }}>
             {([
-              { id: 'portal', label: 'Portal', icon: '🏠', sub: 'Pipeline & deadlines', path: '/portal/home', badge: null },
+              { id: 'portal', label: 'Portal', icon: '🏠', sub: 'Pipeline & deadlines', path: '/portal/calendar', badge: null },
               { id: 'scout', label: 'Scout', icon: '◎', sub: 'Monitor & match tenders', path: '/scout/dashboard', badge: null, iconColor: '#2EE6D4' },
               { id: 'vault', label: 'Vault', icon: '📁', sub: 'Technical documents', path: '/vault', badge: 'DEV', iconColor: '#60a5fa' },
               { id: 'composer', label: 'Composer', icon: '✏️', sub: 'Draft proposals', path: '/composer', badge: 'DEV', iconColor: '#c084fc' },

@@ -26,9 +26,9 @@ export function HashRouter({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handler = () => setLoc(hashToPath());
     window.addEventListener('hashchange', handler);
-    // If no hash yet, default to /portal/home
+    // If no hash yet, default to /portal/calendar (CR-002 F/D-D)
     if (!window.location.hash) {
-      window.location.hash = '#/portal/home';
+      window.location.hash = '#/portal/calendar';
     }
     return () => window.removeEventListener('hashchange', handler);
   }, []);

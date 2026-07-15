@@ -2,13 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from '../../router';
 import { getPipeline } from '../../api';
 import type { PipelineEntry } from '../../types';
-import { formatDate, daysLeft, countryFlag } from '../../utils';
-
-function statusPill(s: string) {
-  if (s === 'submitted') return <span className="pill pill-green">Submitted</span>;
-  if (s === 'drafting') return <span className="pill pill-amber">Drafting</span>;
-  return <span className="pill pill-grey">Not started</span>;
-}
+import { daysLeft } from '../../utils';
 
 export default function PortalHome() {
   const [pipeline, setPipeline] = useState<PipelineEntry[]>([]);
@@ -109,52 +103,17 @@ export default function PortalHome() {
         </div>
       )}
 
-      {/* Accepted tenders snapshot */}
-      <div className="card" style={{ maxWidth: 720 }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #1a2334', fontWeight: 600, fontSize: 14 }}>
-          Accepted Tenders
+      {/* CR-002 F: the tabular accepted-tenders snapshot that used to live here
+          moved to the new Calendar screen (now the Portal's default landing) —
+          see PortalCalendar.tsx. Home stays the app launchpad + deadline alerts. */}
+      {!loading && !error && (
+        <div style={{ maxWidth: 720 }}>
+          <Link to="/portal/calendar" className="card" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
+            <span style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 500 }}>View accepted tenders on the Calendar</span>
+            <span style={{ marginLeft: 'auto', color: '#2EE6D4', fontSize: 13 }}>Open Calendar →</span>
+          </Link>
         </div>
-        {loading ? (
-          <div className="loading">Loading…</div>
-        ) : error ? (
-          <div className="error">{error}</div>
-        ) : pipeline.length === 0 ? (
-          <div className="loading">No accepted tenders yet. Shortlist tenders in the Review Queue.</div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Deadline</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pipeline.slice(0, 5).map(e => {
-                const dl = e.deadline_override || e.deadline;
-                return (
-                  <tr key={e.pub_number}>
-                    <td>
-                      <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>{e.tag_line}</div>
-                      <div style={{ color: '#8892a4', fontSize: 12 }}>{countryFlag(e.country)} {e.source} · {e.buyer}</div>
-                    </td>
-                    <td>
-                      <span className="mono" style={{ fontSize: 13 }}>{formatDate(dl)}</span>
-                      {e.deadline_override && <span style={{ marginLeft: 6, fontSize: 11, color: '#e3b341' }}>(extended)</span>}
-                    </td>
-                    <td>{statusPill(e.submission_status)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-        {pipeline.length > 5 && (
-          <div style={{ padding: '10px 16px', borderTop: '1px solid #1a2334' }}>
-            <Link to="/portal/pipeline" style={{ color: '#2EE6D4', fontSize: 13 }}>View all {pipeline.length} →</Link>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }
