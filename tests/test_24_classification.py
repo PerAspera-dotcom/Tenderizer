@@ -60,6 +60,60 @@ def test_past_tender_precedence_over_eoi():
         _rec("Expression of interest: tent supply", deadline="")) == "past_tender"
 
 
+# ── A4: Prequalification (D-A proposed defaults) ─────────────────────────────
+
+def test_prequalification_english():
+    assert classification.classify(_rec("Prequalification of tent suppliers")) == "prequalification"
+
+
+def test_prequalification_pqq_acronym():
+    assert classification.classify(_rec("PQQ - tent framework suppliers")) == "prequalification"
+
+
+def test_prequalification_french_selection_des_candidats():
+    assert classification.classify(
+        _rec("Sélection des candidats pour la fourniture de tentes")) == "prequalification"
+
+
+def test_restricted_procedure_alone_is_not_prequalification():
+    # "procedure restreinte" is a common, generic French procedure label —
+    # must NOT trigger prequalification on its own (false-positive guard).
+    assert classification.classify(
+        _rec("Fourniture de tentes - procédure restreinte")) == "tender"
+
+
+def test_restricted_procedure_with_call_for_candidates_is_prequalification():
+    assert classification.classify(
+        _rec("Fourniture de tentes - procédure restreinte, appel à candidatures")) == "prequalification"
+
+
+def test_prequalification_precedence_over_eoi():
+    # Both A4 and A2 terms present -> prequalification wins (checked first).
+    assert classification.classify(
+        _rec("PQQ - Expression of interest for tent suppliers")) == "prequalification"
+
+
+# ── A3: Prior Information Notice (D-B decided, stored as notice_type=fbo) ───
+
+def test_pin_english():
+    assert classification.classify(_rec("Prior information notice: future tent framework")) == "fbo"
+
+
+def test_pin_french_accented():
+    assert classification.classify(_rec("Avis de préinformation - fourniture de tentes")) == "fbo"
+
+
+def test_bare_pin_acronym_does_not_match():
+    # Deliberately not a standalone term (collision risk) — see D-B comment.
+    assert classification.classify(_rec("Please enter your PIN to access the portal")) == "tender"
+
+
+def test_fbo_is_last_in_precedence():
+    # eoi wins over fbo/pin when both terms are present.
+    assert classification.classify(
+        _rec("Prior information notice - Expression of interest for tent suppliers")) == "eoi"
+
+
 # ── Award info extraction ────────────────────────────────────────────────────
 
 def test_extract_awarded_to_english():

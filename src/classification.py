@@ -43,7 +43,47 @@ def check_eoi(rec):
     return None
 
 
-CHECKS = [check_past_tender, check_eoi]
+# A4 (D-A decided: CR-002's proposed defaults, not yet customer-confirmed).
+# "prequalification"/"pre-qualification"/"PQQ"/"selection des candidats" are
+# specific enough to stand alone. "procedure restreinte" (restricted
+# procedure) is NOT — it's a common, generic French procedure label that
+# appears on plenty of ordinary competitive tenders, not just prequalification
+# rounds — so per the CR's own paired wording ("procédure restreinte — appel
+# à candidatures") that term only counts alongside "appel a candidatures"
+# (call for candidates), both present, not either alone.
+_PREQUALIFICATION_TERMS = ["prequalification", "pre-qualification", "PQQ", "selection des candidats"]
+_RESTRICTED_PROCEDURE_TERM = ["procedure restreinte"]
+_CALL_FOR_CANDIDATES_TERM = ["appel a candidatures"]
+
+
+def check_prequalification(rec):
+    text = _text(rec)
+    if match.match_keywords(text, _PREQUALIFICATION_TERMS):
+        return "prequalification"
+    if (match.match_keywords(text, _RESTRICTED_PROCEDURE_TERM)
+            and match.match_keywords(text, _CALL_FOR_CANDIDATES_TERM)):
+        return "prequalification"
+    return None
+
+
+# A3 (D-B decided: the customer's "FBO" ask maps to TED/BOAMP's real
+# forward-looking notice type, Prior Information Notice — see CR-002 D-B).
+# Stored as notice_type="fbo" to match the CR's own schema/precedence text;
+# NoticeTypeBadge.tsx labels it "PIN" in the UI. Deliberately NOT matching
+# the bare acronym "PIN" — unlike "EOI", it's a common short string with
+# high collision risk (personal identification numbers, etc.) and nothing in
+# the CR authorises it as a standalone term the way EOI's bare acronym was.
+_PIN_TERMS = ["prior information notice", "avis de preinformation"]
+
+
+def check_fbo_pin(rec):
+    if match.match_keywords(_text(rec), _PIN_TERMS):
+        return "fbo"
+    return None
+
+
+# Precedence (CR-002 A): past_tender -> prequalification -> eoi -> fbo -> tender.
+CHECKS = [check_past_tender, check_prequalification, check_eoi, check_fbo_pin]
 
 
 def classify(rec):
