@@ -21,6 +21,8 @@ export interface Tender {
   tag_line_en: string;
   description_en: string;
   translation_status: string;
+  value: string;
+  value_currency: string;
 }
 
 export interface TenderListResponse {
