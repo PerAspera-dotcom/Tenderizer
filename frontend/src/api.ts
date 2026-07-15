@@ -20,6 +20,7 @@ export interface TenderFilters {
   q?: string;
   status?: string;
   has_deadline?: boolean;
+  notice_type?: string;
   limit?: number;
   offset?: number;
   sort?: string;
@@ -34,6 +35,7 @@ export function listTenders(filters: TenderFilters = {}): Promise<TenderListResp
   if (filters.q) params.set('q', filters.q);
   if (filters.status) params.set('status', filters.status);
   if (filters.has_deadline !== undefined) params.set('has_deadline', String(filters.has_deadline));
+  if (filters.notice_type) params.set('notice_type', filters.notice_type);
   if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.offset !== undefined) params.set('offset', String(filters.offset));
   if (filters.sort) params.set('sort', filters.sort);

@@ -168,6 +168,7 @@ def list_tenders(
     q:                Optional[str]  = None,
     status:           Optional[str]  = None,
     has_deadline:     Optional[bool] = None,
+    notice_type:      Optional[str]  = None,
     include_excluded: bool           = False,
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
@@ -206,6 +207,15 @@ def list_tenders(
         records = [r for r in records if r.get("deadline")]
     elif has_deadline is False:
         records = [r for r in records if not r.get("deadline")]
+
+    # CR-002 B1: past_tender notices never surface in the default Tender
+    # Feed/Review Queue view — they have their own Past Tenders page/query.
+    # notice_type=past_tender is the one way to explicitly ask for them back;
+    # any other explicit notice_type filters normally.
+    if notice_type:
+        records = [r for r in records if (r.get("notice_type") or "tender") == notice_type]
+    else:
+        records = [r for r in records if (r.get("notice_type") or "tender") != "past_tender"]
 
     # Default: hide expired deadlines; show future deadlines and empty-deadline rows
     today = date.today().isoformat()
@@ -267,8 +277,15 @@ def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
     by_match = {"cpv": 0, "both": 0, "keyword": 0, "none": 0}
     by_cat   = {"Supply": 0, "Services": 0, "Works": 0, "Training": 0, "Other": 0}
     new_today = 0
+    past_tenders = 0
 
     for r in records:
+        # CR-002 B2: dashboard KPIs count active tenders only — past tenders
+        # get their own count, not folded into by_match/by_category/new_today.
+        if (r.get("notice_type") or "tender") == "past_tender":
+            past_tenders += 1
+            continue
+
         ms = r.get("match_source")
         if ms in (None, "None", "none", ""):
             by_match["none"] += 1
@@ -294,6 +311,7 @@ def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
         "by_match":        by_match,
         "by_category":     by_cat,
         "portals_active":  "2/4",
+        "past_tenders":    past_tenders,
     }
 
 

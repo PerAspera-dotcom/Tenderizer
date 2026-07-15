@@ -65,6 +65,14 @@ tenders = Table(
     # CR-002 C2: optional note captured on dismiss. Nullable, no server_default —
     # absent means NULL, never '' (see store.upsert's _NULL_DEFAULT handling).
     Column("dismiss_note", Text, nullable=True),
+    # CR-002 A: additive classification tag, always populated (never blank —
+    # see classification.classify's DEFAULT_TYPE fallback). Award fields are
+    # best-effort extraction (classification.extract_award_info) and stay
+    # NULL, not '', when nothing was found.
+    Column("notice_type", Text, nullable=False, server_default="tender"),
+    Column("awarded_to", Text, nullable=True),
+    Column("awarded_value", Text, nullable=True),
+    Column("awarded_currency", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 

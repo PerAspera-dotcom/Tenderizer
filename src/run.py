@@ -15,6 +15,7 @@ import store
 import match
 import normalize
 import filters
+import classification
 import currency
 import dedup
 import translate
@@ -70,6 +71,13 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
                 rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
                     rec.get("value"), rec.get("value_currency"), fx_rates)
                 rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
+                # CR-002 A: additive, post-filter — tags what's already kept
+                # (or excluded), never changes it.
+                rec["notice_type"] = classification.classify(rec)
+                rec["awarded_to"], rec["awarded_value"], rec["awarded_currency"] = (
+                    classification.extract_award_info(rec)
+                    if rec["notice_type"] == "past_tender" else (None, None, None)
+                )
                 store.upsert(conn, tenant_id, rec)
                 this_run_records.append(rec)
             health[name] = f"ok ({len(raws)})"

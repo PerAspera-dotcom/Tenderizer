@@ -30,10 +30,10 @@ from schema import tenant_settings, tenants, tenders, translations
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
                   "language", "tag_line_en", "description_en", "translation_status"}
-# CR-002 C2: dismiss_note stays NULL until a dismiss actually sets it — unlike
-# _EMPTY_DEFAULT's columns, "no note" must stay distinguishable from "" (see
-# schema.py's dismiss_note comment), so a fresh ingest writes real SQL NULL.
-_NULL_DEFAULT = {"dismiss_note"}
+# CR-002 C2/A: columns that must stay real SQL NULL when absent, distinguishable
+# from "" (dismiss_note: schema.py comment; awarded_*: CR-002 A1's "never
+# fabricated" rule — a null award field must not look like a found-but-empty one).
+_NULL_DEFAULT = {"dismiss_note", "awarded_to", "awarded_value", "awarded_currency"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
                    "submitted_date", "result_due", "outcome"}
@@ -55,6 +55,10 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE tenders ADD COLUMN description_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN translation_status TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN dismiss_note TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN notice_type TEXT DEFAULT 'tender'",
+    "ALTER TABLE tenders ADD COLUMN awarded_to TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN awarded_value TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN awarded_currency TEXT DEFAULT NULL",
 ]
 
 
@@ -302,6 +306,8 @@ def upsert(conn, tenant_id, record):
                 continue
             elif col == "status":
                 values[col] = record.get("status", "new")
+            elif col == "notice_type":
+                values[col] = record.get("notice_type") or "tender"
             elif col in _JSON:
                 values[col] = json.dumps(record.get(col, []))
             elif col in _EMPTY_DEFAULT:

@@ -37,6 +37,7 @@ const PORTAL_NAV: NavItem[] = [
 const SCOUT_NAV: NavItem[] = [
   { label: 'Dashboard', path: '/scout/dashboard' },
   { label: 'Tender Feed', path: '/scout/tender-feed' },
+  { label: 'Past Tenders', path: '/scout/past-tenders' },
   { label: 'Review Queue', path: '/scout/review-queue', badgeKey: 'newCount' },
   { label: 'Portals & Health', path: '/scout/portals' },
   { label: 'CPV Config', path: '/scout/cpv' },

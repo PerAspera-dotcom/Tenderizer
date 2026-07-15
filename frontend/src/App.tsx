@@ -8,6 +8,7 @@ import PortalPipeline from './pages/portal/PortalPipeline';
 import PortalFollowup from './pages/portal/PortalFollowup';
 import Dashboard from './pages/scout/Dashboard';
 import TenderFeed from './pages/scout/TenderFeed';
+import PastTenders from './pages/scout/PastTenders';
 import ReviewQueue from './pages/scout/ReviewQueue';
 import CpvConfig from './pages/scout/CpvConfig';
 import KeywordsConfig from './pages/scout/KeywordsConfig';
@@ -28,6 +29,7 @@ function Router() {
     '/portal/followup': <Layout><PortalFollowup /></Layout>,
     '/scout/dashboard': <Layout><Dashboard /></Layout>,
     '/scout/tender-feed': <Layout><TenderFeed /></Layout>,
+    '/scout/past-tenders': <Layout><PastTenders /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
     '/scout/portals': <Layout><StubPage title="Portals & Health" subtitle="Per-portal throughput and ToS compliance" /></Layout>,
     '/scout/cpv': <Layout><CpvConfig /></Layout>,
