@@ -12,6 +12,7 @@ filters.py's (rec, exclusions, now) -> reason | None shape (minus the two
 args this module's checks don't need).
 """
 import re
+import match
 
 DEFAULT_TYPE = "tender"
 
@@ -27,7 +28,22 @@ def check_past_tender(rec):
     return None
 
 
-CHECKS = [check_past_tender]
+# A2 — Expressions of Interest. "EOI" is specific enough to stay a bare
+# word-boundary term (unlike F2's "location", CR-002 doesn't flag an EOI
+# false-positive risk). FR term is written unaccented — match.match_keywords'
+# _fold (unidecode + French elision) normalises both the term and the source
+# text before comparing, so "d'interet" here still matches "d'intérêt" in
+# the notice.
+_EOI_TERMS = ["expression of interest", "EOI", "appel a manifestation d'interet"]
+
+
+def check_eoi(rec):
+    if match.match_keywords(_text(rec), _EOI_TERMS):
+        return "eoi"
+    return None
+
+
+CHECKS = [check_past_tender, check_eoi]
 
 
 def classify(rec):

@@ -33,6 +33,33 @@ def test_future_deadline_stays_tender():
     assert classification.classify(_rec("Supply of tents", deadline="2030-06-01T00:00:00+00:00")) == "tender"
 
 
+# ── A2: Expressions of Interest ──────────────────────────────────────────────
+
+def test_eoi_phrase_english():
+    assert classification.classify(_rec("Expression of interest: tent supply framework")) == "eoi"
+
+
+def test_eoi_acronym():
+    assert classification.classify(_rec("EOI - tent supply framework")) == "eoi"
+
+
+def test_eoi_acronym_is_word_boundary_only():
+    # "eoi" must not fire as a bare substring of an unrelated word.
+    assert classification.classify(_rec("Geoinformatics services for mapping")) == "tender"
+
+
+def test_eoi_phrase_french_accented():
+    assert classification.classify(
+        _rec("Appel à manifestation d'intérêt pour la fourniture de tentes")) == "eoi"
+
+
+def test_past_tender_precedence_over_eoi():
+    # A1 (empty deadline) is checked before A2 — an EOI-worded notice with no
+    # deadline is still past_tender, per CR-002 A's precedence rule.
+    assert classification.classify(
+        _rec("Expression of interest: tent supply", deadline="")) == "past_tender"
+
+
 # ── Award info extraction ────────────────────────────────────────────────────
 
 def test_extract_awarded_to_english():

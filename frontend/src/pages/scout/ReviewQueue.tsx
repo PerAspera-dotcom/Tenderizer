@@ -3,6 +3,7 @@ import { listTenders, patchTender } from '../../api';
 import type { Tender } from '../../types';
 import { formatDate, countryFlag, confidenceFromMatchSource, formatValue } from '../../utils';
 import MatchChip from '../../components/MatchChip';
+import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
 type SortBy = 'pub_date' | 'deadline';
 
@@ -184,8 +185,9 @@ export default function ReviewQueue() {
                         {translated && <span title="Translated from source language" style={{ marginRight: 4 }}>🌐</span>}
                         {displayTagLine(t, false)}
                       </div>
-                      <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2 }}>
-                        {t.source} · {t.country}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                        <span style={{ color: '#8892a4', fontSize: 11 }}>{t.source} · {t.country}</span>
+                        <NoticeTypeBadge noticeType={t.notice_type} />
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
                         <div style={{ flex: 1, height: 3, background: '#1a2334', borderRadius: 9999, overflow: 'hidden' }}>
@@ -209,6 +211,7 @@ export default function ReviewQueue() {
                   <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>{selected.source}</span>
                   <span style={{ fontSize: 16 }}>{countryFlag(selected.country)}</span>
                   <span style={{ color: '#8892a4', fontSize: 13 }}>{selected.country}</span>
+                  <NoticeTypeBadge noticeType={selected.notice_type} />
                   <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
                     {selected.url && (
                       <a href={selected.url} target="_blank" rel="noopener noreferrer"
