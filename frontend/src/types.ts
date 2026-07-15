@@ -21,6 +21,13 @@ export interface Tender {
   tag_line_en: string;
   description_en: string;
   translation_status: string;
+  value: string;
+  value_currency: string;
+  dismiss_note: string | null;
+  notice_type: string;
+  awarded_to: string | null;
+  awarded_value: string | null;
+  awarded_currency: string | null;
 }
 
 export interface TenderListResponse {
@@ -37,6 +44,7 @@ export interface Stats {
   by_match: { cpv: number; both: number; keyword: number; none: number };
   by_category: Record<string, number>;
   portals_active: string;
+  past_tenders: number;
 }
 
 export interface CpvConfigEntry {
@@ -78,6 +86,15 @@ export interface FollowupEntry extends PipelineEntry {
   submitted_date: string | null;
   result_due: string | null;
   outcome: string;
+}
+
+// CR-002 E: minimal document upload slice (shortlisted tenders only)
+export interface DocumentEntry {
+  id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+  uploaded_at: string;
 }
 
 // ── Vault ─────────────────────────────────────────────────────────────────────

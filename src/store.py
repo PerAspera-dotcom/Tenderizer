@@ -24,12 +24,16 @@ import config
 import db
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
-from schema import metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
+from schema import documents, metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
 from schema import tenant_settings, tenants, tenders, translations
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
                   "language", "tag_line_en", "description_en", "translation_status"}
+# CR-002 C2/A: columns that must stay real SQL NULL when absent, distinguishable
+# from "" (dismiss_note: schema.py comment; awarded_*: CR-002 A1's "never
+# fabricated" rule — a null award field must not look like a found-but-empty one).
+_NULL_DEFAULT = {"dismiss_note", "awarded_to", "awarded_value", "awarded_currency"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
                    "submitted_date", "result_due", "outcome"}
@@ -50,6 +54,11 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE tenders ADD COLUMN tag_line_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN description_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN translation_status TEXT DEFAULT ''",
+    "ALTER TABLE tenders ADD COLUMN dismiss_note TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN notice_type TEXT DEFAULT 'tender'",
+    "ALTER TABLE tenders ADD COLUMN awarded_to TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN awarded_value TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN awarded_currency TEXT DEFAULT NULL",
 ]
 
 
@@ -297,10 +306,14 @@ def upsert(conn, tenant_id, record):
                 continue
             elif col == "status":
                 values[col] = record.get("status", "new")
+            elif col == "notice_type":
+                values[col] = record.get("notice_type") or "tender"
             elif col in _JSON:
                 values[col] = json.dumps(record.get(col, []))
             elif col in _EMPTY_DEFAULT:
                 values[col] = record.get(col) or ""  # None (no value/not translated) -> ''
+            elif col in _NULL_DEFAULT:
+                values[col] = record.get(col)  # None stays None (no note) — never ''
             else:
                 values[col] = record.get(col, "")
         c.execute(insert(tenders).values(**values))
@@ -332,11 +345,20 @@ def pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
     return row is not None
 
 
-def set_status(conn, tenant_id, pub_number, status):
+def set_status(conn, tenant_id, pub_number, status, dismiss_note=None):
+    """CR-002 C2: `dismiss_note` is only ever written here, alongside the
+    status change that produced it — never as a standalone update — so a note
+    can't outlive or predate the dismiss action it was attached to. Passing
+    None leaves the existing stored note untouched (e.g. a later Shortlist
+    after a dismiss note was recorded doesn't need to clear it).
+    """
+    values = {"status": status}
+    if dismiss_note is not None:
+        values["dismiss_note"] = dismiss_note
     with conn.begin() as c:
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
-        ).values(status=status))
+        ).values(**values))
 
 
 def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, status):
@@ -453,6 +475,45 @@ def get_pipeline_entries(conn, tenant_id):
             rec[col] = json.loads(rec[col] or "[]")
         out.append(rec)
     return out
+
+
+def add_document(conn, tenant_id, pub_number, filename, content_type, size, storage_path):
+    with conn.begin() as c:
+        result = c.execute(insert(documents).values(
+            tenant_id=tenant_id, pub_number=pub_number, filename=filename,
+            content_type=content_type or "", size=size, storage_path=storage_path,
+            uploaded_at=date.today().isoformat()))
+        return result.inserted_primary_key[0]
+
+
+def list_documents(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            documents.c.id, documents.c.filename, documents.c.content_type,
+            documents.c.size, documents.c.uploaded_at,
+        ).where(
+            (documents.c.tenant_id == tenant_id) & (documents.c.pub_number == pub_number)
+        ).order_by(documents.c.id)).fetchall()
+    return [{"id": r[0], "filename": r[1], "content_type": r[2], "size": r[3], "uploaded_at": r[4]}
+            for r in rows]
+
+
+def get_document(conn, tenant_id, document_id):
+    """A document row scoped to this tenant, or None — the tenant check lives
+    here (not just at the filesystem layer) so a caller from another tenant
+    can't download by guessing another tenant's document id.
+    """
+    with conn.connect() as c:
+        row = c.execute(select(
+            documents.c.pub_number, documents.c.filename, documents.c.content_type,
+            documents.c.size, documents.c.storage_path, documents.c.uploaded_at,
+        ).where(
+            (documents.c.tenant_id == tenant_id) & (documents.c.id == document_id)
+        )).fetchone()
+    if not row:
+        return None
+    return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
+            "size": row[3], "storage_path": row[4], "uploaded_at": row[5]}
 
 
 def get_followup_entries(conn, tenant_id):

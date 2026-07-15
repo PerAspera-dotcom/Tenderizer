@@ -3,11 +3,13 @@ import { SignedIn, SignedOut, SignIn, useAuth } from '@clerk/clerk-react';
 import { HashRouter, Navigate, useLocation } from './router';
 import { setTokenGetter } from './authToken';
 import Layout from './components/Layout';
+import PortalCalendar from './pages/portal/PortalCalendar';
 import PortalHome from './pages/portal/PortalHome';
 import PortalPipeline from './pages/portal/PortalPipeline';
 import PortalFollowup from './pages/portal/PortalFollowup';
 import Dashboard from './pages/scout/Dashboard';
 import TenderFeed from './pages/scout/TenderFeed';
+import PastTenders from './pages/scout/PastTenders';
 import ReviewQueue from './pages/scout/ReviewQueue';
 import CpvConfig from './pages/scout/CpvConfig';
 import KeywordsConfig from './pages/scout/KeywordsConfig';
@@ -23,11 +25,13 @@ function Router() {
   const { pathname } = useLocation();
 
   const routes: Record<string, React.ReactNode> = {
+    '/portal/calendar': <Layout><PortalCalendar /></Layout>,
     '/portal/home': <Layout><PortalHome /></Layout>,
     '/portal/pipeline': <Layout><PortalPipeline /></Layout>,
     '/portal/followup': <Layout><PortalFollowup /></Layout>,
     '/scout/dashboard': <Layout><Dashboard /></Layout>,
     '/scout/tender-feed': <Layout><TenderFeed /></Layout>,
+    '/scout/past-tenders': <Layout><PastTenders /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
     '/scout/portals': <Layout><StubPage title="Portals & Health" subtitle="Per-portal throughput and ToS compliance" /></Layout>,
     '/scout/cpv': <Layout><CpvConfig /></Layout>,
@@ -45,10 +49,11 @@ function Router() {
     '/composer/settings': <Layout><StubPage title="Composer Settings" subtitle="API key, thresholds, model" /></Layout>,
   };
 
-  if (pathname === '/' || pathname === '/portal') return <Navigate to="/portal/home" />;
+  // CR-002 F/D-D: Calendar is now the Portal's default landing screen.
+  if (pathname === '/' || pathname === '/portal') return <Navigate to="/portal/calendar" />;
   if (pathname === '/vault') return <Navigate to="/vault/library" />;
   if (pathname === '/composer') return <Navigate to="/composer/ingest" />;
-  if (!routes[pathname]) return <Navigate to="/portal/home" />;
+  if (!routes[pathname]) return <Navigate to="/portal/calendar" />;
 
   return <>{routes[pathname]}</>;
 }

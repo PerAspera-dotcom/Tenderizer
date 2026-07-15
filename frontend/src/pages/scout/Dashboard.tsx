@@ -85,6 +85,15 @@ export default function Dashboard() {
             <span style={{ color: '#8892a4', fontSize: 14 }}><strong style={{ color: '#e2e8f0' }}>{stats?.notices_scanned ?? 0}</strong> notices scanned</span>
             <span style={{ color: '#1a2334', margin: '0 16px', fontSize: 18 }}>|</span>
             <span style={{ color: '#8892a4', fontSize: 14 }}><strong style={{ color: '#e2e8f0' }}>{stats?.matched_total ?? 0}</strong> matched</span>
+            {/* CR-002 B2: distinct count/link, kept out of the active KPI cards */}
+            {(stats?.past_tenders ?? 0) > 0 && (
+              <>
+                <span style={{ color: '#1a2334', margin: '0 16px', fontSize: 18 }}>|</span>
+                <Link to="/scout/past-tenders" style={{ color: '#8892a4', fontSize: 14, textDecoration: 'none' }}>
+                  <strong style={{ color: '#e2e8f0' }}>{stats?.past_tenders}</strong> past tenders
+                </Link>
+              </>
+            )}
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
               {stats?.next_run && (
                 <span style={{ color: '#8892a4', fontSize: 13 }}>Next run in <strong style={{ color: '#e2e8f0' }}>{formatNextRun(stats.next_run)}</strong></span>

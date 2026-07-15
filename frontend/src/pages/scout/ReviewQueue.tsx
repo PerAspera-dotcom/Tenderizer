@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { listTenders, patchTender } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, confidenceFromMatchSource } from '../../utils';
+import { formatDate, countryFlag, confidenceFromMatchSource, formatValue } from '../../utils';
 import MatchChip from '../../components/MatchChip';
+import NoticeTypeBadge from '../../components/NoticeTypeBadge';
+
+type SortBy = 'pub_date' | 'deadline';
 
 function statusDotColor(status: string): string {
   if (status === 'shortlisted') return '#34d399';
@@ -57,43 +60,65 @@ export default function ReviewQueue() {
   const [selected, setSelected] = useState<Tender | null>(null);
   const [patching, setPatching] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
+  // CR-002 C3: publication_date (newest first) is the Review Queue's default order.
+  const [sortBy, setSortBy] = useState<SortBy>('pub_date');
+
+  function sortTenders(list: Tender[], by: SortBy): Tender[] {
+    const sorted = [...list];
+    if (by === 'pub_date') {
+      sorted.sort((a, b) => (b.pub_date || '').localeCompare(a.pub_date || ''));
+    } else {
+      sorted.sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
+    }
+    return sorted;
+  }
 
   function load() {
-    listTenders({ limit: 500, sort: 'deadline' }).then(r => {
+    listTenders({ limit: 500 }).then(r => {
       const filtered = r.results.filter(t => t.status !== 'dismissed');
-      // Sort: cpv/both first, then keyword, then none; within each by deadline
-      const order = (t: Tender) => {
-        if (t.match_source === 'both') return 0;
-        if (t.match_source === 'cpv') return 1;
-        if (t.match_source === 'keyword') return 2;
-        return 3;
-      };
-      filtered.sort((a, b) => order(a) - order(b) || (a.deadline || '9999').localeCompare(b.deadline || '9999'));
-      setTenders(filtered);
+      setTenders(sortTenders(filtered, sortBy));
       setSelected(prev => {
         if (!prev) return filtered[0] ?? null;
-        return filtered.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
+        // CR-002 C2: look up the previous selection in the FULL result set, not
+        // just `filtered` — a tender just dismissed drops out of the left list,
+        // but the detail pane should still show it (with its dismiss note) until
+        // the user picks something else, rather than silently jumping away.
+        return r.results.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
       });
     }).catch(() => setError('Failed to load tenders'))
       .finally(() => setLoading(false));
   }
 
+  // CR-002 C2: dismiss note — inline panel, optional, not required to dismiss.
+  const [dismissOpen, setDismissOpen] = useState(false);
+  const [dismissNote, setDismissNote] = useState('');
+
   function selectTender(t: Tender) {
     setSelected(t);
     setShowOriginal(false);   // CR-001 R3: default to the translation on a new selection
+    setDismissOpen(false);
+    setDismissNote('');
   }
 
   useEffect(() => { load(); }, []);
+  useEffect(() => { setTenders(prev => sortTenders(prev, sortBy)); }, [sortBy]);
 
-  async function applyStatus(status: string) {
+  async function applyStatus(status: string, note?: string) {
     if (!selected || patching) return;
     setPatching(true);
     try {
-      await patchTender(selected.pub_number, status);
+      await patchTender(selected.pub_number, status, note);
       load();
     } finally {
       setPatching(false);
     }
+  }
+
+  function confirmDismiss() {
+    const note = dismissNote.trim();
+    applyStatus('dismissed', note || undefined);
+    setDismissOpen(false);
+    setDismissNote('');
   }
 
   const newCount = tenders.filter(t => t.status === 'new').length;
@@ -108,10 +133,21 @@ export default function ReviewQueue() {
       <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Review Queue</h1>
       <p style={{ color: '#8892a4', marginBottom: 16 }}>Triage scored matches — confirm relevance before they reach the analyst's shortlist</p>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20, alignItems: 'center' }}>
         <span className="pill pill-grey">○ {newCount} new</span>
         <span className="pill pill-green">● {shortlistedCount} shortlisted</span>
         <span className="pill pill-amber">● {reviewedCount} reviewed</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: '#8892a4', fontSize: 12 }}>Sort by</span>
+          <select
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as SortBy)}
+            style={{ background: '#151d2c', border: '1px solid #1a2334', color: '#e2e8f0', padding: '5px 10px', borderRadius: 6, fontSize: 13, cursor: 'pointer', outline: 'none' }}
+          >
+            <option value="pub_date">Release date (newest first)</option>
+            <option value="deadline">Deadline</option>
+          </select>
+        </div>
       </div>
 
       {tenders.length === 0 ? (
@@ -149,8 +185,9 @@ export default function ReviewQueue() {
                         {translated && <span title="Translated from source language" style={{ marginRight: 4 }}>🌐</span>}
                         {displayTagLine(t, false)}
                       </div>
-                      <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2 }}>
-                        {t.source} · {t.country}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                        <span style={{ color: '#8892a4', fontSize: 11 }}>{t.source} · {t.country}</span>
+                        <NoticeTypeBadge noticeType={t.notice_type} />
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
                         <div style={{ flex: 1, height: 3, background: '#1a2334', borderRadius: 9999, overflow: 'hidden' }}>
@@ -174,6 +211,7 @@ export default function ReviewQueue() {
                   <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>{selected.source}</span>
                   <span style={{ fontSize: 16 }}>{countryFlag(selected.country)}</span>
                   <span style={{ color: '#8892a4', fontSize: 13 }}>{selected.country}</span>
+                  <NoticeTypeBadge noticeType={selected.notice_type} />
                   <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
                     {selected.url && (
                       <a href={selected.url} target="_blank" rel="noopener noreferrer"
@@ -242,6 +280,13 @@ export default function ReviewQueue() {
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#4c5a70', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Deadline</div>
                       <div className="mono" style={{ fontSize: 13 }}>{formatDate(selected.deadline)}</div>
                     </div>
+                    {/* CR-002 C4: omit entirely when the source notice discloses no value — never show a placeholder */}
+                    {formatValue(selected.value, selected.value_currency) && (
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#4c5a70', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Est. Value</div>
+                        <div className="mono" style={{ fontSize: 13 }}>{formatValue(selected.value, selected.value_currency)}</div>
+                      </div>
+                    )}
                   </div>
 
                   {selected.cpv_codes?.length > 0 && (
@@ -321,7 +366,7 @@ export default function ReviewQueue() {
                   <button
                     className="btn"
                     disabled={patching}
-                    onClick={() => applyStatus('dismissed')}
+                    onClick={() => selected.status === 'dismissed' ? applyStatus('dismissed') : setDismissOpen(o => !o)}
                     style={{
                       background: selected.status === 'dismissed' ? '#f87171' : 'rgba(248,113,113,0.1)',
                       color: selected.status === 'dismissed' ? '#0f1623' : '#f87171',
@@ -342,6 +387,42 @@ export default function ReviewQueue() {
                     </button>
                   )}
                 </div>
+
+                {/* CR-002 C2: optional note captured on dismiss */}
+                {dismissOpen && selected.status !== 'dismissed' && (
+                  <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 8 }}>
+                      Note (optional)
+                    </div>
+                    <textarea
+                      className="input-field"
+                      style={{ minHeight: 60, resize: 'vertical', width: '100%' }}
+                      placeholder="Why is this being dismissed?"
+                      value={dismissNote}
+                      onChange={e => setDismissNote(e.target.value)}
+                    />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button className="btn" disabled={patching} onClick={confirmDismiss}
+                              style={{ background: '#f87171', color: '#0f1623', fontWeight: 600, fontSize: 12 }}>
+                        Confirm dismiss
+                      </button>
+                      <button className="btn btn-ghost" disabled={patching}
+                              onClick={() => { setDismissOpen(false); setDismissNote(''); }}
+                              style={{ fontSize: 12 }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {selected.status === 'dismissed' && selected.dismiss_note && (
+                  <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 6 }}>
+                      Dismiss note
+                    </div>
+                    <div style={{ fontSize: 13, color: '#c8d0de' }}>{selected.dismiss_note}</div>
+                  </div>
+                )}
               </div>
             </div>
           )}

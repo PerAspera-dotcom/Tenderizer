@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, VaultDoc, ComposerSession, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, DocumentEntry, VaultDoc, ComposerSession, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -20,6 +20,7 @@ export interface TenderFilters {
   q?: string;
   status?: string;
   has_deadline?: boolean;
+  notice_type?: string;
   limit?: number;
   offset?: number;
   sort?: string;
@@ -34,6 +35,7 @@ export function listTenders(filters: TenderFilters = {}): Promise<TenderListResp
   if (filters.q) params.set('q', filters.q);
   if (filters.status) params.set('status', filters.status);
   if (filters.has_deadline !== undefined) params.set('has_deadline', String(filters.has_deadline));
+  if (filters.notice_type) params.set('notice_type', filters.notice_type);
   if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.offset !== undefined) params.set('offset', String(filters.offset));
   if (filters.sort) params.set('sort', filters.sort);
@@ -45,11 +47,11 @@ export function getTender(pub_number: string): Promise<Tender> {
   return apiFetch<Tender>(`/api/tenders/${encodeURIComponent(pub_number)}`);
 }
 
-export function patchTender(pub_number: string, status: string): Promise<unknown> {
+export function patchTender(pub_number: string, status: string, note?: string): Promise<unknown> {
   return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(note ? { status, note } : { status }),
   });
 }
 
@@ -94,6 +96,30 @@ export function patchFollowup(pub_number: string, outcome: string): Promise<unkn
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ outcome }),
   });
+}
+
+// ── Documents (CR-002 E, shortlisted tenders only) ───────────────────────────
+
+export function listDocuments(pub_number: string): Promise<DocumentEntry[]> {
+  return apiFetch<DocumentEntry[]>(`/api/tenders/${encodeURIComponent(pub_number)}/documents`);
+}
+
+export function uploadDocument(pub_number: string, file: File): Promise<DocumentEntry> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetch<DocumentEntry>(`/api/tenders/${encodeURIComponent(pub_number)}/documents`, {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export async function downloadDocumentBlob(id: number): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const r = await fetch(`${BASE}/api/documents/${id}`, { headers });
+  if (!r.ok) throw new Error(`${r.status} /api/documents/${id}`);
+  return r.blob();
 }
 
 // ── CPV config ────────────────────────────────────────────────────────────────

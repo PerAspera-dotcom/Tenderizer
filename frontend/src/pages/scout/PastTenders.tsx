@@ -1,9 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { useSearchParams } from '../../router';
 import { listTenders } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag } from '../../utils';
-import MatchChip from '../../components/MatchChip';
+import { formatDate, countryFlag, formatValue } from '../../utils';
 
 const PORTAL_OPTS = [
   { value: '', label: 'All portals' },
@@ -11,74 +9,70 @@ const PORTAL_OPTS = [
   { value: 'BOAMP', label: 'BOAMP' },
 ];
 
-const MATCH_OPTS = [
-  { value: '', label: 'All match types' },
-  { value: 'both', label: 'Both' },
-  { value: 'cpv', label: 'CPV' },
-  { value: 'keyword', label: 'Keyword' },
-];
-
-export default function TenderFeed() {
-  const [searchParams] = useSearchParams();
-  const initialQ = searchParams.get('q') ?? '';
-
+// CR-002 B1: past_tender notices get their own aggregated view — table,
+// filters, counts, same shape as the Tender Feed — but never mixed with
+// active tenders anywhere (Review Queue or Tender Feed).
+export default function PastTenders() {
   const [tenders, setTenders] = useState<Tender[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [q, setQ] = useState(initialQ);
+  const [q, setQ] = useState('');
   const [portal, setPortal] = useState('');
-  const [matchType, setMatchType] = useState('');
   const [country, setCountry] = useState('');
   const [countries, setCountries] = useState<string[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function load(params: { q?: string; source?: string; match_source?: string; country?: string }) {
+  function load(params: { q?: string; source?: string; country?: string }) {
     setLoading(true);
     listTenders({
       q: params.q || undefined,
       source: params.source || undefined,
-      match_source: params.match_source || undefined,
       country: params.country || undefined,
+      notice_type: 'past_tender',
       limit: 200,
-      sort: 'deadline',
     }).then(r => {
-      setTenders(r.results);
+      const sorted = [...r.results].sort((a, b) => (b.pub_date || '').localeCompare(a.pub_date || ''));
+      setTenders(sorted);
       setTotal(r.total);
-      // Collect unique countries
       const cs = Array.from(new Set(r.results.map(t => t.country).filter(Boolean))).sort();
       setCountries(cs);
-    }).catch(() => setError('Failed to load tenders'))
+    }).catch(() => setError('Failed to load past tenders'))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { load({ q: initialQ }); }, []);
+  useEffect(() => { load({}); }, []);
 
-  function applyFilters(newQ?: string, newPortal?: string, newMatch?: string, newCountry?: string) {
+  function applyFilters(newQ?: string, newPortal?: string, newCountry?: string) {
     const qVal = newQ ?? q;
     const pVal = newPortal ?? portal;
-    const mVal = newMatch ?? matchType;
     const cVal = newCountry ?? country;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      load({ q: qVal, source: pVal, match_source: mVal, country: cVal });
+      load({ q: qVal, source: pVal, country: cVal });
     }, 300);
   }
 
   function handleQ(val: string) { setQ(val); applyFilters(val); }
   function handlePortal(val: string) { setPortal(val); applyFilters(undefined, val); }
-  function handleMatch(val: string) { setMatchType(val); applyFilters(undefined, undefined, val); }
-  function handleCountry(val: string) { setCountry(val); applyFilters(undefined, undefined, undefined, val); }
+  function handleCountry(val: string) { setCountry(val); applyFilters(undefined, undefined, val); }
 
   const selectStyle: React.CSSProperties = {
     background: '#151d2c', border: '1px solid #1a2334', color: '#e2e8f0',
     padding: '7px 12px', borderRadius: 6, fontSize: 13, cursor: 'pointer', outline: 'none',
   };
 
+  const withAward = tenders.filter(t => t.awarded_to || t.awarded_value).length;
+
   return (
     <div>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Tender Feed</h1>
-      <p style={{ color: '#8892a4', marginBottom: 20 }}>All scored matches from the latest Scout run</p>
+      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Past Tenders</h1>
+      <p style={{ color: '#8892a4', marginBottom: 16 }}>Historical / awarded notices — identified by an empty deadline, not part of active triage</p>
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+        <span className="pill pill-grey">{total} past tenders</span>
+        <span className="pill pill-green">{withAward} with award info</span>
+      </div>
 
       {/* Filter bar */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -87,7 +81,7 @@ export default function TenderFeed() {
           <input
             className="input-field"
             style={{ paddingLeft: 30 }}
-            placeholder="Filter feed…"
+            placeholder="Filter past tenders…"
             value={q}
             onChange={e => handleQ(e.target.value)}
           />
@@ -101,9 +95,6 @@ export default function TenderFeed() {
             <option key={c} value={c}>{countryFlag(c)} {c}</option>
           ))}
         </select>
-        <select style={selectStyle} value={matchType} onChange={e => handleMatch(e.target.value)}>
-          {MATCH_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
       </div>
 
       {loading ? (
@@ -111,7 +102,7 @@ export default function TenderFeed() {
       ) : error ? (
         <div className="error">{error}</div>
       ) : tenders.length === 0 ? (
-        <div className="loading">No tenders match the current filters.</div>
+        <div className="loading">No past tenders match the current filters.</div>
       ) : (
         <div className="card">
           <div style={{ padding: '10px 16px', borderBottom: '1px solid #1a2334', color: '#8892a4', fontSize: 12 }}>
@@ -120,10 +111,11 @@ export default function TenderFeed() {
           <table>
             <thead>
               <tr>
-                <th style={{ width: '40%' }}>Title</th>
+                <th style={{ width: '32%' }}>Title</th>
                 <th>Portal</th>
-                <th>Deadline</th>
-                <th>Match</th>
+                <th>Published</th>
+                <th>Awarded To</th>
+                <th>Awarded Value</th>
                 <th>Open</th>
               </tr>
             </thead>
@@ -131,14 +123,10 @@ export default function TenderFeed() {
               {tenders.map(t => (
                 <tr key={t.hash}>
                   <td>
-                    <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360, fontSize: 13 }}>
-                      {/* CR-002 C2: dismiss note stays visible here after a tender drops out of the Review Queue */}
-                      {t.status === 'dismissed' && t.dismiss_note && (
-                        <span title={`Dismissed: ${t.dismiss_note}`} style={{ marginRight: 4 }}>📝</span>
-                      )}
+                    <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320, fontSize: 13 }}>
                       {t.tag_line}
                     </div>
-                    <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360 }}>
+                    <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
                       {t.buyer}
                     </div>
                   </td>
@@ -146,8 +134,11 @@ export default function TenderFeed() {
                     <span style={{ fontSize: 14, marginRight: 4 }}>{countryFlag(t.country)}</span>
                     <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t.source}</span>
                   </td>
-                  <td><span className="mono" style={{ fontSize: 13 }}>{formatDate(t.deadline)}</span></td>
-                  <td><MatchChip matchSource={t.match_source} /></td>
+                  <td><span className="mono" style={{ fontSize: 13 }}>{formatDate(t.pub_date)}</span></td>
+                  <td style={{ fontSize: 13 }}>{t.awarded_to || <span style={{ color: '#4c5a70' }}>—</span>}</td>
+                  <td className="mono" style={{ fontSize: 13 }}>
+                    {formatValue(t.awarded_value, t.awarded_currency) || <span style={{ color: '#4c5a70' }}>—</span>}
+                  </td>
                   <td>
                     {t.url ? (
                       <a href={t.url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>Open ↗</a>

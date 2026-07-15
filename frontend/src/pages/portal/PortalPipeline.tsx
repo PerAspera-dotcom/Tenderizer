@@ -1,7 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
-import { getPipeline, patchPipeline } from '../../api';
-import type { PipelineEntry } from '../../types';
+import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocumentBlob } from '../../api';
+import type { PipelineEntry, DocumentEntry } from '../../types';
 import { formatDate, daysLeft, countryFlag } from '../../utils';
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function deadlineDotColor(e: PipelineEntry): string {
   const dl = e.deadline_override || e.deadline;
@@ -31,6 +37,10 @@ export default function PortalPipeline() {
   const [owner, setOwner] = useState('');
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ownerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // CR-002 E: minimal document upload slice
+  const [documents, setDocuments] = useState<DocumentEntry[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [docError, setDocError] = useState('');
 
   function load() {
     getPipeline()
@@ -54,8 +64,46 @@ export default function PortalPipeline() {
       setOwner(selected.owner ?? '');
       setAmendOpen(false);
       setAmendValue('');
+      loadDocuments(selected.pub_number);
     }
   }, [selected?.pub_number]);
+
+  function loadDocuments(pub_number: string) {
+    setDocError('');
+    listDocuments(pub_number).then(setDocuments).catch(() => setDocError('Failed to load documents'));
+  }
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !selected) return;
+    setUploading(true);
+    setDocError('');
+    try {
+      await uploadDocument(selected.pub_number, file);
+      loadDocuments(selected.pub_number);
+    } catch {
+      setDocError('Upload failed — try again.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleDownload(doc: DocumentEntry) {
+    try {
+      const blob = await downloadDocumentBlob(doc.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = doc.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setDocError('Download failed — try again.');
+    }
+  }
 
   const closing = pipeline.filter(e => {
     const d = daysLeft(e.deadline_override || e.deadline);
@@ -257,7 +305,7 @@ export default function PortalPipeline() {
                 </div>
 
                 {/* Notes */}
-                <div>
+                <div style={{ marginBottom: 20 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 8 }}>Notes</div>
                   <textarea
                     className="input-field"
@@ -267,6 +315,31 @@ export default function PortalPipeline() {
                     onChange={e => setNotes(e.target.value)}
                     onBlur={handleNotesBlur}
                   />
+                </div>
+
+                {/* CR-002 E: documents — minimal upload slice, upload + store only */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 8 }}>Documents</div>
+                  {documents.length === 0 ? (
+                    <div style={{ color: '#8892a4', fontSize: 13, marginBottom: 10 }}>No documents uploaded yet.</div>
+                  ) : (
+                    <div style={{ marginBottom: 10 }}>
+                      {documents.map(doc => (
+                        <div key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid #1a2334' }}>
+                          <span style={{ fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.filename}</span>
+                          <span style={{ color: '#8892a4', fontSize: 11 }}>{formatSize(doc.size)}</span>
+                          <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => handleDownload(doc)}>
+                            ⤓ Download
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <label className="btn btn-ghost" style={{ fontSize: 12, display: 'inline-block', cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1 }}>
+                    {uploading ? 'Uploading…' : '+ Upload document'}
+                    <input type="file" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
+                  </label>
+                  {docError && <div style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{docError}</div>}
                 </div>
               </div>
             </div>

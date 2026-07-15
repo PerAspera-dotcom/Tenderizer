@@ -12,6 +12,7 @@ __pycache__/
 # runtime data / generated output — not source
 data/tenders.db
 data/last_run.json
+data/uploads/
 reports/*.xlsx
 
 frontend/dist/

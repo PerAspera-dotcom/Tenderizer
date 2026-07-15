@@ -294,6 +294,39 @@ def test_matched_total_is_scoped_to_this_runs_own_fetch(tmp_path, raw_ted_supply
     assert meta["matched_total"] == 1   # only the tent notice matched
 
 
+# ── CR-002 A1: notice-type classification wired through the full pipeline ──
+
+def test_empty_deadline_notice_is_tagged_past_tender_with_award_info(tmp_path, raw_ted_supply):
+    import store, copy
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "222333-2026"
+    del raw["deadline-receipt-request"]  # normalize.py -> deadline == ""
+    raw["description-proc"] = {"eng": "Contract awarded to Acme Shelters Ltd. "
+                                       "The contract value of 350000 EUR was accepted."}
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["notice_type"] == "past_tender"
+    assert stored["awarded_to"] == "Acme Shelters Ltd"
+    assert stored["awarded_value"] == "350000"
+    assert stored["awarded_currency"] == "EUR"
+
+
+def test_active_notice_is_tagged_tender_with_no_award_info(tmp_path, raw_ted_supply):
+    import store
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["notice_type"] == "tender"
+    assert stored["awarded_to"] is None
+
+
 def test_matched_total_does_not_accumulate_across_runs(tmp_path, raw_ted_supply):
     # Re-running with nothing new to fetch must report 0 matched this run,
     # not the 1 match already sitting in the tenders table from run #1 —

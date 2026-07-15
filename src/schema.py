@@ -62,6 +62,17 @@ tenders = Table(
     Column("tag_line_en", Text, nullable=False, server_default=""),
     Column("description_en", Text, nullable=False, server_default=""),
     Column("translation_status", Text, nullable=False, server_default=""),
+    # CR-002 C2: optional note captured on dismiss. Nullable, no server_default —
+    # absent means NULL, never '' (see store.upsert's _NULL_DEFAULT handling).
+    Column("dismiss_note", Text, nullable=True),
+    # CR-002 A: additive classification tag, always populated (never blank —
+    # see classification.classify's DEFAULT_TYPE fallback). Award fields are
+    # best-effort extraction (classification.extract_award_info) and stay
+    # NULL, not '', when nothing was found.
+    Column("notice_type", Text, nullable=False, server_default="tender"),
+    Column("awarded_to", Text, nullable=True),
+    Column("awarded_value", Text, nullable=True),
+    Column("awarded_currency", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 
@@ -84,6 +95,24 @@ pipeline = Table(
 )
 
 PIPELINE_COLUMNS = [c.name for c in pipeline.columns]
+
+# CR-002 E (D-C decided: minimal slice now — upload + store only, no
+# requirement parsing/translation; that full pipeline is Composer's Phase 2
+# Ingest & Config, POST /api/composer/ingest, deliberately not built here).
+# `storage_path` is a server-generated (uuid-based) on-disk path, never the
+# user-supplied filename, so a malicious filename can't path-traverse; the
+# original name is kept separately, display-only, in `filename`.
+documents = Table(
+    "documents", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False, server_default=""),
+    Column("size", Integer, nullable=False, server_default="0"),
+    Column("storage_path", Text, nullable=False),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
+)
 
 translations = Table(
     "translations", metadata,
