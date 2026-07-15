@@ -97,3 +97,46 @@ def test_stats_new_today_excludes_past_tenders(tmp_path, monkeypatch):
         "PAST-2", notice_type="past_tender", deadline="", first_seen=today))
     stats = api.get_stats(tenant_id=TEST_TENANT_ID)
     assert stats["new_today"] == 1
+
+
+# ── update_classification: the notice_type backfill escape hatch ───────────
+# (scratch_backfill_notice_type.py) for rows ingested before classification
+# existed, stuck at notice_type's column default regardless of their actual
+# deadline field.
+
+def test_update_classification_reclassifies_a_stale_row(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = store.init_db(db_path)
+    # Simulates a pre-CR-002 row: empty deadline, but notice_type stuck at
+    # the column default "tender" since classify() never ran for it.
+    store.upsert(conn, TEST_TENANT_ID, _rec("STALE-1", deadline=""))
+    assert _get(conn, "STALE-1")["notice_type"] == "tender"
+
+    store.update_classification(conn, TEST_TENANT_ID, "STALE-1", "past_tender",
+                                 "Acme Shelters Ltd", "350000", "EUR")
+    stored = _get(conn, "STALE-1")
+    assert stored["notice_type"] == "past_tender"
+    assert stored["awarded_to"] == "Acme Shelters Ltd"
+    assert stored["awarded_value"] == "350000"
+    assert stored["awarded_currency"] == "EUR"
+
+
+def test_update_classification_clears_award_fields_back_to_null(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    conn = store.init_db(db_path)
+    store.upsert(conn, TEST_TENANT_ID, _rec(
+        "STALE-2", notice_type="past_tender", deadline="",
+        awarded_to="Old Corp", awarded_value="1", awarded_currency="EUR"))
+
+    store.update_classification(conn, TEST_TENANT_ID, "STALE-2", "tender", None, None, None)
+    stored = _get(conn, "STALE-2")
+    assert stored["notice_type"] == "tender"
+    assert stored["awarded_to"] is None
+    assert stored["awarded_value"] is None
+    assert stored["awarded_currency"] is None
+
+
+def _get(conn, pub_number):
+    return next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == pub_number)

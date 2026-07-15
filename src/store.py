@@ -385,6 +385,19 @@ def update_tagging(conn, tenant_id, pub_number, cpv_codes, matched_terms, match_
                   match_source=match_source, exclude_reason=exclude_reason or ""))
 
 
+def update_classification(conn, tenant_id, pub_number, notice_type, awarded_to, awarded_value, awarded_currency):
+    """CR-002 A backfill escape hatch, same shape as update_tagging() — for
+    already-stored rows whose notice_type was never computed (ingested before
+    classification.classify existed, so upsert()'s insert-only rule left them
+    at the notice_type column's server_default). See scratch_backfill_notice_type.py.
+    """
+    with conn.begin() as c:
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        ).values(notice_type=notice_type, awarded_to=awarded_to,
+                  awarded_value=awarded_value, awarded_currency=awarded_currency))
+
+
 def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
     """CR-001 D-DUP: collapse republished duplicates into `kept_pub_number`.
 
