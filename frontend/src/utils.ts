@@ -1,3 +1,28 @@
+import type { Tender } from './types';
+
+// CR-001 R3: a tender needs translation when its source language isn't English.
+// Shared across every screen that lists tender titles (Scout + Portal) so
+// "all scraped tenders" actually means all of them, not just Review Queue.
+export function needsTranslation(t: Pick<Tender, 'language'>): boolean {
+  return !!t.language && t.language !== 'eng' && t.language !== 'en';
+}
+
+export function displayTagLine(
+  t: Pick<Tender, 'tag_line' | 'tag_line_en' | 'translation_status' | 'language'>,
+  showOriginal = false,
+): string {
+  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.tag_line;
+  return t.tag_line_en || t.tag_line;
+}
+
+export function displayDescription(
+  t: Pick<Tender, 'description' | 'description_en' | 'translation_status' | 'language'>,
+  showOriginal = false,
+): string {
+  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.description;
+  return t.description_en || t.description;
+}
+
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—';
   try {

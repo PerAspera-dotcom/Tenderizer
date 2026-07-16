@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Link } from '../../router';
 import { getStats, getHealth, listTenders, postRun } from '../../api';
 import type { Stats, PortalHealth, Tender } from '../../types';
-import { formatDate, formatTime, countryFlag } from '../../utils';
+import { formatDate, formatTime, countryFlag, displayTagLine } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 
 export default function Dashboard() {
@@ -154,7 +154,7 @@ export default function Dashboard() {
                   {topTenders.map(t => (
                     <tr key={t.hash}>
                       <td>
-                        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240, fontSize: 13 }}>{t.tag_line}</div>
+                        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240, fontSize: 13 }}>{displayTagLine(t)}</div>
                         <div style={{ color: '#8892a4', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{t.buyer}</div>
                       </td>
                       <td style={{ whiteSpace: 'nowrap' }}>
