@@ -97,16 +97,22 @@ def classify(rec):
     return DEFAULT_TYPE
 
 
-# ── A1: award info extraction (best-effort, TED/BOAMP award notices) ────────
+# ── A1: award info extraction (TED/BOAMP award notices) ─────────────────────
 #
-# Neither connector maps a dedicated "winner"/"awarded value" field today —
-# normalize.py only carries the pre-award estimated value (CR-001 F6's
-# value/value_currency). Award notices carry this in free text instead
-# (tag_line/description), in fairly standard EN/FR phrasing (CR-002 A1) — so
-# this is regex-over-text, not a structured field read. Never blocks
-# classification: absence is null, never fabricated (CR-002 A1 acceptance).
+# CR-003 G4: both connectors DO expose structured award fields — they just
+# weren't fetched. normalize_ted (winner-name / result-value-notice /
+# result-value-cur-notice, falling back to the per-lot tender-value(-cur) if
+# the notice-level total is absent) and normalize_boamp (titulaire, and
+# donnees' EFORMS.ContractAwardNotice...efac:NoticeResult.cbc:TotalAmount)
+# populate raw_award_winner/raw_award_value/raw_award_currency on the
+# normalized record — see normalize.py. Those are preferred here; the
+# regex-over-text patterns below are the fallback for whichever field a
+# structured source didn't supply (e.g. an older BOAMP schema with no CPV/
+# award JSON at all — same permanent-gap case _boamp_cpv_codes documents).
+# Never blocks classification: absence is null, never fabricated (CR-002 A1
+# acceptance).
 
-_NAME = r"([A-Z][\w &\-\.,'’]{2,80}?)"
+_NAME = r"([^\W\d_][\w &\-\.,'’]{2,80}?)"  # any Unicode letter, not just ASCII A-Z
 _NUM = r"([\d][\d.,\s]*\d|\d)"
 _CUR = r"(EUR|GBP|USD|€|\$|£)?"
 
@@ -116,6 +122,8 @@ _AWARDED_TO_PATTERNS = [
 ]
 
 _VALUE_PATTERNS = [
+    # TED's own standard "Results" template string (not per-country prose).
+    re.compile(r"value of all contracts awarded in this notice[:\s]*" + _NUM + r"\s*" + _CUR, re.IGNORECASE),
     re.compile(r"(?:contract value|awarded value|value of the contract)[:\s]*(?:of\s*)?(?:approximately\s*)?" + _NUM + r"\s*" + _CUR, re.IGNORECASE),
     re.compile(r"montant\s*(?:du march[eé]|total)?\s*[:\-]?\s*(?:de\s*)?" + _NUM + r"\s*" + _CUR, re.IGNORECASE),
 ]
@@ -126,26 +134,35 @@ _CURRENCY_SYMBOLS = {"€": "EUR", "$": "USD", "£": "GBP"}
 def extract_award_info(rec):
     """(awarded_to, awarded_value, awarded_currency) — each None if not found.
 
+    Structured fields (rec's raw_award_* keys, set by normalize.py from the
+    connector's own winner/result-value fields) win per-field; regex-over-
+    text fills in whichever field a structured source didn't supply.
     Independent per field: an awarded_to hit and a value hit can come from
     different patterns/languages in the same bilingual notice.
     """
-    text = _text(rec)
-    awarded_to = None
-    for pattern in _AWARDED_TO_PATTERNS:
-        m = pattern.search(text)
-        if m:
-            awarded_to = m.group(1).strip().rstrip(",.;")
-            break
+    awarded_to = rec.get("raw_award_winner") or None
+    awarded_value = rec.get("raw_award_value") or None
+    awarded_currency = rec.get("raw_award_currency") or None
+    if awarded_to and awarded_value and awarded_currency:
+        return awarded_to, awarded_value, awarded_currency
 
-    awarded_value = None
-    awarded_currency = None
-    for pattern in _VALUE_PATTERNS:
-        m = pattern.search(text)
-        if m:
-            awarded_value = re.sub(r"\s+", "", m.group(1)).strip(".,")
-            currency = m.group(2)
-            if currency:
-                awarded_currency = _CURRENCY_SYMBOLS.get(currency, currency.upper())
-            break
+    text = _text(rec)
+    if not awarded_to:
+        for pattern in _AWARDED_TO_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                awarded_to = m.group(1).strip().rstrip(",.;")
+                break
+
+    if not (awarded_value and awarded_currency):
+        for pattern in _VALUE_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                if not awarded_value:
+                    awarded_value = re.sub(r"\s+", "", m.group(1)).strip(".,")
+                currency = m.group(2)
+                if currency and not awarded_currency:
+                    awarded_currency = _CURRENCY_SYMBOLS.get(currency, currency.upper())
+                break
 
     return awarded_to, awarded_value, awarded_currency

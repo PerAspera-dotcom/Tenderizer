@@ -56,6 +56,41 @@ def test_record_hash_differs_by_pub_number(raw_ted_supply, raw_ted_services):
     a = normalize.normalize_ted(raw_ted_supply); b = normalize.normalize_ted(raw_ted_services)
     assert normalize.record_hash(a) != normalize.record_hash(b)
 
+# ── CR-003 G4: structured award fields (verified live 2026-07 against TED
+# 391890-2026 — see connectors/ted.py's FIELDS comment) ─────────────────────
+
+def test_no_award_fields_yields_none_award_info(raw_ted_supply):
+    r = normalize.normalize_ted(raw_ted_supply)
+    assert r["raw_award_winner"] is None
+    assert r["raw_award_value"] is None
+    assert r["raw_award_currency"] is None
+
+def test_extracts_winner_name_and_notice_level_award_value(raw_ted_supply):
+    raw = dict(raw_ted_supply, **{
+        "winner-name": {"ell": ["Κατασκευαστική Διάς ΑΤΕΒΕ"]},
+        "result-value-notice": "45290.32",
+        "result-value-cur-notice": "EUR",
+    })
+    r = normalize.normalize_ted(raw)
+    assert r["raw_award_winner"] == "Κατασκευαστική Διάς ΑΤΕΒΕ"
+    assert r["raw_award_value"] == "45290.32"
+    assert r["raw_award_currency"] == "EUR"
+
+def test_falls_back_to_per_lot_tender_value_when_notice_level_absent(raw_ted_supply):
+    raw = dict(raw_ted_supply, **{"tender-value": ["43720"], "tender-value-cur": ["EUR"]})
+    r = normalize.normalize_ted(raw)
+    assert r["raw_award_value"] == "43720"
+    assert r["raw_award_currency"] == "EUR"
+
+def test_notice_level_award_value_preferred_over_per_lot(raw_ted_supply):
+    raw = dict(raw_ted_supply, **{
+        "result-value-notice": "45290.32", "result-value-cur-notice": "EUR",
+        "tender-value": ["43720"], "tender-value-cur": ["EUR"],
+    })
+    r = normalize.normalize_ted(raw)
+    assert r["raw_award_value"] == "45290.32"
+
+
 def test_upsert_new_returns_true(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     assert store.upsert(conn, TEST_TENANT_ID, normalize.normalize_ted(raw_ted_supply)) is True

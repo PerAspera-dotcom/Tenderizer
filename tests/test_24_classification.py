@@ -152,3 +152,52 @@ def test_extract_returns_none_when_absent():
     assert awarded_to is None
     assert value is None
     assert currency is None
+
+
+# ── CR-003 G4: structured award fields (normalize.py's raw_award_*) ─────────
+
+def test_extract_prefers_structured_fields_over_text_regex():
+    # No award text in tag_line/description at all — only the structured
+    # fields normalize_ted/normalize_boamp populate from the connector's own
+    # winner/result-value fields (CR-003 G4's actual fix for TED 391890-2026,
+    # whose stored description never carried any award text to regex over).
+    rec = _rec("Greece – Specialist vehicles", description="16 sections", deadline="")
+    rec["raw_award_winner"] = "Ι. ΚΑΤΣΙΔΩΝΙΩΤΑΚΗΣ Α.Τ.Ε.Β.Ε ΚΑΤΑΣΚΕΥΑΣΤΙΚΗ ΔΙΑΣ ΑΤΕΒΕ"
+    rec["raw_award_value"] = "45290.32"
+    rec["raw_award_currency"] = "EUR"
+    awarded_to, value, currency = classification.extract_award_info(rec)
+    assert awarded_to == "Ι. ΚΑΤΣΙΔΩΝΙΩΤΑΚΗΣ Α.Τ.Ε.Β.Ε ΚΑΤΑΣΚΕΥΑΣΤΙΚΗ ΔΙΑΣ ΑΤΕΒΕ"
+    assert value == "45290.32"
+    assert currency == "EUR"
+
+
+def test_extract_falls_back_to_regex_for_missing_structured_field():
+    # Structured winner name present, but no structured value (e.g. TED
+    # notice with no notice-level or per-lot value disclosed) — regex still
+    # fills in the value from free text independently.
+    rec = _rec("Tents — award notice",
+                description="The contract value of 350000 EUR was accepted by the buyer.")
+    rec["raw_award_winner"] = "Acme Shelters BV"
+    awarded_to, value, currency = classification.extract_award_info(rec)
+    assert awarded_to == "Acme Shelters BV"
+    assert value == "350000"
+    assert currency == "EUR"
+
+
+def test_extract_awarded_to_non_latin_script_name():
+    # _NAME used to require an ASCII [A-Z] first character, so a Greek (or
+    # other non-Latin-script) winner name behind a recognised EN/FR trigger
+    # phrase could never match — CR-003 G4's regex fix (fallback path only;
+    # structured fields are the primary route for TED/BOAMP, tested above).
+    rec = _rec("Greece — award notice",
+                description="Successful tenderer: Κατασκευαστική Διάς ΑΤΕΒΕ. Notified 2026-03-03.")
+    awarded_to, value, currency = classification.extract_award_info(rec)
+    assert awarded_to == "Κατασκευαστική Διάς ΑΤΕΒΕ"
+
+
+def test_extract_value_ted_results_template_string():
+    rec = _rec("Greece — award notice",
+                description="Value of all contracts awarded in this notice: 45290.32 EUR")
+    awarded_to, value, currency = classification.extract_award_info(rec)
+    assert value == "45290.32"
+    assert currency == "EUR"

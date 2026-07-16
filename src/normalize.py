@@ -88,6 +88,14 @@ def normalize_ted(raw):
     tag_line, tag_lang = _pick_lang(raw.get("notice-title", {}))
     description, _desc_lang = _pick_lang(raw.get("description-proc", {}))
     buyer, _buyer_lang = _pick_lang(raw.get("buyer-name", {}))
+    # CR-003 G4: structured award fields (see connectors/ted.py's FIELDS comment
+    # for how these names were confirmed). winner-name is multilingual like
+    # notice-title/buyer-name; _pick_lang handles it the same way. Prefer the
+    # notice-level total (result-value-notice/-cur-notice) over the per-lot
+    # tender-value(-cur), falling back to the latter when the former is absent.
+    award_winner, _winner_lang = _pick_lang(raw.get("winner-name", {}))
+    award_value = _first(raw.get("result-value-notice")) or _first(raw.get("tender-value"))
+    award_currency = _first(raw.get("result-value-cur-notice")) or _first(raw.get("tender-value-cur"))
     return {
         "source": "TED",
         "pub_number": raw.get("publication-number", ""),
@@ -114,6 +122,11 @@ def normalize_ted(raw):
         # 'eng' when TED provided an English translation, else whatever
         # LANG_PREF/fallback found — anything != 'eng' needs translation.
         "language": tag_lang,
+        # CR-003 G4: structured award fields, consumed by
+        # classification.extract_award_info in preference to its regex fallback.
+        "raw_award_winner": award_winner or None,
+        "raw_award_value": award_value or None,
+        "raw_award_currency": award_currency or None,
     }
 
 def record_hash(record):
@@ -170,6 +183,48 @@ def _boamp_cpv_codes(raw):
     return _dedupe(codes)
 
 
+def _boamp_award_info(raw):
+    """(value, currency) from BOAMP's award-result total, buried in `donnees`
+    (verified live, 2026-07, against a real ATTRIBUTION/"Résultat de marché"
+    notice): EFORMS.ContractAwardNotice...efac:NoticeResult.cbc:TotalAmount ==
+    {"@currencyID": "EUR", "#text": "2557672"} — the notice-level award total,
+    same tier as TED's result-value-notice/-cur-notice. Scoped to
+    efac:NoticeResult specifically (not a bare `cbc:TotalAmount` walk) so this
+    doesn't pick up a per-lot cac:LegalMonetaryTotal.cbc:PayableAmount instead.
+    Older/legacy BOAMP schemas with no award JSON at all (see
+    _boamp_cpv_codes's docstring) leave this (None, None), same permanent gap.
+    """
+    donnees = raw.get("donnees")
+    if not donnees:
+        return None, None
+    try:
+        data = json.loads(donnees)
+    except (TypeError, ValueError):
+        return None, None
+
+    found = {}
+
+    def walk(node):
+        if found:
+            return
+        if isinstance(node, dict):
+            notice_result = node.get("efac:NoticeResult")
+            if isinstance(notice_result, dict):
+                total = notice_result.get("cbc:TotalAmount")
+                if isinstance(total, dict) and total.get("#text"):
+                    found["value"] = total["#text"]
+                    found["currency"] = total.get("@currencyID")
+                    return
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(data)
+    return found.get("value"), found.get("currency")
+
+
 def normalize_boamp(raw):
     """Normalise a BOAMP record into the SAME schema as normalize_ted.
 
@@ -177,6 +232,10 @@ def normalize_boamp(raw):
     _boamp_cpv_codes for where it actually lives).
     """
     idweb = raw.get("idweb", "")
+    # CR-003 G4: `titulaire` (winner) is a flat top-level field, unlike CPV —
+    # no donnees-walk needed for the name itself, only for the award value.
+    award_winner = _first(raw.get("titulaire"))
+    award_value, award_currency = _boamp_award_info(raw)
     return {
         "source": "BOAMP",
         "pub_number": idweb,
@@ -201,4 +260,9 @@ def normalize_boamp(raw):
         # BOAMP is French-only, single-language (per the connector's own docs) —
         # no per-notice detection needed, always translate (CR-001 R3).
         "language": "fra",
+        # CR-003 G4: structured award fields, consumed by
+        # classification.extract_award_info in preference to its regex fallback.
+        "raw_award_winner": award_winner or None,
+        "raw_award_value": award_value or None,
+        "raw_award_currency": award_currency or None,
     }

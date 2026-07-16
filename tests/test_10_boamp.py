@@ -120,3 +120,45 @@ def test_empty_objet_principal_is_ignored_not_a_crash(raw_boamp_supply):
         "codeCPV": {"objetPrincipal": ""}}}}}
     raw = dict(raw_boamp_supply, donnees=json.dumps(donnees))
     assert normalize.normalize_boamp(raw)["cpv_codes"] == []
+
+
+# ── CR-003 G4: structured award fields (verified live 2026-07 against a real
+# ATTRIBUTION/"Résultat de marché" BOAMP notice) ─────────────────────────────
+
+def test_no_titulaire_or_donnees_yields_none_award_info(raw_boamp_supply):
+    r = normalize.normalize_boamp(raw_boamp_supply)
+    assert r["raw_award_winner"] is None
+    assert r["raw_award_value"] is None
+    assert r["raw_award_currency"] is None
+
+def test_titulaire_is_the_winner_name(raw_boamp_supply):
+    raw = dict(raw_boamp_supply, titulaire=["EXA'RENT"])
+    assert normalize.normalize_boamp(raw)["raw_award_winner"] == "EXA'RENT"
+
+def test_extracts_notice_result_total_amount_from_donnees(raw_boamp_supply):
+    donnees = {"EFORMS": {"ContractAwardNotice": {"ext:UBLExtensions": {"ext:UBLExtension": {
+        "ext:ExtensionContent": {"efext:EformsExtension": {"efac:NoticeResult": {
+            "cbc:TotalAmount": {"@currencyID": "EUR", "#text": "2557672"},
+            "efac:LotResult": [{"cbc:ID": {"@schemeName": "result", "#text": "RES-0001"}}],
+        }}}}}}}}
+    raw = dict(raw_boamp_supply, titulaire=["EXA'RENT"], donnees=json.dumps(donnees))
+    r = normalize.normalize_boamp(raw)
+    assert r["raw_award_winner"] == "EXA'RENT"
+    assert r["raw_award_value"] == "2557672"
+    assert r["raw_award_currency"] == "EUR"
+
+def test_ignores_per_lot_payable_amount_not_notice_result_total(raw_boamp_supply):
+    # A per-lot cac:LegalMonetaryTotal.cbc:PayableAmount sitting outside
+    # efac:NoticeResult must not be mistaken for the notice-level total.
+    donnees = {"efac:LotTender": [{"cac:LegalMonetaryTotal": {
+        "cbc:PayableAmount": {"@currencyID": "EUR", "#text": "1817043"}}}]}
+    raw = dict(raw_boamp_supply, donnees=json.dumps(donnees))
+    r = normalize.normalize_boamp(raw)
+    assert r["raw_award_value"] is None
+    assert r["raw_award_currency"] is None
+
+def test_malformed_donnees_json_yields_no_award_info_not_a_crash(raw_boamp_supply):
+    raw = dict(raw_boamp_supply, donnees="{not valid json")
+    r = normalize.normalize_boamp(raw)
+    assert r["raw_award_value"] is None
+    assert r["raw_award_currency"] is None

@@ -29,15 +29,25 @@ ENDPOINT = "https://api.ted.europa.eu/v3/notices/search"
 # estimated-value-proc / estimated-value-cur-proc (CR-001 F6) verified via a live
 # probe of the actual v3 API's UNSUPPORTED_VALUE error, which lists every valid
 # field name — 'estimated-value' alone is NOT valid; per-notice-scope suffixes are
-# required, and '-proc' is the procedure-level BT-27 (pre-award estimate), not
-# '-glo'/'total-value'/'tender-value' which are award-result fields (out of scope
-# for open notices this connector fetches). Absent on most notices — value is
-# often undisclosed; normalize.py treats that as "no value" (kept, not excluded).
+# required, and '-proc' is the procedure-level BT-27 (pre-award estimate).
+#
+# CR-003 G4 (2026-07 live re-probe): award-result fields were originally excluded
+# here as "out of scope for open notices" — before CR-002 A1 needed them for
+# *past/awarded* notices. Re-probing the same UNSUPPORTED_VALUE field list found
+# the real names: winner-name (multilingual dict, same shape as notice-title),
+# result-value-notice/result-value-cur-notice (the notice-level award total —
+# confirmed against TED 391890-2026: "45290.32"/"EUR", matching CR-003's quoted
+# "Value of all contracts awarded in this notice"), and tender-value/
+# tender-value-cur (per-lot, kept as a fallback for notices with no
+# notice-level total). See normalize.py's normalize_ted for how these feed
+# classification.extract_award_info.
 FIELDS = [
     "publication-number", "notice-title", "description-proc",
     "buyer-name", "buyer-country", "contract-nature", "procedure-type", "notice-type",
     "deadline-receipt-request", "place-of-performance", "classification-cpv", "links",
     "estimated-value-proc", "estimated-value-cur-proc",
+    "winner-name", "result-value-notice", "result-value-cur-notice",
+    "tender-value", "tender-value-cur",
 ]
 
 
