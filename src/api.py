@@ -420,7 +420,8 @@ def put_cpv_config(body: CpvBody, tenant_id: int = Depends(get_current_tenant_id
         if unknown:
             warnings.warn(f"Unknown CPV codes (not in cpv_reference.json): {unknown}")
     store.set_tenant_cpv(_db(), tenant_id, body.codes)
-    return {"saved": True, "warnings": [str(w.message) for w in caught]}
+    rescored = store.rescore_pending(_db(), tenant_id)
+    return {"saved": True, "warnings": [str(w.message) for w in caught], "rescored": dict(rescored)}
 
 
 class KeywordsBody(BaseModel):
@@ -434,7 +435,18 @@ def get_keywords_config(tenant_id: int = Depends(get_current_tenant_id)):
 @app.put("/api/config/keywords")
 def put_keywords_config(body: KeywordsBody, tenant_id: int = Depends(get_current_tenant_id)):
     store.set_tenant_keywords(_db(), tenant_id, body.model_dump(exclude_none=True))
-    return {"saved": True}
+    rescored = store.rescore_pending(_db(), tenant_id)
+    return {"saved": True, "rescored": dict(rescored)}
+
+
+@app.post("/api/config/rescore")
+def rescore_config(tenant_id: int = Depends(get_current_tenant_id)):
+    """CR-003 G3 — on-demand re-tag of `status='new'` rows against current
+    CPV/keyword config, for cases the automatic post-save rescore (above)
+    predates (e.g. a row ingested before this endpoint existed).
+    """
+    rescored = store.rescore_pending(_db(), tenant_id)
+    return {"rescored": dict(rescored)}
 
 
 class SettingsBody(BaseModel):

@@ -15,13 +15,16 @@ tenant_keywords, tenant_portals) — see ensure_tenant() and the get_tenant_*/
 set_tenant_* functions below.
 """
 import json
-from datetime import date
+from collections import Counter
+from datetime import date, datetime, timezone
 
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import config
 import db
+import filters
+import match
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
 from schema import documents, metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
@@ -396,6 +399,55 @@ def update_classification(conn, tenant_id, pub_number, notice_type, awarded_to, 
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
         ).values(notice_type=notice_type, awarded_to=awarded_to,
                   awarded_value=awarded_value, awarded_currency=awarded_currency))
+
+
+def rescore_pending(conn, tenant_id, now=None):
+    """CR-003 G3 — re-run matching/filtering against `status='new'` rows only.
+
+    upsert() is deliberately insert-only (see update_tagging's docstring), so a
+    row ingested before a cpv.yaml/keywords.yaml change existed stays stale
+    forever unless something revisits it. Unlike scratch_rescore_matching.py
+    (a one-off, all-rows script), this is the routine escape hatch: called
+    automatically after a config save (PUT /api/config/cpv,
+    PUT /api/config/keywords) and on demand via POST /api/config/rescore.
+    Bounded to `status='new'` — a tender the customer has already triaged
+    (dismissed/shortlisted) keeps its tagging as it was when they acted on it;
+    only pending, still-in-queue rows get re-tagged.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    records = [r for r in all_records(conn, tenant_id) if r.get("status") == "new"]
+    if not records:
+        return Counter()
+
+    tenant_kw = get_tenant_keywords(conn, tenant_id)
+    full_keywords = [w for lang in tenant_kw["terms"].values() for w in lang]
+    cpv_set = set(get_tenant_cpv(conn, tenant_id))
+    exclusions = dict(config.exclusions())
+    exclusions["_distinctive_keywords"] = tenant_kw["distinctive"]
+
+    stats = Counter()
+    for rec in records:
+        text_ = f"{rec.get('tag_line', '')} {rec.get('description', '')}"
+        hits = match.match_keywords(text_, full_keywords)
+        has_cpv = bool(set(rec.get("cpv_codes") or []) & cpv_set)
+        new_match_source = match.classify_match(has_cpv, hits)
+
+        scored = dict(rec, matched_terms=hits, match_source=new_match_source)
+        new_exclude_reason = filters.apply_filters(scored, exclusions, now) or ""
+
+        changed = (hits != (rec.get("matched_terms") or [])
+                   or new_match_source != rec.get("match_source")
+                   or new_exclude_reason != (rec.get("exclude_reason") or ""))
+        if changed:
+            update_tagging(conn, tenant_id, rec["pub_number"],
+                            cpv_codes=rec.get("cpv_codes") or [], matched_terms=hits,
+                            match_source=new_match_source, exclude_reason=new_exclude_reason)
+            stats["updated"] += 1
+        else:
+            stats["unchanged"] += 1
+    stats["total"] = len(records)
+    return stats
 
 
 def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
