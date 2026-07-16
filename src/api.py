@@ -21,10 +21,10 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault
+import store, config, auth, vault, composer
 import run as engine
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -646,6 +646,339 @@ def get_vault_docs(q: Optional[str] = None, tenant_id: int = Depends(get_current
     results = store.list_vault_documents(_db(), tenant_id, q=q)
     processing = sum(1 for d in results if d["status"] == "processing")
     return {"total": len(results), "processing": processing, "results": results}
+
+
+# ── Composer — per-tender proposal drafting pipeline ────────────────────────
+# Tender-scoped and gated to shortlisted tenders, same reasoning as the
+# CR-002 `documents` slice above, but with its own tables/roles/pipeline
+# (src/composer.py). The generate-gate (403 until every requirement is
+# validated) is enforced here, not just client-side — an explicit design
+# requirement, not just a UI nicety.
+
+COMPOSER_UPLOAD_DIR = ROOT / "data" / "composer_uploads"
+COMPOSER_OUTPUT_DIR = ROOT / "data" / "composer_output"
+_VALID_COMPOSER_ROLES = {"sow", "tech", "background", "parta", "example", "unknown"}
+# "pending" included so the Ingest screen's "Undo" action can revert a
+# validated/flagged requirement back to pending, not just toggle between the two.
+_VALID_COMPOSER_VALIDATION = {"pending", "validated", "flagged"}
+
+
+def _require_shortlisted_tender(conn, tenant_id, pub_number):
+    tender = _find_tender(conn, tenant_id, pub_number)
+    if tender is None:
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    if tender.get("status") != "shortlisted":
+        raise HTTPException(409, "Composer is only available for shortlisted tenders")
+    return tender
+
+
+def _composer_output_path(tenant_id, pub_number, filename):
+    return COMPOSER_OUTPUT_DIR / str(tenant_id) / pub_number / filename
+
+
+def _ensure_composer_output_dir(tenant_id, pub_number):
+    d = COMPOSER_OUTPUT_DIR / str(tenant_id) / pub_number
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _is_pdf_path(path):
+    return path.lower().endswith(".pdf")
+
+
+def _public_matrix(row):
+    """Strips server-local storage paths — the frontend only needs to know
+    it's loaded, how many requirements it holds, and whether a filled export
+    is ready to download.
+    """
+    if row is None:
+        return None
+    return {"filename": row["filename"], "requirement_count": row["requirement_count"],
+            "filled": bool(row["filled_path"])}
+
+
+def _run_composer_ingest(tenant_id, pub_number, doc_id, path, content_type, role):
+    if role == "example":
+        # Style-learning docs are stored but never embedded/retrieved — Style
+        # Guide (extract_style.py) stays a stub this pass, so there's nothing
+        # to feed it into yet; matches proposal_tool/ingest.py's own
+        # "example role is skipped from ingestion" behavior.
+        store.update_composer_document_status(_db(), tenant_id, doc_id, status="style_only",
+                                               pages=None, chunks=0, image_heavy=False)
+        return
+    n_chunks = composer.ingest_document(tenant_id, pub_number, doc_id, path, content_type, role)
+    image_heavy = composer.detect_image_heavy(path, content_type)
+    pages = len(composer._pdf_pages_text(path)) if _is_pdf_path(path) else None
+    store.update_composer_document_status(_db(), tenant_id, doc_id, status="ingested",
+                                           pages=pages, chunks=n_chunks, image_heavy=image_heavy)
+
+
+@app.post("/api/composer/{pub_number}/documents")
+async def upload_composer_document(pub_number: str, background: BackgroundTasks,
+                                    file: UploadFile = File(...), role: Optional[str] = Form(None),
+                                    tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _require_shortlisted_tender(conn, tenant_id, pub_number)
+    if role is not None and role not in _VALID_COMPOSER_ROLES:
+        raise HTTPException(422, f"role must be one of {_VALID_COMPOSER_ROLES}")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, "File too large")
+
+    tenant_dir = COMPOSER_UPLOAD_DIR / str(tenant_id) / pub_number
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    ext = pathlib.Path(file.filename or "").suffix[:10]
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    storage_path = tenant_dir / stored_name
+    storage_path.write_bytes(content)
+
+    detected_role = role or composer.get_role(file.filename or "")
+    doc_id = store.add_composer_document(conn, tenant_id, pub_number, file.filename or stored_name,
+                                          file.content_type, len(content), str(storage_path), detected_role)
+    background.add_task(_run_composer_ingest, tenant_id, pub_number, doc_id, str(storage_path),
+                         file.content_type, detected_role)
+    docs = store.list_composer_documents(conn, tenant_id, pub_number)
+    return next(d for d in docs if d["id"] == doc_id)
+
+
+class ComposerRoleBody(BaseModel):
+    role: str
+
+@app.patch("/api/composer/{pub_number}/documents/{document_id}")
+def patch_composer_document_role(pub_number: str, document_id: int, body: ComposerRoleBody,
+                                  tenant_id: int = Depends(get_current_tenant_id)):
+    if body.role not in _VALID_COMPOSER_ROLES:
+        raise HTTPException(422, f"role must be one of {_VALID_COMPOSER_ROLES}")
+    conn = _db()
+    doc = store.get_composer_document(conn, tenant_id, document_id)
+    if doc is None or doc["pub_number"] != pub_number:
+        raise HTTPException(404, "Document not found")
+    store.set_composer_document_role(conn, tenant_id, document_id, body.role)
+    return {"id": document_id, "role": body.role}
+
+
+@app.post("/api/composer/{pub_number}/matrix")
+async def upload_composer_matrix(pub_number: str, file: UploadFile = File(...),
+                                  tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _require_shortlisted_tender(conn, tenant_id, pub_number)
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, "File too large")
+
+    tenant_dir = COMPOSER_UPLOAD_DIR / str(tenant_id) / pub_number
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = tenant_dir / f"matrix_{uuid.uuid4().hex}.xlsx"
+    storage_path.write_bytes(content)
+
+    try:
+        requirement_count = len(composer._load_matrix_requirements(str(storage_path)))
+    except Exception:
+        raise HTTPException(422, "Could not parse compliance matrix — expected the standard column layout")
+
+    store.set_composer_matrix(conn, tenant_id, pub_number, file.filename or "compliance_matrix.xlsx",
+                               str(storage_path), requirement_count)
+    return _public_matrix(store.get_composer_matrix(conn, tenant_id, pub_number))
+
+
+def _run_composer_enrich(tenant_id, pub_number):
+    conn = _db()
+    for doc in store.list_composer_documents(conn, tenant_id, pub_number):
+        if not doc["image_heavy"]:
+            continue
+        full = store.get_composer_document(conn, tenant_id, doc["id"])
+        if not full or not os.path.exists(full["storage_path"]):
+            continue
+        text = composer.enrich_datasheet(full["storage_path"])
+        if not text:
+            continue
+        chunks = vault.chunk_text(text)
+        new_chunk_count = 0
+        if chunks:
+            embeddings = vault._embedding_model().encode(chunks).tolist()
+            ids = [f"doc{doc['id']}_enriched_chunk{i}" for i in range(len(chunks))]
+            metadatas = [{"source": full["filename"], "doc_id": doc["id"], "role": full["role"]}
+                         for _ in chunks]
+            collection = composer._chroma_collection(tenant_id, pub_number)
+            collection.upsert(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metadatas)
+            new_chunk_count = len(chunks)
+        store.update_composer_document_status(
+            conn, tenant_id, doc["id"], status="ingested",
+            pages=doc["pages"], chunks=(doc["chunks"] or 0) + new_chunk_count, image_heavy=False)
+
+
+@app.post("/api/composer/{pub_number}/enrich")
+def trigger_composer_enrich(pub_number: str, background: BackgroundTasks,
+                             tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _require_shortlisted_tender(conn, tenant_id, pub_number)
+    background.add_task(_run_composer_enrich, tenant_id, pub_number)
+    return {"status": "started"}
+
+
+def _run_composer_interpret(tenant_id, pub_number):
+    conn = _db()
+    inputs = []
+    for doc in store.list_composer_documents(conn, tenant_id, pub_number):
+        if doc["role"] not in ("sow", "parta"):
+            continue
+        full = store.get_composer_document(conn, tenant_id, doc["id"])
+        if not full or not os.path.exists(full["storage_path"]):
+            continue
+        if _is_pdf_path(full["storage_path"]):
+            pages = composer._pdf_pages_text(full["storage_path"])
+        else:
+            pages = [vault.parse_document(full["storage_path"], full["content_type"]) or ""]
+        if doc["role"] == "parta":
+            pages = [composer.extract_parta_section("\n".join(pages))]
+        inputs.append({"filename": full["filename"], "role": doc["role"], "pages": pages})
+    requirements = composer.extract_requirements(inputs)
+    store.add_composer_requirements(conn, tenant_id, pub_number, requirements)
+
+
+@app.post("/api/composer/{pub_number}/interpret")
+def trigger_composer_interpret(pub_number: str, background: BackgroundTasks,
+                                tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _require_shortlisted_tender(conn, tenant_id, pub_number)
+    background.add_task(_run_composer_interpret, tenant_id, pub_number)
+    return {"status": "started"}
+
+
+@app.get("/api/composer/session/{pub_number}")
+def get_composer_session(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    tender = _find_tender(conn, tenant_id, pub_number)
+    if tender is None:
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    return {
+        "pub_number": pub_number,
+        "tender_title": tender.get("tag_line", ""),
+        "source": tender.get("source", ""),
+        "deadline": tender.get("deadline", ""),
+        "docs": store.list_composer_documents(conn, tenant_id, pub_number),
+        "matrix": _public_matrix(store.get_composer_matrix(conn, tenant_id, pub_number)),
+        "requirements": store.list_composer_requirements(conn, tenant_id, pub_number),
+    }
+
+
+class ComposerValidationBody(BaseModel):
+    status: str
+
+@app.patch("/api/composer/requirements/{requirement_id}")
+def patch_composer_requirement(requirement_id: int, body: ComposerValidationBody,
+                                tenant_id: int = Depends(get_current_tenant_id)):
+    if body.status not in _VALID_COMPOSER_VALIDATION:
+        raise HTTPException(422, f"status must be one of {_VALID_COMPOSER_VALIDATION}")
+    conn = _db()
+    if store.get_composer_requirement(conn, tenant_id, requirement_id) is None:
+        raise HTTPException(404, "Requirement not found")
+    store.update_composer_requirement_validation(conn, tenant_id, requirement_id, body.status)
+    return {"id": requirement_id, "status": body.status}
+
+
+@app.post("/api/composer/requirements/{requirement_id}/resolve")
+def resolve_composer_requirement(requirement_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    if store.get_composer_requirement(conn, tenant_id, requirement_id) is None:
+        raise HTTPException(404, "Requirement not found")
+    store.mark_composer_requirement_resolved(conn, tenant_id, requirement_id)
+    return {"id": requirement_id, "resolved": True}
+
+
+def _run_composer_generate(tenant_id, pub_number):
+    conn = _db()
+    requirements = store.list_composer_requirements(conn, tenant_id, pub_number)
+    for r in composer.run_generate(tenant_id, pub_number, requirements):
+        store.update_composer_requirement_result(conn, tenant_id, r["id"], r["gap_status"],
+                                                  r["similarity"], r["response_text"], r["citations"])
+
+    final = store.list_composer_requirements(conn, tenant_id, pub_number)
+    out_dir = _ensure_composer_output_dir(tenant_id, pub_number)
+    composer.build_proposal_docx(final, str(out_dir / "technical_proposal.docx"))
+    composer.build_gaps_report(final, str(out_dir / "gaps_report.txt"))
+
+    matrix = store.get_composer_matrix(conn, tenant_id, pub_number)
+    if matrix and os.getenv("ANTHROPIC_API_KEY"):
+        filled_path = out_dir / "matrix_filled.xlsx"
+        composer.fill_compliance_matrix(tenant_id, pub_number, matrix["storage_path"], str(filled_path))
+        store.set_composer_matrix_filled_path(conn, tenant_id, pub_number, str(filled_path))
+
+
+def _run_composer_refine(tenant_id, pub_number, requirement_id, feedback):
+    conn = _db()
+    req = store.get_composer_requirement(conn, tenant_id, requirement_id)
+    if req is None:
+        return
+    query = f"{req['title']} {req['extracted']} {feedback}"
+    tech_chunks = composer.retrieve_evidence(tenant_id, pub_number, query, roles=["tech"])
+    new_text = composer.refine_section(req["extracted"], req["response"] or "", feedback, tech_chunks)
+    store.update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback)
+
+
+class ComposerGenerateBody(BaseModel):
+    requirement_id: Optional[int] = None
+    feedback:       Optional[str] = None
+
+@app.post("/api/composer/{pub_number}/generate")
+def post_composer_generate(pub_number: str, background: BackgroundTasks,
+                            body: ComposerGenerateBody = ComposerGenerateBody(),
+                            tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _require_shortlisted_tender(conn, tenant_id, pub_number)
+
+    # Section-scoped regenerate (Proposal Review's "Regenerate section") —
+    # dual-purpose per the design, distinguished by the presence of
+    # requirement_id in the body rather than a separate endpoint.
+    if body.requirement_id is not None:
+        req = store.get_composer_requirement(conn, tenant_id, body.requirement_id)
+        if req is None or req["pub_number"] != pub_number:
+            raise HTTPException(404, "Requirement not found")
+        if not body.feedback:
+            raise HTTPException(422, "feedback is required for a section-scoped regenerate")
+        background.add_task(_run_composer_refine, tenant_id, pub_number, body.requirement_id, body.feedback)
+        return {"status": "started", "requirement_id": body.requirement_id}
+
+    requirements = store.list_composer_requirements(conn, tenant_id, pub_number)
+    if not requirements:
+        raise HTTPException(409, "No requirements to generate from — run Interpret first")
+    # Server-side gate, not just the UI's disabled button — every requirement
+    # must be validated before a full draft run (design's explicit requirement).
+    if any(r["validation"] != "validated" for r in requirements):
+        raise HTTPException(403, "Every requirement must be validated before generating a draft")
+    background.add_task(_run_composer_generate, tenant_id, pub_number)
+    return {"status": "started"}
+
+
+@app.get("/api/composer/{pub_number}/download/proposal.docx")
+def download_composer_proposal(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    path = _composer_output_path(tenant_id, pub_number, "technical_proposal.docx")
+    if not path.exists():
+        raise HTTPException(404, "No proposal generated yet")
+    return FileResponse(str(path), filename="technical_proposal.docx",
+                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+@app.get("/api/composer/{pub_number}/download/matrix.xlsx")
+def download_composer_matrix(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    matrix = store.get_composer_matrix(_db(), tenant_id, pub_number)
+    if not matrix or not matrix["filled_path"] or not os.path.exists(matrix["filled_path"]):
+        raise HTTPException(404, "No filled matrix available yet")
+    return FileResponse(matrix["filled_path"], filename="matrix_filled.xlsx",
+                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.get("/api/composer/{pub_number}/download/gaps_report.txt")
+def download_composer_gaps(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    path = _composer_output_path(tenant_id, pub_number, "gaps_report.txt")
+    if not path.exists():
+        raise HTTPException(404, "No gaps report generated yet")
+    return FileResponse(str(path), filename="gaps_report.txt", media_type="text/plain")
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

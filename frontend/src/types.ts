@@ -113,27 +113,35 @@ export interface VaultDoc {
 // ── Composer ──────────────────────────────────────────────────────────────────
 
 export interface ComposerRequirement {
-  id: string;
+  id: number;
   title: string;
   extracted: string;
   source: string;
-  confidence: number;
+  confidence: number | null;
   validation: 'pending' | 'validated' | 'flagged';
-  similarity?: number;
-  response?: string;
-  citations?: { doc: string; score: number }[];
-  gap_note?: string;
-  gap_status?: 'complete' | 'linked' | 'completed';
+  gap_status: 'complete' | 'linked' | 'completed' | null;
+  similarity: number | null;
+  response: string | null;
+  citations: { doc: string; score: number }[];
+  resolved: boolean;
+  version: number;
+  version_history: { text: string | null; feedback: string; at: string }[];
 }
 
 export interface ComposerDoc {
-  id: string;
+  id: number;
   filename: string;
-  role: 'sow' | 'tech' | 'background' | 'parta' | 'example';
-  pages: number;
-  chunks: number;
-  status: 'ingested' | 'pending' | 'style_only';
-  image_heavy?: boolean;
+  role: 'sow' | 'tech' | 'background' | 'parta' | 'example' | 'unknown';
+  status: 'ingested' | 'processing' | 'style_only';
+  pages: number | null;
+  chunks: number | null;
+  image_heavy: boolean;
+}
+
+export interface ComposerMatrix {
+  filename: string;
+  requirement_count: number;
+  filled: boolean;
 }
 
 export interface ComposerSession {
@@ -142,5 +150,6 @@ export interface ComposerSession {
   source: string;
   deadline: string;
   docs: ComposerDoc[];
+  matrix: ComposerMatrix | null;
   requirements: ComposerRequirement[];
 }
