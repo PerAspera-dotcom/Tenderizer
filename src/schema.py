@@ -13,7 +13,7 @@ phase2/3 plan: it's a pure content-hash cache of arbitrary text, and two
 tenants translating the same French phrase should share one cached result
 rather than each spending their own DeepL quota on it.
 """
-from sqlalchemy import (Boolean, Column, ForeignKey, Integer, MetaData,
+from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer, MetaData,
                          PrimaryKeyConstraint, String, Table, Text)
 
 metadata = MetaData()
@@ -120,6 +120,32 @@ translations = Table(
     Column("translated_text", Text, nullable=True),
     Column("cached_at", Text, nullable=True),
 )
+
+# Vault — tenant-wide technical-document library (evidence pool for Composer's
+# later retrieval; see src/vault.py). Not tender-scoped, unlike `documents`
+# above — a datasheet/certificate/drawing is uploaded once and reused across
+# tenders. `storage_path` follows `documents`' same uuid-based, path-traversal
+# -safe convention. `metadata` is intentionally an open JSON dict (fields vary
+# by doc type — a datasheet has material/water-column/fire-rating, a cert has
+# issuer/standard/valid-until — there's no single fixed schema), not a fixed
+# set of columns.
+vault_documents = Table(
+    "vault_documents", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False, server_default=""),
+    Column("size", Integer, nullable=False, server_default="0"),
+    Column("storage_path", Text, nullable=False),
+    Column("doc_type", Text, nullable=True),
+    Column("status", Text, nullable=False, server_default="processing"),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
+    Column("cpv_codes", Text, nullable=False, server_default="[]"),
+    Column("confidence", Float, nullable=True),
+    Column("fields_extracted", Integer, nullable=True),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
+)
+VAULT_DOCUMENTS_COLUMNS = [c.name for c in vault_documents.columns]
 
 # Step 5 of the Postgres/multi-tenancy migration: per-tenant config rows for
 # CPV set, keywords, and enabled portals. A new tenant is seeded from the

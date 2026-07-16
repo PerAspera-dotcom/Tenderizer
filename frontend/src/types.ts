@@ -100,14 +100,14 @@ export interface DocumentEntry {
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
 export interface VaultDoc {
-  id: string;
+  id: number;
   filename: string;
-  doc_type: 'Datasheet' | 'Drawing' | 'Certificate' | string;
+  doc_type: 'Datasheet' | 'Drawing' | 'Certificate' | string | null;
   status: 'indexed' | 'processing';
   metadata: Record<string, string>;
   cpv_codes: string[];
-  confidence: number;
-  fields_extracted: number;
+  confidence: number | null;
+  fields_extracted: number | null;
 }
 
 // ── Composer ──────────────────────────────────────────────────────────────────

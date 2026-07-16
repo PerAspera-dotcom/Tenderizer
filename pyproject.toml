@@ -17,6 +17,13 @@ dependencies = [
     "uvicorn[standard]",
     "apscheduler",
     "sentry-sdk[fastapi]",
+    # Vault (document ingest/embed/metadata-extraction) — see src/vault.py.
+    "chromadb",
+    "sentence-transformers",
+    "pdfplumber",
+    "python-docx",
+    "pymupdf",
+    "anthropic",
 ]
 
 [tool.setuptools.packages.find]

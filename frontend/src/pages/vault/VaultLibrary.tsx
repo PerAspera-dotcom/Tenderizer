@@ -1,100 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { listVaultDocs, uploadVaultDoc } from '../../api';
 import type { VaultDoc } from '../../types';
-
-// API not yet built — static preview data
-const PREVIEW_DOCS: VaultDoc[] = [
-  {
-    id: '1',
-    filename: 'Tent fabric spec — 600D polyester.pdf',
-    doc_type: 'Datasheet',
-    status: 'indexed',
-    metadata: {
-      'Material': '600D PES',
-      'Water column': '3000 mm',
-      'Fire rating': 'M2',
-      'Weight': '320 g/m²',
-      'UV resistance': '1000h',
-      'Language': 'French',
-    },
-    cpv_codes: ['39522530', '39522500'],
-    confidence: 0.94,
-    fields_extracted: 6,
-  },
-  {
-    id: '2',
-    filename: 'Modular shelter frame — assembly drawing.dwg',
-    doc_type: 'Drawing',
-    status: 'indexed',
-    metadata: {
-      'Span': '6 m',
-      'Load capacity': '120 kg/m²',
-      'Standard': 'S235',
-      'Material': 'Galvanised steel',
-      'Language': 'English',
-    },
-    cpv_codes: ['44211000'],
-    confidence: 0.87,
-    fields_extracted: 5,
-  },
-  {
-    id: '3',
-    filename: 'ISO 5912 conformity certificate.pdf',
-    doc_type: 'Certificate',
-    status: 'indexed',
-    metadata: {
-      'Standard': 'ISO 5912:2011',
-      'Issuer': 'Bureau Veritas',
-      'Valid until': '2027-09-30',
-      'Scope': 'Mountaineering tents',
-      'Language': 'English/French',
-    },
-    cpv_codes: ['39522530'],
-    confidence: 0.98,
-    fields_extracted: 5,
-  },
-  {
-    id: '4',
-    filename: 'SGS fire resistance test report — M2.pdf',
-    doc_type: 'Certificate',
-    status: 'indexed',
-    metadata: {
-      'Fire rating': 'M2',
-      'Test method': 'NF P92-507',
-      'Issuer': 'SGS France',
-      'Valid until': '2026-12-31',
-      'Language': 'French',
-    },
-    cpv_codes: ['39522530', '39522500'],
-    confidence: 0.96,
-    fields_extracted: 5,
-  },
-  {
-    id: '5',
-    filename: 'Waterproof membrane spec — TPU coating.pdf',
-    doc_type: 'Datasheet',
-    status: 'processing',
-    metadata: {},
-    cpv_codes: [],
-    confidence: 0,
-    fields_extracted: 0,
-  },
-  {
-    id: '6',
-    filename: 'Aluminium pole tensile strength — cert.pdf',
-    doc_type: 'Certificate',
-    status: 'indexed',
-    metadata: {
-      'Alloy': '6061-T6',
-      'Tensile strength': '276 MPa',
-      'Diameter': '16–32 mm',
-      'Standard': 'EN 573',
-      'Language': 'German',
-    },
-    cpv_codes: ['44211000', '44212310'],
-    confidence: 0.91,
-    fields_extracted: 5,
-  },
-];
 
 function TypePill({ type }: { type: string }) {
   return (
@@ -108,29 +14,79 @@ function TypePill({ type }: { type: string }) {
   );
 }
 
-function MetadataChip({ label, value }: { label: string; value: string }) {
+function MetadataChip({ value }: { value: string }) {
   return (
     <span className="mono" style={{
       background: 'rgba(96,165,250,0.08)', color: '#9cc1fb',
       border: '1px solid rgba(96,165,250,0.18)', borderRadius: 5,
       fontSize: 11, padding: '2px 7px', whiteSpace: 'nowrap',
     }}>
-      {label} {value}
+      {value}
     </span>
   );
 }
 
 export default function VaultLibrary() {
-  const [selectedId, setSelectedId] = useState<string | null>('1');
+  const [docs, setDocs] = useState<VaultDoc[]>([]);
+  const [total, setTotal] = useState(0);
+  const [processing, setProcessing] = useState(0);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filtered = PREVIEW_DOCS.filter(d =>
-    !search || d.filename.toLowerCase().includes(search.toLowerCase())
-  );
-  const selected = PREVIEW_DOCS.find(d => d.id === selectedId) ?? null;
+  async function refresh(q: string) {
+    try {
+      const body = await listVaultDocs(q || undefined);
+      setDocs(body.results);
+      setTotal(body.total);
+      setProcessing(body.processing);
+      setError('');
+    } catch {
+      setError('Failed to load Vault documents');
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const total = PREVIEW_DOCS.length;
-  const processing = PREVIEW_DOCS.filter(d => d.status === 'processing').length;
+  // Debounced search — a server-side query, not a client-side filter, since
+  // metadata search needs to happen where the data lives.
+  useEffect(() => {
+    const handle = setTimeout(() => refresh(search), 250);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  // Poll while anything is still processing (parse/embed/metadata-extraction
+  // run as a background task — see src/vault.py's process_upload).
+  useEffect(() => {
+    if (processing === 0) return;
+    const handle = setInterval(() => refresh(search), 3000);
+    return () => clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processing, search]);
+
+  const selected = docs.find(d => d.id === selectedId) ?? null;
+
+  async function handleFilesSelected(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await uploadVaultDoc(file);
+      }
+      await refresh(search);
+    } catch {
+      setError('Upload failed — try again');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  if (loading) return <div className="loading">Loading…</div>;
 
   return (
     <div>
@@ -140,22 +96,12 @@ export default function VaultLibrary() {
         <span style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 6, fontSize: 11, fontWeight: 700, padding: '3px 8px', letterSpacing: '0.06em' }}>
           VAULT
         </span>
-        <span style={{ background: 'rgba(227,179,65,0.12)', color: '#e3b341', border: '1px solid rgba(227,179,65,0.3)', borderRadius: 6, fontSize: 11, fontWeight: 700, padding: '3px 8px' }}>
-          🚧 UNDER CONSTRUCTION
-        </span>
       </div>
       <p style={{ color: '#8a97ac', marginBottom: 20, fontSize: 13 }}>
         Ingest a library of technical documents — Vault extracts structured metadata that Scout and Composer reuse
       </p>
 
-      {/* Under-construction banner */}
-      <div style={{ background: 'rgba(227,179,65,0.07)', border: '1px solid rgba(227,179,65,0.25)', borderRadius: 10, padding: '12px 16px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }} className="under-construction-stripe">
-        <span style={{ color: '#e3b341', fontSize: 18 }}>⚠</span>
-        <div>
-          <span style={{ fontWeight: 600, color: '#e3b341', fontSize: 13 }}>In active development</span>
-          <span style={{ color: '#8a97ac', fontSize: 13 }}> · Preview of the Vault app — interface is not yet functional</span>
-        </div>
-      </div>
+      {error && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
       {/* Search + action */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
@@ -169,8 +115,21 @@ export default function VaultLibrary() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        <button className="btn btn-blue-solid" style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-          ⤓ Ingest documents
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.docx"
+          multiple
+          style={{ display: 'none' }}
+          onChange={e => handleFilesSelected(e.target.files)}
+        />
+        <button
+          className="btn btn-blue-solid"
+          style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          disabled={uploading}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          {uploading ? 'Uploading…' : '⤓ Ingest documents'}
         </button>
       </div>
 
@@ -184,8 +143,13 @@ export default function VaultLibrary() {
               {total} total{processing > 0 ? ` · ${processing} processing` : ''}
             </span>
           </div>
-          {filtered.map(doc => {
+          {docs.length === 0 ? (
+            <div style={{ padding: 32, textAlign: 'center', color: '#8a97ac', fontSize: 13 }}>
+              {search ? 'No documents match your search.' : 'No documents yet — ingest one to get started.'}
+            </div>
+          ) : docs.map(doc => {
             const isSelected = doc.id === selectedId;
+            const metadataEntries = Object.entries(doc.metadata);
             return (
               <div
                 key={doc.id}
@@ -203,12 +167,12 @@ export default function VaultLibrary() {
                   <span className="mono" style={{ fontSize: 12, color: '#cdd6e3', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {doc.filename}
                   </span>
-                  <TypePill type={doc.doc_type} />
+                  {doc.doc_type && <TypePill type={doc.doc_type} />}
                 </div>
-                {Object.keys(doc.metadata).length > 0 && (
+                {metadataEntries.length > 0 && (
                   <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
-                    {Object.entries(doc.metadata).slice(0, 3).map(([k, v]) => (
-                      <MetadataChip key={k} label={k === 'Water column' ? '' : ''} value={`${k === 'Water column' ? v : k === 'Material' ? v : v}`} />
+                    {metadataEntries.slice(0, 3).map(([k, v]) => (
+                      <MetadataChip key={k} value={`${k}: ${v}`} />
                     ))}
                   </div>
                 )}
@@ -243,16 +207,22 @@ export default function VaultLibrary() {
                 </div>
               ) : (
                 <div style={{ padding: '14px 16px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 20px', marginBottom: 16 }}>
-                    {Object.entries(selected.metadata).map(([label, value]) => (
-                      <div key={label}>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 3 }}>
-                          {label}
+                  {Object.keys(selected.metadata).length === 0 ? (
+                    <div style={{ color: '#8a97ac', fontSize: 13, marginBottom: 16 }}>
+                      No technical fields were extracted for this document.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 20px', marginBottom: 16 }}>
+                      {Object.entries(selected.metadata).map(([label, value]) => (
+                        <div key={label}>
+                          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 3 }}>
+                            {label}
+                          </div>
+                          <div className="mono" style={{ fontSize: 13, color: '#cdd6e3' }}>{value}</div>
                         </div>
-                        <div className="mono" style={{ fontSize: 13, color: '#cdd6e3' }}>{value}</div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                   {selected.cpv_codes.length > 0 && (
                     <div style={{ borderTop: '1px solid #1f2b40', paddingTop: 12, marginBottom: 12 }}>
                       <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 6 }}>
@@ -267,11 +237,13 @@ export default function VaultLibrary() {
                       </div>
                     </div>
                   )}
-                  <div style={{ borderTop: '1px solid #1f2b40', paddingTop: 10, display: 'flex', gap: 12, color: '#8a97ac', fontSize: 12 }}>
-                    <span>{selected.fields_extracted} fields extracted</span>
-                    <span>·</span>
-                    <span>{Math.round(selected.confidence * 100)}% confidence</span>
-                  </div>
+                  {selected.fields_extracted !== null && selected.confidence !== null && (
+                    <div style={{ borderTop: '1px solid #1f2b40', paddingTop: 10, display: 'flex', gap: 12, color: '#8a97ac', fontSize: 12 }}>
+                      <span>{selected.fields_extracted} fields extracted</span>
+                      <span>·</span>
+                      <span>{Math.round(selected.confidence * 100)}% confidence</span>
+                    </div>
+                  )}
                 </div>
               )}
             </>

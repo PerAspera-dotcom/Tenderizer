@@ -21,7 +21,7 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth
+import store, config, auth, vault
 import run as engine
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, UploadFile
@@ -599,6 +599,53 @@ def download_document(document_id: int, tenant_id: int = Depends(get_current_ten
         raise HTTPException(404, "Document not found")
     return FileResponse(doc["storage_path"], filename=doc["filename"],
                          media_type=doc["content_type"] or "application/octet-stream")
+
+
+# ── Vault — tenant-wide technical-document library ──────────────────────────
+# Unlike the CR-002 documents slice above, these aren't tied to a specific
+# tender: a datasheet/certificate is uploaded once and reused across tenders
+# as the evidence library Composer's later generation step will retrieve
+# from. Same upload-size cap and uuid-based storage-path safety as `documents`.
+
+VAULT_UPLOAD_DIR = ROOT / "data" / "vault_uploads"
+
+
+def _run_vault_processing(tenant_id, doc_id, path, content_type):
+    result = vault.process_upload(tenant_id, doc_id, path, content_type)
+    store.update_vault_document_metadata(
+        _db(), tenant_id, doc_id, doc_type=result["doc_type"], metadata=result["metadata"],
+        cpv_codes=result["cpv_codes"], confidence=result["confidence"],
+        fields_extracted=result["fields_extracted"], status=result["status"])
+
+
+@app.post("/api/vault/ingest")
+async def ingest_vault_document(background: BackgroundTasks, file: UploadFile = File(...),
+                                 tenant_id: int = Depends(get_current_tenant_id)):
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, "File too large")
+
+    tenant_dir = VAULT_UPLOAD_DIR / str(tenant_id)
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    ext = pathlib.Path(file.filename or "").suffix[:10]
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    storage_path = tenant_dir / stored_name
+    storage_path.write_bytes(content)
+
+    conn = _db()
+    doc_id = store.add_vault_document(conn, tenant_id, file.filename or stored_name,
+                                       file.content_type, len(content), str(storage_path))
+    background.add_task(_run_vault_processing, tenant_id, doc_id, str(storage_path), file.content_type)
+    docs = store.list_vault_documents(conn, tenant_id)
+    created = next(d for d in docs if d["id"] == doc_id)
+    return created
+
+
+@app.get("/api/vault/docs")
+def get_vault_docs(q: Optional[str] = None, tenant_id: int = Depends(get_current_tenant_id)):
+    results = store.list_vault_documents(_db(), tenant_id, q=q)
+    processing = sum(1 for d in results if d["status"] == "processing")
+    return {"total": len(results), "processing": processing, "results": results}
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

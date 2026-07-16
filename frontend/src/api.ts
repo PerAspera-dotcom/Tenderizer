@@ -195,6 +195,12 @@ export function listVaultDocs(q?: string): Promise<{ total: number; processing: 
   return apiFetch(`/api/vault/docs${qs}`);
 }
 
+export function uploadVaultDoc(file: File): Promise<VaultDoc> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetch<VaultDoc>('/api/vault/ingest', { method: 'POST', body: form });
+}
+
 // ── Composer ──────────────────────────────────────────────────────────────────
 
 export function getComposerSession(pub?: string): Promise<ComposerSession | null> {
