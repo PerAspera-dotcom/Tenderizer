@@ -1,58 +1,21 @@
-import { useState } from 'react';
-import { useNavigate } from '../../router';
-import { patchRequirement } from '../../api';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from '../../router';
+import {
+  getComposerSession, uploadComposerDocument, uploadComposerMatrix,
+  triggerComposerEnrich, triggerComposerInterpret, patchRequirement, postGenerate,
+} from '../../api';
+import type { ComposerSession, ComposerDoc } from '../../types';
 
-// API not yet built — static preview data
-
-const DOC_ROLES = {
+const DOC_ROLES: Record<ComposerDoc['role'], { label: string; color: string }> = {
   sow: { label: 'SOW', color: '#60a5fa' },
   tech: { label: 'TECH', color: '#e3b341' },
   background: { label: 'BG', color: '#2EE6D4' },
   parta: { label: 'PART A', color: '#c084fc' },
   example: { label: 'EXAMPLE', color: '#8a97ac' },
-} as const;
+  unknown: { label: '?', color: '#6b7990' },
+};
 
-type DocRole = keyof typeof DOC_ROLES;
-
-interface PreviewDoc {
-  id: string;
-  filename: string;
-  role: DocRole;
-  pages: number;
-  chunks: number;
-  status: 'ingested' | 'pending' | 'style_only';
-  image_heavy?: boolean;
-}
-
-const PREVIEW_DOCS: PreviewDoc[] = [
-  { id: 'd1', filename: 'sow_appel-offres-tentes-militaires.pdf', role: 'sow', pages: 24, chunks: 186, status: 'ingested' },
-  { id: 'd2', filename: 'tech_fabric-spec-600D-polyester.pdf', role: 'tech', pages: 8, chunks: 64, status: 'ingested', image_heavy: true },
-  { id: 'd3', filename: 'tech_ISO-5912-conformity-cert.pdf', role: 'tech', pages: 3, chunks: 22, status: 'ingested' },
-  { id: 'd4', filename: 'background_company-profile-2026.pdf', role: 'background', pages: 12, chunks: 91, status: 'ingested' },
-  { id: 'd5', filename: 'parta_qualification-form.pdf', role: 'parta', pages: 6, chunks: 44, status: 'pending' },
-  { id: 'd6', filename: 'example_proposal-2024-DGA.pdf', role: 'example', pages: 38, chunks: 0, status: 'style_only' },
-  { id: 'd7', filename: 'compliance_matrix_template.xlsx', role: 'tech', pages: 1, chunks: 0, status: 'pending' },
-];
-
-interface Req {
-  id: string;
-  num: string;
-  title: string;
-  extracted: string;
-  source: string;
-  confidence: number;
-}
-
-const PREVIEW_REQS: Req[] = [
-  { id: 'r1', num: '4.2', title: 'Fire resistance — class M2 or better', extracted: 'M2 / NF P92-507 required on all fabric components', source: 'CCTP §4.2 · p.12', confidence: 96 },
-  { id: 'r2', num: '3.1', title: 'Water column ≥ 2000 mm', extracted: 'Waterproofing: minimum 2000 mm water column per ISO 811', source: 'CCTP §3.1 · p.8', confidence: 91 },
-  { id: 'r3', num: '3.4', title: 'UV resistance — min 1000h', extracted: 'Fabric shall withstand 1000h UV exposure without degradation', source: 'CCTP §3.4 · p.10', confidence: 88 },
-  { id: 'r4', num: '7.1', title: 'Delivery within 60 days of award', extracted: 'The supplier shall deliver all lots within 60 days of contract award', source: 'CCTP §7.1 · p.23', confidence: 84 },
-  { id: 'r5', num: '8.2', title: 'Spare-parts availability — 10 years', extracted: 'Manufacturer guarantees spare parts availability for at least 10 years', source: 'CCTP §8.2 · p.27', confidence: 79 },
-  { id: 'r6', num: '4.1', title: 'ISO 5912 conformity', extracted: 'All tents must conform to ISO 5912:2011 for mountaineering equipment', source: 'CCTP §4.1 · p.11', confidence: 93 },
-];
-
-function RoleTag({ role }: { role: DocRole }) {
+function RoleTag({ role }: { role: ComposerDoc['role'] }) {
   const info = DOC_ROLES[role];
   return (
     <span style={{
@@ -67,12 +30,12 @@ function RoleTag({ role }: { role: DocRole }) {
   );
 }
 
-function Stepper() {
+function Stepper({ hasDocs, hasReqs, allValidated }: { hasDocs: boolean; hasReqs: boolean; allValidated: boolean }) {
   const steps = [
-    { num: 1, label: 'Ingest', state: 'done' },
-    { num: 2, label: 'Interpret', state: 'done' },
-    { num: 3, label: 'Validate', state: 'active' },
-    { num: 4, label: 'Generate draft', state: 'locked' },
+    { num: 1, label: 'Ingest', state: hasDocs ? 'done' : 'active' },
+    { num: 2, label: 'Interpret', state: hasReqs ? 'done' : hasDocs ? 'active' : 'locked' },
+    { num: 3, label: 'Validate', state: allValidated ? 'done' : hasReqs ? 'active' : 'locked' },
+    { num: 4, label: 'Generate draft', state: allValidated ? 'active' : 'locked' },
   ] as const;
 
   return (
@@ -105,18 +68,120 @@ function Stepper() {
 
 export default function ComposerIngest() {
   const navigate = useNavigate();
-  const [validations, setValidations] = useState<Record<string, 'pending' | 'validated' | 'flagged'>>(() =>
-    Object.fromEntries(PREVIEW_REQS.map(r => [r.id, 'pending']))
-  );
+  const [params] = useSearchParams();
+  const pub = params.get('pub') ?? undefined;
 
-  function toggle(id: string, next: 'validated' | 'flagged') {
-    setValidations(v => ({ ...v, [id]: v[id] === next ? 'pending' : next }));
-    patchRequirement(id, next).catch(() => {}); // best-effort, server may not exist yet
+  const [session, setSession] = useState<ComposerSession | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [interpreting, setInterpreting] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const matrixInputRef = useRef<HTMLInputElement>(null);
+
+  function refresh() {
+    if (!pub) { setLoading(false); return; }
+    return getComposerSession(pub)
+      .then(s => { setSession(s); setError(s ? '' : 'Failed to load this tender\'s Composer session'); })
+      .finally(() => setLoading(false));
   }
 
-  const validatedCount = Object.values(validations).filter(v => v === 'validated').length;
-  const total = PREVIEW_REQS.length;
-  const allValidated = validatedCount === total;
+  useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [pub]);
+
+  // Poll while anything is still processing — document ingest, enrichment,
+  // requirement interpretation, or a generate run (all background tasks).
+  const anyDocsProcessing = session?.docs.some(d => d.status === 'processing') ?? false;
+  const anyReqsUngenerated = (session?.requirements.length ?? 0) > 0
+    && session!.requirements.every(r => r.validation === 'validated')
+    && session!.requirements.some(r => r.gap_status === null);
+  useEffect(() => {
+    if (!pub || (!anyDocsProcessing && !interpreting && !enriching && !anyReqsUngenerated)) return;
+    const handle = setInterval(refresh, 3000);
+    return () => clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pub, anyDocsProcessing, interpreting, enriching, anyReqsUngenerated]);
+
+  async function handleFilesSelected(files: FileList | null) {
+    if (!files || files.length === 0 || !pub) return;
+    setUploading(true);
+    setError('');
+    try {
+      for (const file of Array.from(files)) {
+        await uploadComposerDocument(pub, file);
+      }
+      await refresh();
+    } catch {
+      setError('Upload failed — try again');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleMatrixSelected(files: FileList | null) {
+    const file = files?.[0];
+    if (!file || !pub) return;
+    setError('');
+    try {
+      await uploadComposerMatrix(pub, file);
+      await refresh();
+    } catch {
+      setError('Could not parse compliance matrix — check the column layout');
+    } finally {
+      if (matrixInputRef.current) matrixInputRef.current.value = '';
+    }
+  }
+
+  async function handleEnrich() {
+    if (!pub) return;
+    setEnriching(true);
+    try {
+      await triggerComposerEnrich(pub);
+    } finally {
+      setTimeout(() => setEnriching(false), 3000); // give the poll loop a window to pick up progress
+    }
+  }
+
+  async function handleInterpret() {
+    if (!pub) return;
+    setInterpreting(true);
+    try {
+      await triggerComposerInterpret(pub);
+      setTimeout(refresh, 3000);
+    } finally {
+      setTimeout(() => setInterpreting(false), 3000);
+    }
+  }
+
+  async function toggle(id: number, current: 'pending' | 'validated' | 'flagged', next: 'validated' | 'flagged') {
+    const target = current === next ? 'pending' : next;
+    await patchRequirement(id, target);
+    refresh();
+  }
+
+  async function handleGenerate() {
+    if (!pub) return;
+    await postGenerate(pub);
+    navigate(`/composer/review?pub=${encodeURIComponent(pub)}`);
+  }
+
+  if (!pub) {
+    return (
+      <div className="card" style={{ padding: 40, textAlign: 'center', color: '#8a97ac' }}>
+        Open Composer from a shortlisted tender in Portal → Pipeline to start drafting a proposal.
+      </div>
+    );
+  }
+  if (loading) return <div className="loading">Loading…</div>;
+  if (!session) return <div className="error">{error || 'Could not load this Composer session'}</div>;
+
+  const docs = session.docs;
+  const requirements = session.requirements;
+  const validatedCount = requirements.filter(r => r.validation === 'validated').length;
+  const total = requirements.length;
+  const allValidated = total > 0 && validatedCount === total;
+  const imageHeavyDocs = docs.filter(d => d.image_heavy);
 
   return (
     <div>
@@ -126,29 +191,39 @@ export default function ComposerIngest() {
         <span style={{ background: 'rgba(192,132,252,0.15)', color: '#c084fc', border: '1px solid rgba(192,132,252,0.3)', borderRadius: 6, fontSize: 11, fontWeight: 700, padding: '3px 8px', letterSpacing: '0.06em' }}>
           COMPOSER
         </span>
-        <span style={{ background: 'rgba(227,179,65,0.12)', color: '#e3b341', border: '1px solid rgba(227,179,65,0.3)', borderRadius: 6, fontSize: 11, fontWeight: 700, padding: '3px 8px' }}>
-          🚧 UNDER CONSTRUCTION
-        </span>
       </div>
       <p style={{ color: '#8a97ac', marginBottom: 20, fontSize: 13 }}>
-        Drop in the tender documents — Composer reads and interprets them, then the responsible person validates each requirement before any draft is generated
+        Drafting <strong style={{ color: '#cdd6e3' }}>{session.tender_title}</strong> · {session.source}
+        {' · '}Drop in the tender documents — Composer reads and interprets them, then the responsible person validates each requirement before any draft is generated
       </p>
 
-      <Stepper />
+      {error && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+      <Stepper hasDocs={docs.length > 0} hasReqs={total > 0} allValidated={allValidated} />
 
       {/* 2-column grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 24 }}>
         {/* Left column */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Drop zone */}
-          <div style={{
-            border: '1.5px dashed rgba(192,132,252,0.35)',
-            background: 'rgba(192,132,252,0.04)',
-            borderRadius: 10, padding: '28px 20px',
-            textAlign: 'center',
-          }}>
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              border: '1.5px dashed rgba(192,132,252,0.35)',
+              background: 'rgba(192,132,252,0.04)',
+              borderRadius: 10, padding: '28px 20px',
+              textAlign: 'center', cursor: uploading ? 'default' : 'pointer',
+            }}
+          >
+            <input
+              ref={fileInputRef} type="file" accept=".pdf,.docx" multiple
+              style={{ display: 'none' }} disabled={uploading}
+              onChange={e => handleFilesSelected(e.target.files)}
+            />
             <div style={{ fontSize: 28, color: '#c084fc', marginBottom: 10 }}>⤓</div>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Drop tender documents</div>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+              {uploading ? 'Uploading…' : 'Drop tender documents'}
+            </div>
             <div style={{ color: '#8a97ac', fontSize: 12, lineHeight: 1.6 }}>
               Role auto-detected from filename prefix —{' '}
               <span className="mono" style={{ color: '#cdd6e3', fontSize: 11 }}>sow_ · tech_ · background_ · parta_ · example_</span>
@@ -159,9 +234,13 @@ export default function ComposerIngest() {
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderBottom: '1px solid #1f2b40' }}>
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: '#6b7990', textTransform: 'uppercase' }}>Document library</span>
-              <span style={{ color: '#8a97ac', fontSize: 12 }}>{PREVIEW_DOCS.length} files</span>
+              <span style={{ color: '#8a97ac', fontSize: 12 }}>{docs.length} files</span>
             </div>
-            {PREVIEW_DOCS.map(doc => (
+            {docs.length === 0 ? (
+              <div style={{ padding: '20px 14px', textAlign: 'center', color: '#8a97ac', fontSize: 12 }}>
+                No documents yet.
+              </div>
+            ) : docs.map(doc => (
               <div key={doc.id} style={{ padding: '10px 14px', borderBottom: '1px solid #1b2536' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: doc.image_heavy ? 4 : 0 }}>
                   <RoleTag role={doc.role} />
@@ -170,10 +249,10 @@ export default function ComposerIngest() {
                   </span>
                 </div>
                 <div style={{ marginLeft: 48, fontSize: 11, color: '#8a97ac', marginBottom: doc.image_heavy ? 4 : 0 }}>
-                  {doc.status !== 'style_only' ? `${doc.pages} pages · ${doc.chunks} chunks` : ''}
+                  {doc.status !== 'style_only' && doc.pages != null ? `${doc.pages} pages · ${doc.chunks ?? 0} chunks` : ''}
                   {' '}
                   {doc.status === 'ingested' && <><span className="dot-live" style={{ width: 6, height: 6, marginRight: 4 }} /><span style={{ color: '#34d399' }}>Ingested</span></>}
-                  {doc.status === 'pending' && <><span className="dot-paused" style={{ width: 6, height: 6, marginRight: 4 }} /><span style={{ color: '#e3b341' }}>Pending</span></>}
+                  {doc.status === 'processing' && <><span className="dot-paused" style={{ width: 6, height: 6, marginRight: 4 }} /><span style={{ color: '#e3b341' }}>Processing</span></>}
                   {doc.status === 'style_only' && <><span style={{ color: '#8a97ac' }}>◌ Style only</span></>}
                 </div>
                 {doc.image_heavy && (
@@ -183,22 +262,39 @@ export default function ComposerIngest() {
                 )}
               </div>
             ))}
-            <div style={{ padding: '10px 14px', display: 'flex', gap: 8 }}>
-              <button className="btn btn-purple" style={{ fontSize: 12 }}>⟳ Ingest all</button>
-              <button className="btn btn-amber" style={{ fontSize: 12 }}>✨ Enrich datasheets</button>
-            </div>
+            {imageHeavyDocs.length > 0 && (
+              <div style={{ padding: '10px 14px' }}>
+                <button className="btn btn-amber" style={{ fontSize: 12 }} disabled={enriching} onClick={handleEnrich}>
+                  {enriching ? 'Enriching…' : `✨ Enrich datasheets (${imageHeavyDocs.length})`}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Compliance matrix */}
           <div className="card" style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 18, color: '#8a97ac' }}>▦</span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="mono" style={{ fontSize: 12, color: '#cdd6e3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>compliance_matrix.xlsx</div>
-              <div style={{ fontSize: 11, color: '#8a97ac' }}>Compliance matrix · 42 requirements</div>
+              <div className="mono" style={{ fontSize: 12, color: '#cdd6e3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {session.matrix ? session.matrix.filename : 'compliance_matrix.xlsx'}
+              </div>
+              <div style={{ fontSize: 11, color: '#8a97ac' }}>
+                {session.matrix ? `Compliance matrix · ${session.matrix.requirement_count} requirements` : 'Optional — used to fill a compliance matrix export'}
+              </div>
             </div>
-            <span className="pill pill-green" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-              <span className="dot-live" style={{ width: 6, height: 6 }} /> Loaded
-            </span>
+            {session.matrix ? (
+              <span className="pill pill-green" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                <span className="dot-live" style={{ width: 6, height: 6 }} /> Loaded
+              </span>
+            ) : (
+              <>
+                <input ref={matrixInputRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+                       onChange={e => handleMatrixSelected(e.target.files)} />
+                <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => matrixInputRef.current?.click()}>
+                  + Upload
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -209,72 +305,79 @@ export default function ComposerIngest() {
               <span style={{ fontWeight: 600, fontSize: 14 }}>Interpreted requirements</span>
               <span style={{ color: '#8a97ac', fontSize: 12 }}>{validatedCount} of {total} validated</span>
             </div>
-            {/* Progress bar */}
             <div style={{ height: 4, background: '#1f2b40', borderRadius: 9999, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${(validatedCount / total) * 100}%`, background: '#c084fc', borderRadius: 9999, transition: 'width 0.3s' }} />
+              <div style={{ height: '100%', width: total ? `${(validatedCount / total) * 100}%` : '0%', background: '#c084fc', borderRadius: 9999, transition: 'width 0.3s' }} />
             </div>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            {PREVIEW_REQS.map(req => {
-              const state = validations[req.id];
-              return (
-                <div key={req.id} style={{ padding: '14px 16px', borderBottom: '1px solid #1b2536', display: 'flex', gap: 12 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{req.title}</div>
-                    <div style={{ color: '#8a97ac', fontSize: 12, marginBottom: 6 }}>"{req.extracted}"</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {total === 0 ? (
+              <div style={{ padding: 32, textAlign: 'center' }}>
+                <div style={{ color: '#8a97ac', fontSize: 13, marginBottom: 14 }}>
+                  {docs.some(d => d.role === 'sow') ? 'No requirements extracted yet.' : 'Upload a sow_ prefixed document, then interpret it.'}
+                </div>
+                <button className="btn btn-purple" disabled={interpreting || !docs.some(d => d.role === 'sow')} onClick={handleInterpret}>
+                  {interpreting ? 'Interpreting…' : '⟳ Interpret requirements'}
+                </button>
+              </div>
+            ) : requirements.map(req => (
+              <div key={req.id} style={{ padding: '14px 16px', borderBottom: '1px solid #1b2536', display: 'flex', gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{req.title}</div>
+                  <div style={{ color: '#8a97ac', fontSize: 12, marginBottom: 6 }}>"{req.extracted}"</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {req.source && (
                       <span className="mono" style={{ fontSize: 11, background: 'rgba(136,146,164,0.1)', color: '#8a97ac', border: '1px solid rgba(136,146,164,0.2)', borderRadius: 5, padding: '2px 7px' }}>
                         {req.source}
                       </span>
-                      <span style={{ fontSize: 11, color: '#6b7990' }}>{req.confidence}% extraction confidence</span>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-                    {state === 'pending' ? (
-                      <>
-                        <button className="btn btn-green" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => toggle(req.id, 'validated')}>✓ Validate</button>
-                        <button className="btn btn-amber" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => toggle(req.id, 'flagged')}>⚑ Flag</button>
-                      </>
-                    ) : state === 'validated' ? (
-                      <>
-                        <span style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.35)', borderRadius: 6, fontSize: 11, padding: '4px 10px', fontWeight: 600 }}>✓ Validated</span>
-                        <button className="btn" style={{ fontSize: 11, padding: '3px 8px', background: 'transparent', border: '1px solid #1f2b40', color: '#8a97ac' }} onClick={() => toggle(req.id, 'validated')}>Undo</button>
-                      </>
-                    ) : (
-                      <>
-                        <span style={{ background: 'rgba(227,179,65,0.15)', color: '#e3b341', border: '1px solid rgba(227,179,65,0.35)', borderRadius: 6, fontSize: 11, padding: '4px 10px', fontWeight: 600 }}>⚑ Flagged</span>
-                        <button className="btn" style={{ fontSize: 11, padding: '3px 8px', background: 'transparent', border: '1px solid #1f2b40', color: '#8a97ac' }} onClick={() => toggle(req.id, 'flagged')}>Undo</button>
-                      </>
+                    )}
+                    {req.confidence != null && (
+                      <span style={{ fontSize: 11, color: '#6b7990' }}>{Math.round(req.confidence * 100)}% extraction confidence</span>
                     )}
                   </div>
                 </div>
-              );
-            })}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                  {req.validation === 'pending' ? (
+                    <>
+                      <button className="btn btn-green" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => toggle(req.id, req.validation, 'validated')}>✓ Validate</button>
+                      <button className="btn btn-amber" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => toggle(req.id, req.validation, 'flagged')}>⚑ Flag</button>
+                    </>
+                  ) : req.validation === 'validated' ? (
+                    <>
+                      <span style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.35)', borderRadius: 6, fontSize: 11, padding: '4px 10px', fontWeight: 600 }}>✓ Validated</span>
+                      <button className="btn" style={{ fontSize: 11, padding: '3px 8px', background: 'transparent', border: '1px solid #1f2b40', color: '#8a97ac' }} onClick={() => toggle(req.id, req.validation, 'validated')}>Undo</button>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ background: 'rgba(227,179,65,0.15)', color: '#e3b341', border: '1px solid rgba(227,179,65,0.35)', borderRadius: 6, fontSize: 11, padding: '4px 10px', fontWeight: 600 }}>⚑ Flagged</span>
+                      <button className="btn" style={{ fontSize: 11, padding: '3px 8px', background: 'transparent', border: '1px solid #1f2b40', color: '#8a97ac' }} onClick={() => toggle(req.id, req.validation, 'flagged')}>Undo</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Gate footer */}
-          <div style={{ padding: '16px', borderTop: '1px solid #1f2b40', background: '#121a28' }}>
-            {allValidated ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ color: '#34d399', fontSize: 13, fontWeight: 500 }}>✅ All requirements validated</span>
-                <button
-                  className="btn btn-purple-solid"
-                  style={{ fontWeight: 600 }}
-                  onClick={() => navigate('/composer/review')}
-                >
-                  ✦ Proceed to draft generation →
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ color: '#6b7990', fontSize: 12 }}>Validate every requirement to unlock… ({validatedCount}/{total})</span>
-                <button className="btn" style={{ background: '#1f2b40', color: '#6b7990', border: 'none', cursor: 'not-allowed', fontWeight: 600 }} disabled>
-                  ✦ Proceed to draft generation
-                </button>
-              </div>
-            )}
-          </div>
+          {total > 0 && (
+            <div style={{ padding: '16px', borderTop: '1px solid #1f2b40', background: '#121a28' }}>
+              {allValidated ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#34d399', fontSize: 13, fontWeight: 500 }}>✅ All requirements validated</span>
+                  <button className="btn btn-purple-solid" style={{ fontWeight: 600 }} onClick={handleGenerate}>
+                    ✦ Proceed to draft generation →
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#6b7990', fontSize: 12 }}>Validate every requirement to unlock… ({validatedCount}/{total})</span>
+                  <button className="btn" style={{ background: '#1f2b40', color: '#6b7990', border: 'none', cursor: 'not-allowed', fontWeight: 600 }} disabled>
+                    ✦ Proceed to draft generation
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

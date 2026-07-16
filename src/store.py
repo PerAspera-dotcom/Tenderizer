@@ -27,6 +27,7 @@ import filters
 import match
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
+from schema import composer_documents, composer_matrix, composer_requirements
 from schema import documents, metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
 from schema import tenant_settings, tenants, tenders, translations, vault_documents
 
@@ -643,6 +644,212 @@ def update_vault_document_metadata(conn, tenant_id, document_id, doc_type, metad
         ).values(doc_type=doc_type, metadata_json=json.dumps(metadata),
                   cpv_codes=json.dumps(cpv_codes), confidence=confidence,
                   fields_extracted=fields_extracted, status=status))
+
+
+def add_composer_document(conn, tenant_id, pub_number, filename, content_type, size,
+                           storage_path, role):
+    with conn.begin() as c:
+        result = c.execute(insert(composer_documents).values(
+            tenant_id=tenant_id, pub_number=pub_number, filename=filename,
+            content_type=content_type or "", size=size, storage_path=storage_path,
+            role=role, uploaded_at=date.today().isoformat()))
+        return result.inserted_primary_key[0]
+
+
+_COMPOSER_DOC_COLS = (composer_documents.c.id, composer_documents.c.filename,
+                       composer_documents.c.role, composer_documents.c.role_override,
+                       composer_documents.c.status, composer_documents.c.pages,
+                       composer_documents.c.chunks, composer_documents.c.image_heavy)
+
+
+def _composer_doc_row(r):
+    return {"id": r[0], "filename": r[1], "role": r[3] or r[2], "status": r[4],
+            "pages": r[5], "chunks": r[6], "image_heavy": bool(r[7])}
+
+
+def list_composer_documents(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        rows = c.execute(select(*_COMPOSER_DOC_COLS).where(
+            (composer_documents.c.tenant_id == tenant_id)
+            & (composer_documents.c.pub_number == pub_number)
+        ).order_by(composer_documents.c.id)).fetchall()
+    return [_composer_doc_row(r) for r in rows]
+
+
+def get_composer_document(conn, tenant_id, document_id):
+    """Tenant-scoped row incl. `storage_path`/`content_type`, or None."""
+    with conn.connect() as c:
+        row = c.execute(select(
+            composer_documents.c.pub_number, composer_documents.c.filename,
+            composer_documents.c.content_type, composer_documents.c.storage_path,
+            composer_documents.c.role, composer_documents.c.role_override,
+        ).where(
+            (composer_documents.c.tenant_id == tenant_id) & (composer_documents.c.id == document_id)
+        )).fetchone()
+    if not row:
+        return None
+    return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
+            "storage_path": row[3], "role": row[5] or row[4]}
+
+
+def update_composer_document_status(conn, tenant_id, document_id, status, pages, chunks,
+                                     image_heavy):
+    with conn.begin() as c:
+        c.execute(update(composer_documents).where(
+            (composer_documents.c.tenant_id == tenant_id) & (composer_documents.c.id == document_id)
+        ).values(status=status, pages=pages, chunks=chunks, image_heavy=image_heavy))
+
+
+def set_composer_document_role(conn, tenant_id, document_id, role):
+    with conn.begin() as c:
+        c.execute(update(composer_documents).where(
+            (composer_documents.c.tenant_id == tenant_id) & (composer_documents.c.id == document_id)
+        ).values(role_override=role))
+
+
+def set_composer_matrix(conn, tenant_id, pub_number, filename, storage_path, requirement_count):
+    """One matrix per tender — replaces any existing row for this
+    (tenant_id, pub_number) rather than accumulating duplicates on re-upload.
+    """
+    with conn.begin() as c:
+        c.execute(composer_matrix.delete().where(
+            (composer_matrix.c.tenant_id == tenant_id) & (composer_matrix.c.pub_number == pub_number)))
+        result = c.execute(insert(composer_matrix).values(
+            tenant_id=tenant_id, pub_number=pub_number, filename=filename,
+            storage_path=storage_path, requirement_count=requirement_count,
+            uploaded_at=date.today().isoformat()))
+        return result.inserted_primary_key[0]
+
+
+def get_composer_matrix(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        row = c.execute(select(
+            composer_matrix.c.filename, composer_matrix.c.storage_path,
+            composer_matrix.c.requirement_count, composer_matrix.c.filled_path,
+        ).where(
+            (composer_matrix.c.tenant_id == tenant_id) & (composer_matrix.c.pub_number == pub_number)
+        )).fetchone()
+    if not row:
+        return None
+    return {"filename": row[0], "storage_path": row[1], "requirement_count": row[2],
+            "filled_path": row[3]}
+
+
+def set_composer_matrix_filled_path(conn, tenant_id, pub_number, filled_path):
+    with conn.begin() as c:
+        c.execute(update(composer_matrix).where(
+            (composer_matrix.c.tenant_id == tenant_id) & (composer_matrix.c.pub_number == pub_number)
+        ).values(filled_path=filled_path))
+
+
+def add_composer_requirements(conn, tenant_id, pub_number, requirements):
+    """Bulk insert from composer.extract_requirements's output
+    ([{title, extracted, source, confidence}]) — one row per requirement,
+    validation defaults to 'pending' (schema default).
+    """
+    if not requirements:
+        return []
+    now = date.today().isoformat()
+    with conn.begin() as c:
+        ids = []
+        for req in requirements:
+            result = c.execute(insert(composer_requirements).values(
+                tenant_id=tenant_id, pub_number=pub_number, title=req["title"],
+                extracted_snippet=req["extracted"], source_ref=req["source"],
+                confidence=req["confidence"], created_at=now))
+            ids.append(result.inserted_primary_key[0])
+    return ids
+
+
+_COMPOSER_REQ_COLS = (
+    composer_requirements.c.id, composer_requirements.c.title,
+    composer_requirements.c.extracted_snippet, composer_requirements.c.source_ref,
+    composer_requirements.c.confidence, composer_requirements.c.validation,
+    composer_requirements.c.gap_status, composer_requirements.c.similarity,
+    composer_requirements.c.response_text, composer_requirements.c.citations_json,
+    composer_requirements.c.resolved, composer_requirements.c.version,
+    composer_requirements.c.version_history_json,
+)
+
+
+def _composer_req_row(r):
+    return {"id": r[0], "title": r[1], "extracted": r[2], "source": r[3],
+            "confidence": r[4], "validation": r[5], "gap_status": r[6],
+            "similarity": r[7], "response": r[8], "citations": json.loads(r[9]),
+            "resolved": bool(r[10]), "version": r[11],
+            "version_history": json.loads(r[12])}
+
+
+def list_composer_requirements(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        rows = c.execute(select(*_COMPOSER_REQ_COLS).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.pub_number == pub_number)
+        ).order_by(composer_requirements.c.id)).fetchall()
+    return [_composer_req_row(r) for r in rows]
+
+
+def get_composer_requirement(conn, tenant_id, requirement_id):
+    with conn.connect() as c:
+        row = c.execute(select(*_COMPOSER_REQ_COLS, composer_requirements.c.pub_number).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        )).fetchone()
+    if not row:
+        return None
+    out = _composer_req_row(row[:-1])
+    out["pub_number"] = row[-1]
+    return out
+
+
+def update_composer_requirement_validation(conn, tenant_id, requirement_id, status):
+    with conn.begin() as c:
+        c.execute(update(composer_requirements).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        ).values(validation=status))
+
+
+def update_composer_requirement_result(conn, tenant_id, requirement_id, gap_status,
+                                        similarity, response_text, citations):
+    """Write-once-per-generate-run result (composer.run_generate) — resets
+    version back to 1 and clears history, since a fresh full generate run
+    starts a new draft lineage for this requirement.
+    """
+    with conn.begin() as c:
+        c.execute(update(composer_requirements).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        ).values(gap_status=gap_status, similarity=similarity, response_text=response_text,
+                  citations_json=json.dumps(citations), version=1, version_history_json="[]"))
+
+
+def update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback):
+    """Section-scoped regenerate (composer.refine_section) — bumps version
+    and appends the prior draft + the feedback that triggered the change to
+    version_history_json, rather than overwriting silently.
+    """
+    req = get_composer_requirement(conn, tenant_id, requirement_id)
+    if req is None:
+        return
+    history = req["version_history"] + [{
+        "text": req["response"], "feedback": feedback,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }]
+    with conn.begin() as c:
+        c.execute(update(composer_requirements).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        ).values(response_text=new_text, version=req["version"] + 1,
+                  version_history_json=json.dumps(history)))
+
+
+def mark_composer_requirement_resolved(conn, tenant_id, requirement_id):
+    with conn.begin() as c:
+        c.execute(update(composer_requirements).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        ).values(resolved=True))
 
 
 def get_followup_entries(conn, tenant_id):

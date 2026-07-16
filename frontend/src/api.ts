@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, DocumentEntry, VaultDoc, ComposerSession, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, DocumentEntry, VaultDoc, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -204,20 +204,85 @@ export function uploadVaultDoc(file: File): Promise<VaultDoc> {
 // ── Composer ──────────────────────────────────────────────────────────────────
 
 export function getComposerSession(pub?: string): Promise<ComposerSession | null> {
-  const path = pub
-    ? `/api/composer/session/${encodeURIComponent(pub)}`
-    : '/api/composer/session';
-  return apiFetch<ComposerSession>(path).catch(() => null);
+  if (!pub) return Promise.resolve(null);
+  return apiFetch<ComposerSession>(`/api/composer/session/${encodeURIComponent(pub)}`).catch(() => null);
 }
 
-export function patchRequirement(id: string, status: 'validated' | 'flagged'): Promise<unknown> {
-  return apiFetch(`/api/composer/requirements/${encodeURIComponent(id)}`, {
+export function uploadComposerDocument(pub: string, file: File, role?: string): Promise<ComposerDoc> {
+  const form = new FormData();
+  form.append('file', file);
+  if (role) form.append('role', role);
+  return apiFetch<ComposerDoc>(`/api/composer/${encodeURIComponent(pub)}/documents`, {
+    method: 'POST', body: form,
+  });
+}
+
+export function updateComposerDocumentRole(pub: string, docId: number, role: string): Promise<unknown> {
+  return apiFetch(`/api/composer/${encodeURIComponent(pub)}/documents/${docId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function uploadComposerMatrix(pub: string, file: File): Promise<ComposerMatrix> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetch<ComposerMatrix>(`/api/composer/${encodeURIComponent(pub)}/matrix`, {
+    method: 'POST', body: form,
+  });
+}
+
+export function triggerComposerEnrich(pub: string): Promise<{ status: string }> {
+  return apiFetch(`/api/composer/${encodeURIComponent(pub)}/enrich`, { method: 'POST' });
+}
+
+export function triggerComposerInterpret(pub: string): Promise<{ status: string }> {
+  return apiFetch(`/api/composer/${encodeURIComponent(pub)}/interpret`, { method: 'POST' });
+}
+
+export function patchRequirement(id: number, status: 'pending' | 'validated' | 'flagged'): Promise<unknown> {
+  return apiFetch(`/api/composer/requirements/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
   });
 }
 
+export function resolveComposerRequirement(id: number): Promise<unknown> {
+  return apiFetch(`/api/composer/requirements/${id}/resolve`, { method: 'POST' });
+}
+
 export function postGenerate(pub: string): Promise<unknown> {
   return apiFetch(`/api/composer/${encodeURIComponent(pub)}/generate`, { method: 'POST' });
+}
+
+export function regenerateComposerSection(pub: string, requirementId: number, feedback: string): Promise<unknown> {
+  return apiFetch(`/api/composer/${encodeURIComponent(pub)}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requirement_id: requirementId, feedback }),
+  });
+}
+
+async function _downloadComposerBlob(pub: string, filename: string): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const path = `/api/composer/${encodeURIComponent(pub)}/download/${filename}`;
+  const r = await fetch(BASE + path, { headers });
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  return r.blob();
+}
+
+export function downloadComposerProposalBlob(pub: string): Promise<Blob> {
+  return _downloadComposerBlob(pub, 'proposal.docx');
+}
+
+export function downloadComposerMatrixBlob(pub: string): Promise<Blob> {
+  return _downloadComposerBlob(pub, 'matrix.xlsx');
+}
+
+export function downloadComposerGapsBlob(pub: string): Promise<Blob> {
+  return _downloadComposerBlob(pub, 'gaps_report.txt');
 }

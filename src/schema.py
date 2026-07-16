@@ -147,6 +147,73 @@ vault_documents = Table(
 )
 VAULT_DOCUMENTS_COLUMNS = [c.name for c in vault_documents.columns]
 
+# Composer — per-tender proposal-drafting pipeline (src/composer.py), wrapping
+# the standalone proposal_tool/ scripts. Unlike vault_documents (tenant-wide),
+# these are all tender-scoped (tenant_id, pub_number), mirroring `documents`
+# above — a SOW/tech/background/parta doc belongs to one tender's draft, not
+# a shared library. `role` is auto-detected from the filename prefix
+# (composer.get_role) but user-overridable via `role_override`.
+composer_documents = Table(
+    "composer_documents", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False, server_default=""),
+    Column("size", Integer, nullable=False, server_default="0"),
+    Column("storage_path", Text, nullable=False),
+    Column("role", Text, nullable=False, server_default="unknown"),
+    Column("role_override", Text, nullable=True),
+    Column("status", Text, nullable=False, server_default="processing"),
+    Column("pages", Integer, nullable=True),
+    Column("chunks", Integer, nullable=True),
+    Column("image_heavy", Boolean, nullable=False, server_default="0"),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
+)
+COMPOSER_DOCUMENTS_COLUMNS = [c.name for c in composer_documents.columns]
+
+# The compliance matrix sits apart from the document library as its own
+# upload (design brief: "the mockup renders it as a separate card") — it
+# drives fill_compliance_matrix's matrix_filled.xlsx output independently of
+# the SOW-extracted requirement list below, not the requirement source itself.
+composer_matrix = Table(
+    "composer_matrix", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("storage_path", Text, nullable=False),
+    Column("requirement_count", Integer, nullable=False, server_default="0"),
+    Column("filled_path", Text, nullable=True),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
+)
+
+# One row per SOW-extracted requirement (composer.extract_requirements) for a
+# tender's draft. gap_status/similarity/response_text/citations_json are
+# write-once-per-generate-run outputs (see composer.run_generate) — derived
+# from retrieval similarity at generation time, not a hand-maintained flag,
+# consistent with "gap status is derived, don't store a status the engine
+# doesn't produce" (design README).
+composer_requirements = Table(
+    "composer_requirements", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("extracted_snippet", Text, nullable=False, server_default=""),
+    Column("source_ref", Text, nullable=False, server_default=""),
+    Column("confidence", Float, nullable=True),
+    Column("validation", Text, nullable=False, server_default="pending"),
+    Column("gap_status", Text, nullable=True),
+    Column("similarity", Float, nullable=True),
+    Column("response_text", Text, nullable=True),
+    Column("citations_json", Text, nullable=False, server_default="[]"),
+    Column("resolved", Boolean, nullable=False, server_default="0"),
+    Column("version", Integer, nullable=False, server_default="1"),
+    Column("version_history_json", Text, nullable=False, server_default="[]"),
+    Column("created_at", Text, nullable=False, server_default=""),
+)
+
 # Step 5 of the Postgres/multi-tenancy migration: per-tenant config rows for
 # CPV set, keywords, and enabled portals. A new tenant is seeded from the
 # shipped config/*.yaml defaults (see store.ensure_tenant) and can then

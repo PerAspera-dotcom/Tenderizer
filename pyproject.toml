@@ -24,6 +24,9 @@ dependencies = [
     "python-docx",
     "pymupdf",
     "anthropic",
+    # Composer (src/composer.py) — compliance_matrix.xlsx read/write, ported
+    # from proposal_tool/generate.py's pandas-based column parsing.
+    "pandas",
 ]
 
 [tool.setuptools.packages.find]

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocumentBlob } from '../../api';
 import type { PipelineEntry, DocumentEntry } from '../../types';
 import { formatDate, daysLeft, countryFlag } from '../../utils';
+import { useNavigate } from '../../router';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -27,6 +28,7 @@ function daysLeftLabel(dl: string | null | undefined): string {
 }
 
 export default function PortalPipeline() {
+  const navigate = useNavigate();
   const [pipeline, setPipeline] = useState<PipelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -223,7 +225,16 @@ export default function PortalPipeline() {
                   <span>·</span>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.buyer}</span>
                 </div>
-                <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20, lineHeight: 1.3 }}>{selected.tag_line}</h2>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3 }}>{selected.tag_line}</h2>
+                  <button
+                    className="btn btn-purple-solid"
+                    style={{ flexShrink: 0, whiteSpace: 'nowrap', fontSize: 12 }}
+                    onClick={() => navigate(`/composer/ingest?pub=${encodeURIComponent(selected.pub_number)}`)}
+                  >
+                    ✦ Draft proposal in Composer
+                  </button>
+                </div>
 
                 {/* Deadline */}
                 <div style={{ marginBottom: 20 }}>
