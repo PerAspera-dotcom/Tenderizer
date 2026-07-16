@@ -13,6 +13,10 @@ __pycache__/
 data/tenders.db
 data/last_run.json
 data/uploads/
+data/vault_uploads/
+data/vault_chroma/
 reports/*.xlsx
 
 frontend/dist/
+.vercel
+.env*

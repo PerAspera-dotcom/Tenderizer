@@ -28,7 +28,7 @@ import match
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
 from schema import documents, metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
-from schema import tenant_settings, tenants, tenders, translations
+from schema import tenant_settings, tenants, tenders, translations, vault_documents
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -579,6 +579,70 @@ def get_document(conn, tenant_id, document_id):
         return None
     return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
             "size": row[3], "storage_path": row[4], "uploaded_at": row[5]}
+
+
+def add_vault_document(conn, tenant_id, filename, content_type, size, storage_path):
+    """Row starts `status='processing'` (schema default) — flipped to
+    'indexed' by update_vault_document_metadata once ingest_and_embed/
+    extract_metadata (src/vault.py) finish.
+    """
+    with conn.begin() as c:
+        result = c.execute(insert(vault_documents).values(
+            tenant_id=tenant_id, filename=filename, content_type=content_type or "",
+            size=size, storage_path=storage_path, uploaded_at=date.today().isoformat()))
+        return result.inserted_primary_key[0]
+
+
+def _vault_doc_row(r):
+    return {"id": r[0], "filename": r[1], "doc_type": r[2], "status": r[3],
+            "metadata": json.loads(r[4]), "cpv_codes": json.loads(r[5]),
+            "confidence": r[6], "fields_extracted": r[7]}
+
+
+_VAULT_LIST_COLS = (vault_documents.c.id, vault_documents.c.filename, vault_documents.c.doc_type,
+                     vault_documents.c.status, vault_documents.c.metadata_json,
+                     vault_documents.c.cpv_codes, vault_documents.c.confidence,
+                     vault_documents.c.fields_extracted)
+
+
+def list_vault_documents(conn, tenant_id, q=None):
+    """[{id, filename, doc_type, status, metadata, cpv_codes, confidence,
+    fields_extracted}], matching the VaultDoc shape the frontend expects
+    (frontend/src/types.ts). `q` matches against filename only — metadata
+    values vary too much in shape (numbers, units, free text) for a single
+    LIKE to search meaningfully across all of them.
+    """
+    where = vault_documents.c.tenant_id == tenant_id
+    if q:
+        where = where & vault_documents.c.filename.ilike(f"%{q}%")
+    with conn.connect() as c:
+        rows = c.execute(select(*_VAULT_LIST_COLS).where(where)
+                          .order_by(vault_documents.c.id)).fetchall()
+    return [_vault_doc_row(r) for r in rows]
+
+
+def get_vault_document(conn, tenant_id, document_id):
+    """Tenant-scoped row incl. `storage_path`/`content_type`, or None."""
+    with conn.connect() as c:
+        row = c.execute(select(
+            vault_documents.c.filename, vault_documents.c.content_type,
+            vault_documents.c.storage_path,
+        ).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        )).fetchone()
+    if not row:
+        return None
+    return {"filename": row[0], "content_type": row[1], "storage_path": row[2]}
+
+
+def update_vault_document_metadata(conn, tenant_id, document_id, doc_type, metadata,
+                                    cpv_codes, confidence, fields_extracted, status):
+    with conn.begin() as c:
+        c.execute(update(vault_documents).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        ).values(doc_type=doc_type, metadata_json=json.dumps(metadata),
+                  cpv_codes=json.dumps(cpv_codes), confidence=confidence,
+                  fields_extracted=fields_extracted, status=status))
 
 
 def get_followup_entries(conn, tenant_id):
