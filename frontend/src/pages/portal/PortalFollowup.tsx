@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getFollowup, patchFollowup } from '../../api';
 import type { FollowupEntry } from '../../types';
-import { formatDate, countryFlag } from '../../utils';
+import { formatDate, countryFlag, displayTagLine } from '../../utils';
 
 export default function PortalFollowup() {
   const [entries, setEntries] = useState<FollowupEntry[]>([]);
@@ -67,7 +67,7 @@ export default function PortalFollowup() {
                 <tr key={e.pub_number}>
                   <td>
                     <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
-                      {e.tag_line}
+                      {displayTagLine(e)}
                     </div>
                     <div style={{ color: '#8892a4', fontSize: 12, marginTop: 2 }}>
                       {countryFlag(e.country)} {e.buyer}

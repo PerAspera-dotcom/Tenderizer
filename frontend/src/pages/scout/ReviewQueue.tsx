@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listTenders, patchTender } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, confidenceFromMatchSource, formatValue } from '../../utils';
+import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, displayTagLine, displayDescription } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
@@ -36,21 +36,6 @@ function confidenceLabel(ms: string | null | undefined): string {
   if (ms === 'cpv') return 'High confidence — matched by CPV code';
   if (ms === 'keyword') return 'Candidate — keyword match only';
   return ms;
-}
-
-// CR-001 R3: a tender needs translation when its source language isn't English.
-function needsTranslation(t: Tender): boolean {
-  return !!t.language && t.language !== 'eng' && t.language !== 'en';
-}
-
-function displayTagLine(t: Tender, showOriginal: boolean): string {
-  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.tag_line;
-  return t.tag_line_en || t.tag_line;
-}
-
-function displayDescription(t: Tender, showOriginal: boolean): string {
-  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.description;
-  return t.description_en || t.description;
 }
 
 export default function ReviewQueue() {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from '../../router';
 import { getPipeline } from '../../api';
 import type { PipelineEntry } from '../../types';
-import { daysLeft } from '../../utils';
+import { daysLeft, displayTagLine } from '../../utils';
 
 export default function PortalHome() {
   const [pipeline, setPipeline] = useState<PipelineEntry[]>([]);
@@ -88,7 +88,7 @@ export default function PortalHome() {
                 <span style={{ fontSize: 16 }}>{isUrgent ? '🔴' : '🟡'}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {e.tag_line}
+                    {displayTagLine(e)}
                   </div>
                   <div style={{ fontSize: 12, color: isUrgent ? '#f87171' : '#e3b341', marginTop: 2 }}>
                     {isUrgent

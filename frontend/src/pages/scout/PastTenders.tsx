@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { listTenders } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, formatValue } from '../../utils';
+import { formatDate, countryFlag, formatValue, needsTranslation, displayTagLine } from '../../utils';
 
 const PORTAL_OPTS = [
   { value: '', label: 'All portals' },
@@ -124,7 +124,10 @@ export default function PastTenders() {
                 <tr key={t.hash}>
                   <td>
                     <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320, fontSize: 13 }}>
-                      {t.tag_line}
+                      {needsTranslation(t) && t.translation_status === 'ok' && (
+                        <span title={`Translated — original: ${t.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
+                      )}
+                      {displayTagLine(t)}
                     </div>
                     <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
                       {t.buyer}

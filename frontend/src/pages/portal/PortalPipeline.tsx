@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocumentBlob } from '../../api';
 import type { PipelineEntry, DocumentEntry } from '../../types';
-import { formatDate, daysLeft, countryFlag } from '../../utils';
+import { formatDate, daysLeft, countryFlag, needsTranslation, displayTagLine } from '../../utils';
 import { useNavigate } from '../../router';
 
 function formatSize(bytes: number): string {
@@ -184,7 +184,10 @@ export default function PortalPipeline() {
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, marginTop: 5, flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isActive ? '#e2e8f0' : '#c8d0de' }}>
-                      {e.tag_line}
+                      {needsTranslation(e) && e.translation_status === 'ok' && (
+                        <span title={`Translated — original: ${e.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
+                      )}
+                      {displayTagLine(e)}
                     </div>
                     <div style={{ color: '#8892a4', fontSize: 11, display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
                       <span>{e.source}</span>
@@ -226,7 +229,7 @@ export default function PortalPipeline() {
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.buyer}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
-                  <h2 style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3 }}>{selected.tag_line}</h2>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3 }}>{displayTagLine(selected)}</h2>
                   <button
                     className="btn btn-purple-solid"
                     style={{ flexShrink: 0, whiteSpace: 'nowrap', fontSize: 12 }}
