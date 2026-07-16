@@ -41,6 +41,31 @@ export default function KeywordsConfigPage() {
 
   const distinctiveSet = useMemo(() => new Set(data?.distinctive ?? []), [data]);
 
+  // CR-003 G2: bulk enable/disable a whole language's terms as distinctive in
+  // one action, instead of toggling each of up to ~47 terms individually.
+  // Reuses the same save path as the per-term toggle below — no new storage
+  // shape, "distinctive" stays a single flat array (client-side language
+  // grouping just computes the next full array to send).
+  async function toggleLanguageDistinctive(lang: string) {
+    if (!data) return;
+    const langTerms = data.terms[lang] || [];
+    if (langTerms.length === 0) return;
+    const allDistinctive = langTerms.every(t => distinctiveSet.has(t));
+    const busyLangKey = `lang:${lang}`;
+    setBusyKey(busyLangKey);
+    try {
+      const next = allDistinctive
+        ? data.distinctive.filter(t => !langTerms.includes(t))
+        : Array.from(new Set([...data.distinctive, ...langTerms]));
+      await putKeywordsConfig({ distinctive: next });
+      setData({ ...data, distinctive: next });
+    } catch {
+      setError('Failed to save — this change was not applied');
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   async function toggleDistinctive(term: string) {
     if (!data) return;
     setBusyKey(term);
@@ -145,6 +170,30 @@ export default function KeywordsConfigPage() {
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
+      </div>
+
+      {/* CR-003 G2: bulk per-language distinctive toggle */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        {LANGUAGES.map(lang => {
+          const langTerms = data.terms[lang] || [];
+          const distinctiveCount = langTerms.filter(t => distinctiveSet.has(t)).length;
+          const allDistinctive = langTerms.length > 0 && distinctiveCount === langTerms.length;
+          const busy = busyKey === `lang:${lang}`;
+          return (
+            <button
+              key={lang}
+              className="btn btn-ghost"
+              style={{ fontSize: 12, padding: '6px 12px', opacity: busy ? 0.5 : 1 }}
+              onClick={() => toggleLanguageDistinctive(lang)}
+              disabled={busy || langTerms.length === 0}
+              title={allDistinctive
+                ? `Disable all ${LANG_LABEL[lang]} terms as distinctive`
+                : `Enable all ${LANG_LABEL[lang]} terms as distinctive`}
+            >
+              {LANG_LABEL[lang]} · {distinctiveCount}/{langTerms.length} distinctive — {allDistinctive ? 'Disable all' : 'Enable all'}
+            </button>
+          );
+        })}
       </div>
 
       <div className="card">
