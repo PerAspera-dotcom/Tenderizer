@@ -125,6 +125,36 @@ def test_failed_translation_is_not_cached(tmp_path, monkeypatch):
     assert store.get_cached_translation(conn, translate.content_hash("Bonjour")) is None
 
 
+# ── translate_and_detect (also surfaces detected_source_language) ───────────
+
+def test_translate_and_detect_maps_deepl_code_to_iso3(monkeypatch):
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _ok_response("Hello"))
+    text, language, status = translate.translate_and_detect("Bonjour", api_key="fakekey:fx")
+    assert (text, language, status) == ("Hello", "fra", "ok")
+
+
+def test_translate_and_detect_unmapped_code_falls_back_to_lowercase(monkeypatch):
+    def fake_post(*a, **k):
+        return _FakeResponse(200, {"translations": [{"text": "x", "detected_source_language": "XX"}]})
+    monkeypatch.setattr(requests, "post", fake_post)
+    _, language, status = translate.translate_and_detect("???", api_key="fakekey:fx")
+    assert (language, status) == ("xx", "ok")
+
+
+def test_translate_and_detect_empty_text_short_circuits(monkeypatch):
+    called = []
+    monkeypatch.setattr(requests, "post", lambda *a, **k: called.append(1) or _ok_response())
+    text, language, status = translate.translate_and_detect("   ", api_key="fakekey:fx")
+    assert (text, language, status) == ("", None, "ok")
+    assert called == []
+
+
+def test_translate_and_detect_unavailable_has_no_language(monkeypatch):
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _FakeResponse(456))
+    text, language, status = translate.translate_and_detect("Bonjour", api_key="fakekey:fx")
+    assert (text, language, status) == (None, None, "unavailable")
+
+
 def test_different_text_different_cache_entry(tmp_path, monkeypatch):
     conn = store.init_db(str(tmp_path / "t.db"))
     monkeypatch.setattr(requests, "post", lambda *a, **k: _ok_response("A"))

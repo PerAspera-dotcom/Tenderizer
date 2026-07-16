@@ -402,6 +402,18 @@ def update_classification(conn, tenant_id, pub_number, notice_type, awarded_to, 
                   awarded_value=awarded_value, awarded_currency=awarded_currency))
 
 
+def update_language(conn, tenant_id, pub_number, language):
+    """Backfill escape hatch, same shape as update_tagging/update_classification
+    — for rows ingested before CR-001 R3's language-tagging existed, left at
+    the `language` column's "" default by upsert()'s insert-only rule (see
+    scratch_backfill_language.py).
+    """
+    with conn.begin() as c:
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        ).values(language=language))
+
+
 def rescore_pending(conn, tenant_id, now=None):
     """CR-003 G3 — re-run matching/filtering against `status='new'` rows only.
 

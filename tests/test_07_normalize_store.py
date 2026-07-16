@@ -202,6 +202,25 @@ def test_update_tagging_rewrites_an_existing_records_match_fields(tmp_path, raw_
     assert updated["match_source"] == "both"
     assert updated["exclude_reason"] == "construction_works"
 
+def test_update_language_backfills_a_row_predating_language_tagging(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path/"t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    rec["language"] = ""  # simulates a row inserted before CR-001 R3 existed
+    store.upsert(conn, 1, rec)
+    assert store.all_records(conn, 1)[0]["language"] == ""
+
+    store.update_language(conn, 1, rec["pub_number"], "fra")
+    assert store.all_records(conn, 1)[0]["language"] == "fra"
+
+def test_update_language_only_affects_the_calling_tenants_row(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path/"t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    rec["language"] = ""
+    store.upsert(conn, 1, rec)
+    store.upsert(conn, 2, rec)
+    store.update_language(conn, 1, rec["pub_number"], "fra")
+    assert store.all_records(conn, 2)[0]["language"] == ""
+
 def test_update_tagging_only_affects_the_calling_tenants_row(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     rec = normalize.normalize_ted(raw_ted_supply)
