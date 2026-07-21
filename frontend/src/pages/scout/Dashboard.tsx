@@ -200,6 +200,22 @@ export default function Dashboard() {
                       </div>
                       {p.last_result && <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2 }}>{p.last_result}</div>}
                       {p.detail && <div style={{ color: '#e3b341', fontSize: 11, marginTop: 2 }}>{p.detail}</div>}
+                      {(p.streak_ok_days > 0 || p.consecutive_failures > 0) && (
+                        <div
+                          style={{
+                            color: p.consecutive_failures > 0 ? '#f87171' : '#2EE6D4',
+                            fontSize: 11, marginTop: 2, fontWeight: 600,
+                          }}
+                          title={p.last_failure ? `Last failure: ${p.last_failure}` : undefined}
+                        >
+                          {p.consecutive_failures > 0
+                            ? `✗ ${p.consecutive_failures} failed in a row`
+                            : `✓ ${p.streak_ok_days} day${p.streak_ok_days === 1 ? '' : 's'}`}
+                          {p.failures_7d > 0 && p.consecutive_failures === 0 && (
+                            <span style={{ color: '#8892a4', fontWeight: 400 }}> · {p.failures_7d} failed in last 7d</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

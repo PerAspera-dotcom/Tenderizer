@@ -188,6 +188,35 @@ def extract_metadata(path, content_type):
     return doc_type, metadata, cpv_codes, confidence
 
 
+def search_vault(tenant_id, doc_ids, query, top_k=8):
+    """CR-004 F3 — Composer's "Source materials" panel: semantic search
+    restricted to `doc_ids` (already filtered by CPV/material at the SQL
+    layer — see store.find_vault_documents) within this tenant's Vault
+    collection. [] if nothing's indexed yet or doc_ids is empty — never an
+    error, same convention as composer.retrieve_evidence.
+    """
+    if not doc_ids:
+        return []
+    collection = _chroma_collection(tenant_id)
+    if collection.count() == 0:
+        return []
+    embedding = _embedding_model().encode([query]).tolist()
+    results = collection.query(
+        query_embeddings=embedding, n_results=min(top_k * 4, 40),
+        include=["documents", "metadatas", "distances"], where={"doc_id": {"$in": doc_ids}},
+    )
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else []
+    dists = results["distances"][0] if results["distances"] else []
+    chunks = [
+        {"text": doc, "source": meta["source"], "doc_id": meta["doc_id"],
+         "similarity": round(1 - (dist / 2), 3)}
+        for doc, meta, dist in zip(docs, metas, dists)
+    ]
+    chunks.sort(key=lambda c: -c["similarity"])
+    return chunks[:top_k]
+
+
 def process_upload(tenant_id, doc_id, path, content_type):
     """The full background-task pipeline for one uploaded document: embed
     for retrieval, then extract display metadata. Returns the fields

@@ -16,7 +16,7 @@ set_tenant_* functions below.
 """
 import json
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -28,8 +28,8 @@ import match
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
 from schema import composer_documents, composer_matrix, composer_requirements
-from schema import documents, metadata, pipeline, tenant_cpv, tenant_keywords, tenant_portals
-from schema import tenant_settings, tenants, tenders, translations, vault_documents
+from schema import documents, metadata, pipeline, source_health, tenant_cpv, tenant_keywords
+from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -658,6 +658,41 @@ def update_vault_document_metadata(conn, tenant_id, document_id, doc_type, metad
                   fields_extracted=fields_extracted, status=status))
 
 
+def find_vault_documents(conn, tenant_id, cpv=None, material=None):
+    """CR-004 F3 — Composer's "Source materials" panel: indexed Vault
+    documents filtered by CPV code and/or a substring match against
+    extracted metadata values. Deliberately separate from
+    list_vault_documents' `q` (filename-only, used by the Library screen) —
+    metadata values vary too much in shape for one substring filter to serve
+    both call sites' expectations identically.
+    """
+    docs = [d for d in list_vault_documents(conn, tenant_id) if d["status"] == "indexed"]
+    if cpv:
+        docs = [d for d in docs if cpv in d["cpv_codes"]]
+    if material:
+        needle = material.lower()
+        docs = [d for d in docs if needle in json.dumps(d["metadata"]).lower()]
+    return docs
+
+
+def delete_vault_document(conn, tenant_id, document_id):
+    with conn.begin() as c:
+        c.execute(vault_documents.delete().where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)))
+
+
+def update_vault_document_metadata_fields(conn, tenant_id, document_id, metadata):
+    """CR-004 F1: analyst confirms/corrects extracted fields
+    (POST /api/vault/validate-metadata) — replaces only `metadata`/
+    `fields_extracted`, leaving doc_type/cpv_codes/confidence (the
+    extraction's own outputs) untouched.
+    """
+    with conn.begin() as c:
+        c.execute(update(vault_documents).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        ).values(metadata_json=json.dumps(metadata), fields_extracted=len(metadata)))
+
+
 def add_composer_document(conn, tenant_id, pub_number, filename, content_type, size,
                            storage_path, role):
     with conn.begin() as c:
@@ -836,10 +871,17 @@ def update_composer_requirement_result(conn, tenant_id, requirement_id, gap_stat
                   citations_json=json.dumps(citations), version=1, version_history_json="[]"))
 
 
-def update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback):
+def update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback,
+                                         extra_citations=None):
     """Section-scoped regenerate (composer.refine_section) — bumps version
     and appends the prior draft + the feedback that triggered the change to
     version_history_json, rather than overwriting silently.
+
+    `extra_citations` (CR-004 F3): Vault sources the analyst explicitly
+    pulled in via the Source materials panel, appended to the requirement's
+    existing citations list. None/[] (the default) leaves citations
+    untouched — a plain regenerate-from-feedback still doesn't re-derive
+    them, same as before this parameter existed.
     """
     req = get_composer_requirement(conn, tenant_id, requirement_id)
     if req is None:
@@ -848,12 +890,13 @@ def update_composer_requirement_refined(conn, tenant_id, requirement_id, new_tex
         "text": req["response"], "feedback": feedback,
         "at": datetime.now(timezone.utc).isoformat(),
     }]
+    citations = req["citations"] + (extra_citations or [])
     with conn.begin() as c:
         c.execute(update(composer_requirements).where(
             (composer_requirements.c.tenant_id == tenant_id)
             & (composer_requirements.c.id == requirement_id)
         ).values(response_text=new_text, version=req["version"] + 1,
-                  version_history_json=json.dumps(history)))
+                  version_history_json=json.dumps(history), citations_json=json.dumps(citations)))
 
 
 def mark_composer_requirement_resolved(conn, tenant_id, requirement_id):
@@ -883,3 +926,75 @@ def get_followup_entries(conn, tenant_id):
             rec[col] = json.loads(rec[col] or "[]")
         out.append(rec)
     return out
+
+
+# CR-004 F4 — scheduled-scrape health logging (source_health). One row per
+# (tenant, source, run), appended by run.run_pipeline after every attempt
+# regardless of outcome — never updated in place, so this is a real history,
+# not just "last run's status" (the pre-existing last_run.json behaviour,
+# left untouched alongside this).
+
+def record_source_health(conn, tenant_id, source, run_date, status,
+                          notices_pulled=None, error_detail=None):
+    """Appends one source_health row and returns it (dict) including the
+    freshly-computed `streak_ok_days` snapshot: this run's own +1 on top of
+    the immediately-prior row's streak if that row was 'ok', reset to 0 on
+    'failed' or when there's no prior row yet.
+    """
+    with conn.begin() as c:
+        prev = c.execute(
+            select(source_health.c.status, source_health.c.streak_ok_days)
+            .where((source_health.c.tenant_id == tenant_id) & (source_health.c.source == source))
+            .order_by(source_health.c.id.desc()).limit(1)
+        ).fetchone()
+        streak = 0
+        if status == "ok":
+            streak = (prev[1] + 1) if (prev is not None and prev[0] == "ok") else 1
+        c.execute(insert(source_health).values(
+            tenant_id=tenant_id, source=source, run_date=run_date, status=status,
+            notices_pulled=notices_pulled, error_detail=error_detail, streak_ok_days=streak,
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+    return {"source": source, "run_date": run_date, "status": status,
+            "notices_pulled": notices_pulled, "error_detail": error_detail,
+            "streak_ok_days": streak}
+
+
+def get_source_health(conn, tenant_id, source, days=7, now=None):
+    """Rolled-up health summary for one source, matching CR-004's
+    /api/health shape: {source, last_result, streak_ok_days, failures_7d,
+    last_failure, consecutive_failures}. `consecutive_failures` counts
+    backward from the most recent row while status stays 'failed' (not
+    windowed by `days` — an ongoing outage should keep escalating past a
+    week). None of these fields require a prior row to exist: a source with
+    no history yet reads as all-zero/None, not an error.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=days)).date().isoformat()
+    with conn.connect() as c:
+        rows = c.execute(
+            select(source_health.c.run_date, source_health.c.status,
+                   source_health.c.notices_pulled, source_health.c.error_detail,
+                   source_health.c.streak_ok_days)
+            .where((source_health.c.tenant_id == tenant_id) & (source_health.c.source == source))
+            .order_by(source_health.c.id.desc()).limit(60)
+        ).fetchall()
+    if not rows:
+        return {"source": source, "last_result": None, "streak_ok_days": 0,
+                "failures_7d": 0, "last_failure": None, "consecutive_failures": 0}
+
+    latest = rows[0]
+    last_result = (f"ok ({latest[2]} new)" if latest[1] == "ok" else f"error: {latest[3]}")
+    streak_ok_days = latest[4] if latest[1] == "ok" else 0
+
+    failures_7d = sum(1 for r in rows if r[1] == "failed" and r[0] >= cutoff)
+    last_failure = next((r[0] for r in rows if r[1] == "failed"), None)
+
+    consecutive_failures = 0
+    for r in rows:
+        if r[1] != "failed":
+            break
+        consecutive_failures += 1
+
+    return {"source": source, "last_result": last_result, "streak_ok_days": streak_ok_days,
+            "failures_7d": failures_7d, "last_failure": last_failure,
+            "consecutive_failures": consecutive_failures}

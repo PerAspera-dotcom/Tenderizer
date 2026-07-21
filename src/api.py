@@ -72,6 +72,11 @@ async def _lifespan(_app: FastAPI):
         from apscheduler.schedulers.background import BackgroundScheduler
         _scheduler = BackgroundScheduler(timezone="UTC")
         _scheduler.add_job(_run_all_tenants, "cron", hour=2, minute=0, id="daily_scrape")
+        # CR-004 F4: daily backup, after the scrape so the freshest data is
+        # captured. backup.run_backup() never raises (catches + alerts
+        # internally) — wrapped again here as defense in depth so a bug in
+        # that handling still can't take the scheduler down.
+        _scheduler.add_job(_run_backup_job, "cron", hour=3, minute=0, id="daily_backup")
         _scheduler.start()
     yield
     if _scheduler is not None and _scheduler.running:
@@ -333,16 +338,17 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     # Tenant-gated, not ops-gated: this is the Scout Dashboard's Portal
     # Health panel (TENDERIZER_HANDOFF.md §6/§8) — real, Phase-1,
     # tenant-facing data, unlike /api/reports/latest. tenant_id isn't used
-    # yet: _last_run()/LAST_RUN_PATH is a single shared file, not
-    # tenant-scoped (a pre-existing gap from before tenant_id existed, still
-    # not fixed here) — but the route itself needs a regular tenant session,
-    # not the ops secret.
-    last_run_health = _last_run().get("health", {})
+    # for last_result any more (was: a single shared last_run.json file, not
+    # tenant-scoped) — CR-004 F4's source_health table replaces it as the
+    # source of truth for last_result too, now tenant-scoped for real.
+    conn = _db()
     result = []
     for portal in _PORTAL_META:
         entry = dict(portal)
-        if portal["name"] in last_run_health:
-            entry["last_result"] = last_run_health[portal["name"]]
+        # CR-004 F4: streak/failure history, real once source_health has
+        # accumulated rows (empty/zeroed for a source with no run history
+        # yet, e.g. "planned"/"paused" ones that never actually fetch).
+        entry.update(store.get_source_health(conn, tenant_id, portal["name"]))
         result.append(entry)
     return result
 
@@ -384,6 +390,14 @@ def _run_all_tenants():
             # health dict already isolates per-source failures within a
             # single tenant's run; this is the same principle one level up.
             logging.exception(f"scheduled run failed for tenant {tenant_id}")
+
+
+def _run_backup_job():
+    try:
+        import backup
+        backup.run_backup()
+    except Exception:
+        logging.exception("scheduled backup job crashed outside run_backup()'s own handling")
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -648,6 +662,79 @@ def get_vault_docs(q: Optional[str] = None, tenant_id: int = Depends(get_current
     return {"total": len(results), "processing": processing, "results": results}
 
 
+@app.get("/api/vault/docs/{document_id}")
+def get_vault_doc_detail(document_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    doc = next((d for d in store.list_vault_documents(_db(), tenant_id) if d["id"] == document_id), None)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    return doc
+
+
+@app.delete("/api/vault/docs/{document_id}")
+def delete_vault_doc(document_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    doc = store.get_vault_document(conn, tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    store.delete_vault_document(conn, tenant_id, document_id)
+    try:
+        vault._chroma_collection(tenant_id).delete(where={"doc_id": document_id})
+    except Exception:
+        logging.exception(f"failed to drop Chroma chunks for vault doc {document_id}")
+    if os.path.exists(doc["storage_path"]):
+        os.remove(doc["storage_path"])
+    return {"deleted": True}
+
+
+class VaultMetadataValidationBody(BaseModel):
+    document_id: int
+    metadata: dict
+
+
+@app.post("/api/vault/validate-metadata")
+def validate_vault_metadata(body: VaultMetadataValidationBody,
+                             tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    if store.get_vault_document(conn, tenant_id, body.document_id) is None:
+        raise HTTPException(404, "Document not found")
+    store.update_vault_document_metadata_fields(conn, tenant_id, body.document_id, body.metadata)
+    return {"id": body.document_id, "metadata": body.metadata}
+
+
+@app.get("/api/vault/search")
+def search_vault_endpoint(query: Optional[str] = None, cpv: Optional[str] = None,
+                           material: Optional[str] = None, top_k: int = Query(8, ge=1, le=50),
+                           tenant_id: int = Depends(get_current_tenant_id)):
+    """CR-004 F3 — Composer's "Source materials" panel: search the Vault
+    library by CPV code and/or material type, optionally ranked by semantic
+    similarity to a free-text query. Without `query`, returns the matching
+    documents themselves (highest-confidence first); with it, returns
+    chunk-level hits (ranked, joined back to their parent doc's metadata).
+    """
+    conn = _db()
+    candidates = store.find_vault_documents(conn, tenant_id, cpv=cpv, material=material)
+    if not candidates:
+        return {"results": []}
+    if not query:
+        ranked = sorted(candidates, key=lambda d: -(d["confidence"] or 0))[:top_k]
+        return {"results": [
+            {"doc_id": d["id"], "filename": d["filename"], "metadata": d["metadata"],
+             "cpv_codes": d["cpv_codes"], "confidence": d["confidence"], "text": None, "similarity": None}
+            for d in ranked
+        ]}
+    by_id = {d["id"]: d for d in candidates}
+    chunks = vault.search_vault(tenant_id, list(by_id.keys()), query, top_k=top_k)
+    results = []
+    for c in chunks:
+        d = by_id.get(c["doc_id"])
+        if d is None:
+            continue
+        results.append({"doc_id": d["id"], "filename": d["filename"], "metadata": d["metadata"],
+                         "cpv_codes": d["cpv_codes"], "confidence": d["confidence"],
+                         "text": c["text"], "similarity": c["similarity"]})
+    return {"results": results}
+
+
 # ── Composer — per-tender proposal drafting pipeline ────────────────────────
 # Tender-scoped and gated to shortlisted tenders, same reasoning as the
 # CR-002 `documents` slice above, but with its own tables/roles/pipeline
@@ -910,20 +997,32 @@ def _run_composer_generate(tenant_id, pub_number):
         store.set_composer_matrix_filled_path(conn, tenant_id, pub_number, str(filled_path))
 
 
-def _run_composer_refine(tenant_id, pub_number, requirement_id, feedback):
+def _run_composer_refine(tenant_id, pub_number, requirement_id, feedback, vault_document_ids=None):
     conn = _db()
     req = store.get_composer_requirement(conn, tenant_id, requirement_id)
     if req is None:
         return
     query = f"{req['title']} {req['extracted']} {feedback}"
     tech_chunks = composer.retrieve_evidence(tenant_id, pub_number, query, roles=["tech"])
-    new_text = composer.refine_section(req["extracted"], req["response"] or "", feedback, tech_chunks)
-    store.update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback)
+    # CR-004 F3 — Composer -> Vault: the analyst drags specific Vault
+    # documents (found via the Source materials panel / GET /api/vault/
+    # search) into a regenerate; their chunks get merged into the evidence
+    # pool ahead of the tender's own "tech" docs, and get their own citation
+    # rows (prefixed so they're visibly distinct from tender-scoped sources).
+    vault_chunks, extra_citations = [], []
+    if vault_document_ids:
+        vault_chunks = vault.search_vault(tenant_id, vault_document_ids, query, top_k=5)
+        extra_citations = [{"doc": f"Vault: {c['source']}", "score": c["similarity"]} for c in vault_chunks]
+    new_text = composer.refine_section(req["extracted"], req["response"] or "", feedback,
+                                        vault_chunks + tech_chunks)
+    store.update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback,
+                                               extra_citations=extra_citations)
 
 
 class ComposerGenerateBody(BaseModel):
-    requirement_id: Optional[int] = None
-    feedback:       Optional[str] = None
+    requirement_id:     Optional[int]       = None
+    feedback:           Optional[str]       = None
+    vault_document_ids: Optional[list[int]] = None
 
 @app.post("/api/composer/{pub_number}/generate")
 def post_composer_generate(pub_number: str, background: BackgroundTasks,
@@ -941,7 +1040,8 @@ def post_composer_generate(pub_number: str, background: BackgroundTasks,
             raise HTTPException(404, "Requirement not found")
         if not body.feedback:
             raise HTTPException(422, "feedback is required for a section-scoped regenerate")
-        background.add_task(_run_composer_refine, tenant_id, pub_number, body.requirement_id, body.feedback)
+        background.add_task(_run_composer_refine, tenant_id, pub_number, body.requirement_id,
+                             body.feedback, body.vault_document_ids)
         return {"status": "started", "requirement_id": body.requirement_id}
 
     requirements = store.list_composer_requirements(conn, tenant_id, pub_number)

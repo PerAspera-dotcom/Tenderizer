@@ -27,7 +27,14 @@ dependencies = [
     # Composer (src/composer.py) — compliance_matrix.xlsx read/write, ported
     # from proposal_tool/generate.py's pandas-based column parsing.
     "pandas",
+    # CR-004 F4 — backup upload/download to S3-compatible object storage
+    # (AWS S3 / Backblaze B2 / GCS all speak this API). Inert if
+    # BACKUP_S3_BUCKET is unset — see src/backup.py.
+    "boto3",
 ]
+
+[project.scripts]
+tenderizer = "cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

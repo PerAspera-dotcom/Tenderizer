@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from '../../router';
 import {
-  getComposerSession, regenerateComposerSection,
+  getComposerSession, regenerateComposerSection, searchVault,
   downloadComposerProposalBlob, downloadComposerMatrixBlob,
 } from '../../api';
-import type { ComposerRequirement, ComposerSession } from '../../types';
+import type { ComposerRequirement, ComposerSession, VaultSearchResult } from '../../types';
 
 type GapStatus = NonNullable<ComposerRequirement['gap_status']>;
 
@@ -51,6 +51,13 @@ export default function ProposalReview() {
   const [regenerating, setRegenerating] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
+  // CR-004 F3 — Composer -> Vault "Source materials" panel.
+  const [vaultQuery, setVaultQuery] = useState('');
+  const [vaultCpv, setVaultCpv] = useState('');
+  const [vaultResults, setVaultResults] = useState<VaultSearchResult[]>([]);
+  const [vaultSearching, setVaultSearching] = useState(false);
+  const [selectedVaultDocIds, setSelectedVaultDocIds] = useState<number[]>([]);
+
   function refresh() {
     if (!pub) { setLoading(false); return; }
     return getComposerSession(pub)
@@ -79,7 +86,10 @@ export default function ProposalReview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pub, generating]);
 
-  useEffect(() => { setRefineText(''); setShowHistory(false); }, [selectedId]);
+  useEffect(() => {
+    setRefineText(''); setShowHistory(false);
+    setVaultResults([]); setSelectedVaultDocIds([]); setVaultQuery(''); setVaultCpv('');
+  }, [selectedId]);
 
   if (!pub) {
     return (
@@ -129,12 +139,29 @@ export default function ProposalReview() {
     if (!pub || !refineText.trim() || !selected) return;
     setRegenerating(true);
     try {
-      await regenerateComposerSection(pub, selected.id, refineText.trim());
+      await regenerateComposerSection(pub, selected.id, refineText.trim(), selectedVaultDocIds);
       setRefineText('');
+      setSelectedVaultDocIds([]);
+      setVaultResults([]);
       await refresh();
     } finally {
       setRegenerating(false);
     }
+  }
+
+  async function handleVaultSearch() {
+    if (!vaultQuery.trim() && !vaultCpv.trim()) return;
+    setVaultSearching(true);
+    try {
+      const res = await searchVault({ query: vaultQuery.trim() || undefined, cpv: vaultCpv.trim() || undefined });
+      setVaultResults(res.results);
+    } finally {
+      setVaultSearching(false);
+    }
+  }
+
+  function toggleVaultDoc(docId: number) {
+    setSelectedVaultDocIds(prev => prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]);
   }
 
   async function handleDownloadDocx() {
@@ -340,6 +367,69 @@ export default function ProposalReview() {
                             <div style={{ color: '#cdd6e3' }}>{v.text}</div>
                           </div>
                         ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* CR-004 F3 — Composer -> Vault: search the Vault library and pull
+                      specific documents into this section's next regenerate. */}
+                  <div style={{ borderTop: '1px solid #1f2b40', paddingTop: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 8 }}>
+                      Source materials · search Vault
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                      <input
+                        className="input-field" style={{ flex: 2, minWidth: 160 }}
+                        placeholder="Search by material, spec…"
+                        value={vaultQuery}
+                        onChange={e => setVaultQuery(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleVaultSearch(); }}
+                      />
+                      <input
+                        className="input-field mono" style={{ flex: 1, minWidth: 100 }}
+                        placeholder="CPV code"
+                        value={vaultCpv}
+                        onChange={e => setVaultCpv(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleVaultSearch(); }}
+                      />
+                      <button className="btn btn-ghost" onClick={handleVaultSearch} disabled={vaultSearching}>
+                        {vaultSearching ? 'Searching…' : '🔍 Search'}
+                      </button>
+                    </div>
+                    {vaultResults.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                        {vaultResults.map(r => {
+                          const checked = selectedVaultDocIds.includes(r.doc_id);
+                          return (
+                            <label
+                              key={r.doc_id}
+                              style={{
+                                display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 10px',
+                                borderRadius: 6, cursor: 'pointer',
+                                background: checked ? 'rgba(96,165,250,0.08)' : '#121a28',
+                                border: `1px solid ${checked ? 'rgba(96,165,250,0.35)' : '#1f2b40'}`,
+                              }}
+                            >
+                              <input type="checkbox" checked={checked} onChange={() => toggleVaultDoc(r.doc_id)} style={{ marginTop: 2 }} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div className="mono" style={{ fontSize: 12, color: '#cdd6e3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {r.filename}
+                                  {r.similarity != null && <span style={{ color: '#2EE6D4', marginLeft: 8 }}>sim {r.similarity.toFixed(2)}</span>}
+                                </div>
+                                {r.text && (
+                                  <div style={{ fontSize: 11, color: '#8a97ac', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {r.text}
+                                  </div>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {selectedVaultDocIds.length > 0 && (
+                      <div style={{ fontSize: 12, color: '#60a5fa', marginBottom: 4 }}>
+                        {selectedVaultDocIds.length} Vault document{selectedVaultDocIds.length === 1 ? '' : 's'} will be cited on the next regenerate.
                       </div>
                     )}
                   </div>

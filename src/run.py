@@ -19,10 +19,13 @@ import classification
 import currency
 import dedup
 import translate
+import alerts
 from schema import DEFAULT_TENANT_ID
 from report import build_report
 import json, os
 from datetime import datetime, date, timezone
+
+SOURCE_FAILURE_ALERT_THRESHOLD = int(os.getenv("SOURCE_FAILURE_ALERT_THRESHOLD", "3"))
 
 
 def _tag(rec, full_keywords, cpv_set):
@@ -33,6 +36,18 @@ def _tag(rec, full_keywords, cpv_set):
     rec["matched_terms"] = hits
     rec["match_source"] = match.classify_match(has_cpv, hits)
     return rec
+
+
+def _maybe_alert_consecutive_failures(conn, tenant_id, source):
+    """CR-004 F4: escalate (Sentry + email, both inert if unconfigured) once
+    a source hits SOURCE_FAILURE_ALERT_THRESHOLD consecutive failures — but
+    never pauses the source automatically, that stays an analyst decision.
+    """
+    summary = store.get_source_health(conn, tenant_id, source)
+    if summary["consecutive_failures"] >= SOURCE_FAILURE_ALERT_THRESHOLD:
+        alerts.send_alert(
+            f"Tenderizer: {source} has failed {summary['consecutive_failures']} runs in a row",
+            f"tenant_id={tenant_id} source={source} last_failure={summary['last_failure']}")
 
 
 def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=None, fx_rates=None):
@@ -58,6 +73,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     # notices_scanned every run as the tenant's tenders table grew).
     this_run_records = []
 
+    run_date = now.date().isoformat()
     for src in sources:
         name = src["name"]
         try:
@@ -81,8 +97,13 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
                 store.upsert(conn, tenant_id, rec)
                 this_run_records.append(rec)
             health[name] = f"ok ({len(raws)})"
+            store.record_source_health(conn, tenant_id, name, run_date, "ok",
+                                        notices_pulled=len(raws))
         except Exception as e:                       # one source failing must not abort the run
             health[name] = f"error: {e}"
+            store.record_source_health(conn, tenant_id, name, run_date, "failed",
+                                        error_detail=str(e))
+            _maybe_alert_consecutive_failures(conn, tenant_id, name)
 
     # CR-001 D-DUP: cross-record pass, so it runs once here over everything
     # ingested so far — not per-record like the filters above.

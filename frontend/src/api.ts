@@ -201,6 +201,17 @@ export function uploadVaultDoc(file: File): Promise<VaultDoc> {
   return apiFetch<VaultDoc>('/api/vault/ingest', { method: 'POST', body: form });
 }
 
+// CR-004 F3 — Composer's "Source materials" panel: search the Vault library
+// by CPV code / material type, optionally ranked by similarity to a query.
+export function searchVault(opts: { query?: string; cpv?: string; material?: string }): Promise<VaultSearchResponse> {
+  const params = new URLSearchParams();
+  if (opts.query) params.set('query', opts.query);
+  if (opts.cpv) params.set('cpv', opts.cpv);
+  if (opts.material) params.set('material', opts.material);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return apiFetch(`/api/vault/search${qs}`);
+}
+
 // ── Composer ──────────────────────────────────────────────────────────────────
 
 export function getComposerSession(pub?: string): Promise<ComposerSession | null> {
@@ -257,11 +268,16 @@ export function postGenerate(pub: string): Promise<unknown> {
   return apiFetch(`/api/composer/${encodeURIComponent(pub)}/generate`, { method: 'POST' });
 }
 
-export function regenerateComposerSection(pub: string, requirementId: number, feedback: string): Promise<unknown> {
+export function regenerateComposerSection(
+  pub: string, requirementId: number, feedback: string, vaultDocumentIds?: number[],
+): Promise<unknown> {
   return apiFetch(`/api/composer/${encodeURIComponent(pub)}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ requirement_id: requirementId, feedback }),
+    body: JSON.stringify({
+      requirement_id: requirementId, feedback,
+      ...(vaultDocumentIds && vaultDocumentIds.length ? { vault_document_ids: vaultDocumentIds } : {}),
+    }),
   });
 }
 

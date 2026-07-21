@@ -15,6 +15,7 @@ rather than each spending their own DeepL quota on it.
 """
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer, MetaData,
                          PrimaryKeyConstraint, String, Table, Text)
+from sqlalchemy import Index
 
 metadata = MetaData()
 
@@ -257,3 +258,25 @@ tenant_settings = Table(
     Column("notify_on_complete", Boolean, nullable=False, server_default="0"),
     Column("notify_email", Text, nullable=False, server_default=""),
 )
+
+# CR-004 F4 — one row per (tenant, source, run) scrape attempt, logged by
+# run.run_pipeline regardless of outcome (ok or failed), so /api/health can
+# show a real streak/failure history instead of just "last run's status"
+# (the old last_run.json-only view). `streak_ok_days` is a snapshot computed
+# at write time (consecutive prior 'ok' runs + this one, or reset to 0 on
+# failure) — stored rather than recomputed on every read since the history
+# can grow unbounded and a run only ever appends, never rewrites, past rows.
+source_health = Table(
+    "source_health", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("source", Text, nullable=False),
+    Column("run_date", Text, nullable=False),  # ISO date, one row per source per calendar day
+    Column("status", Text, nullable=False),    # "ok" | "failed"
+    Column("notices_pulled", Integer, nullable=True),
+    Column("error_detail", Text, nullable=True),
+    Column("streak_ok_days", Integer, nullable=False, server_default="0"),
+    Column("created_at", Text, nullable=False, server_default=""),
+)
+Index("ix_source_health_tenant_source_date", source_health.c.tenant_id,
+      source_health.c.source, source_health.c.run_date)

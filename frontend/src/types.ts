@@ -73,6 +73,11 @@ export interface PortalHealth {
   status: string;
   last_result?: string;
   detail?: string;
+  // CR-004 F4 — source_health-derived streak/failure history.
+  streak_ok_days: number;
+  failures_7d: number;
+  last_failure: string | null;
+  consecutive_failures: number;
 }
 
 export interface PipelineEntry extends Tender {
@@ -108,6 +113,23 @@ export interface VaultDoc {
   cpv_codes: string[];
   confidence: number | null;
   fields_extracted: number | null;
+}
+
+// CR-004 F3 — GET /api/vault/search result row. `text`/`similarity` are only
+// present when the search was ranked by a free-text query; a CPV/material-
+// only search returns doc-level rows with both null.
+export interface VaultSearchResult {
+  doc_id: number;
+  filename: string;
+  metadata: Record<string, string>;
+  cpv_codes: string[];
+  confidence: number | null;
+  text: string | null;
+  similarity: number | null;
+}
+
+export interface VaultSearchResponse {
+  results: VaultSearchResult[];
 }
 
 // ── Composer ──────────────────────────────────────────────────────────────────
