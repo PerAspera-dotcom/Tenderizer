@@ -130,7 +130,6 @@ export default function KeywordsConfigPage() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Keywords</h1>
       <p style={{ color: '#8892a4', marginBottom: 20 }}>
         Multilingual keyword safeguard library — terms marked <strong>distinctive</strong> feed the live TED title query; edit with care
       </p>

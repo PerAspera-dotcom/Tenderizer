@@ -88,7 +88,6 @@ export default function CpvConfig() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>CPV Config</h1>
       <p style={{ color: '#8892a4', marginBottom: 20 }}>
         Your active CPV code watchlist — codes matched here drive the primary (high-confidence) match signal
       </p>

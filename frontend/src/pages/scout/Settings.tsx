@@ -50,8 +50,10 @@ export default function Settings() {
         background: 'rgba(227,179,65,0.07)', border: '1px solid rgba(227,179,65,0.3)',
         borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#e3b341', marginBottom: 20, maxWidth: 520,
       }}>
-        These are saved preferences only — there's no scheduler or email delivery wired up yet, so
-        runs still happen via "Run now" and no notification will actually be sent.
+        The scrape now runs for real every day at 02:00 UTC (plus "Run now" any time) — but that
+        schedule is fixed for every tenant, not read from the fields below yet, so Schedule/Run
+        window here are still saved preferences only. Notify-on-complete is saved too, but nothing
+        sends it yet.
       </div>
 
       <div className="card" style={{ padding: '20px 24px', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 20 }}>

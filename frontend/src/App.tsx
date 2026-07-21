@@ -4,16 +4,14 @@ import { HashRouter, Navigate, useLocation } from './router';
 import { setTokenGetter } from './authToken';
 import Layout from './components/Layout';
 import PortalCalendar from './pages/portal/PortalCalendar';
-import PortalHome from './pages/portal/PortalHome';
 import PortalPipeline from './pages/portal/PortalPipeline';
 import PortalFollowup from './pages/portal/PortalFollowup';
 import Dashboard from './pages/scout/Dashboard';
 import TenderFeed from './pages/scout/TenderFeed';
 import PastTenders from './pages/scout/PastTenders';
 import ReviewQueue from './pages/scout/ReviewQueue';
-import CpvConfig from './pages/scout/CpvConfig';
-import KeywordsConfig from './pages/scout/KeywordsConfig';
-import Reports from './pages/scout/Reports';
+import PortalsHealth from './pages/scout/PortalsHealth';
+import MatchingConfig from './pages/scout/MatchingConfig';
 import Settings from './pages/scout/Settings';
 import VaultLibrary from './pages/vault/VaultLibrary';
 import ComposerIngest from './pages/composer/ComposerIngest';
@@ -26,17 +24,14 @@ function Router() {
 
   const routes: Record<string, React.ReactNode> = {
     '/portal/calendar': <Layout><PortalCalendar /></Layout>,
-    '/portal/home': <Layout><PortalHome /></Layout>,
     '/portal/pipeline': <Layout><PortalPipeline /></Layout>,
     '/portal/followup': <Layout><PortalFollowup /></Layout>,
     '/scout/dashboard': <Layout><Dashboard /></Layout>,
     '/scout/tender-feed': <Layout><TenderFeed /></Layout>,
     '/scout/past-tenders': <Layout><PastTenders /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
-    '/scout/portals': <Layout><StubPage title="Portals & Health" subtitle="Per-portal throughput and ToS compliance" /></Layout>,
-    '/scout/cpv': <Layout><CpvConfig /></Layout>,
-    '/scout/keywords': <Layout><KeywordsConfig /></Layout>,
-    '/scout/reports': <Layout><Reports /></Layout>,
+    '/scout/portals': <Layout><PortalsHealth /></Layout>,
+    '/scout/matching': <Layout><MatchingConfig /></Layout>,
     '/scout/settings': <Layout><Settings /></Layout>,
     '/vault/library': <Layout><VaultLibrary /></Layout>,
     '/vault/rules': <Layout><StubPage title="Metadata Rules" subtitle="Define extraction rules for Vault documents" /></Layout>,

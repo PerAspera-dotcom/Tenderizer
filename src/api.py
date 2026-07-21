@@ -5,7 +5,7 @@ Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
 import sys, pathlib, json, logging, os, uuid
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -71,7 +71,7 @@ async def _lifespan(_app: FastAPI):
     if os.getenv("ENABLE_SCHEDULER", "true").lower() == "true":
         from apscheduler.schedulers.background import BackgroundScheduler
         _scheduler = BackgroundScheduler(timezone="UTC")
-        _scheduler.add_job(_run_all_tenants, "cron", hour=2, minute=0, id="daily_scrape")
+        _scheduler.add_job(_run_all_tenants, "cron", hour=DAILY_SCRAPE_HOUR_UTC, minute=0, id="daily_scrape")
         # CR-004 F4: daily backup, after the scrape so the freshest data is
         # captured. backup.run_backup() never raises (catches + alerts
         # internally) — wrapped again here as defense in depth so a bug in
@@ -158,6 +158,25 @@ def _last_run() -> dict:
         with open(LAST_RUN_PATH, encoding="utf-8") as f:
             return json.load(f)
     return {}
+
+
+# Matches the scheduled scrape's own cron time (see _lifespan's daily_scrape
+# job below) — kept as one constant so the two can't silently drift apart.
+DAILY_SCRAPE_HOUR_UTC = 2
+
+
+def _next_scheduled_run(now=None) -> datetime:
+    """The next occurrence of the daily scrape's 02:00 UTC cron from `now`
+    (real UTC clock by default). Dashboard's "Next run in" display was
+    hardcoded to None/never-shown before ENABLE_SCHEDULER's job existed for
+    real (CR-004 F4) — now that it does, this is a real countdown, not a
+    placeholder.
+    """
+    now = now or datetime.now(timezone.utc)
+    candidate = now.replace(hour=DAILY_SCRAPE_HOUR_UTC, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -314,7 +333,7 @@ def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
 
     return {
         "last_sync":       last_run.get("timestamp"),
-        "next_run":        None,
+        "next_run":        _next_scheduled_run().isoformat(),
         "notices_scanned": last_run.get("notices_scanned", 0),
         "matched_total":   last_run.get("matched_total", 0),
         "new_today":       new_today,

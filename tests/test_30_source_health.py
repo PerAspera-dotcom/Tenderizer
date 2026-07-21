@@ -108,3 +108,33 @@ def test_get_health_api_shape(tmp_path, monkeypatch):
     assert ted["failures_7d"] == 0
     assert ted["consecutive_failures"] == 0
     assert ted["last_result"] == "ok (5 new)"
+
+
+# CR-004/5 UX pass: Dashboard's "Next run in" display was hardcoded to None
+# before the scheduler existed for real; now it's a real countdown to the
+# daily scrape's own 02:00 UTC cron (api.DAILY_SCRAPE_HOUR_UTC).
+
+def test_next_scheduled_run_same_day_when_before_cron_hour():
+    now = datetime(2026, 7, 21, 0, 30, tzinfo=timezone.utc)  # before DAILY_SCRAPE_HOUR_UTC (2am)
+    next_run = api._next_scheduled_run(now)
+    assert next_run == datetime(2026, 7, 21, api.DAILY_SCRAPE_HOUR_UTC, 0, tzinfo=timezone.utc)
+
+
+def test_next_scheduled_run_rolls_to_tomorrow_when_after_cron_hour():
+    now = datetime(2026, 7, 21, 23, 0, tzinfo=timezone.utc)
+    next_run = api._next_scheduled_run(now)
+    assert next_run == datetime(2026, 7, 22, api.DAILY_SCRAPE_HOUR_UTC, 0, tzinfo=timezone.utc)
+
+
+def test_next_scheduled_run_exactly_at_cron_hour_rolls_to_tomorrow():
+    now = datetime(2026, 7, 21, api.DAILY_SCRAPE_HOUR_UTC, 0, tzinfo=timezone.utc)
+    next_run = api._next_scheduled_run(now)
+    assert next_run == datetime(2026, 7, 22, api.DAILY_SCRAPE_HOUR_UTC, 0, tzinfo=timezone.utc)
+
+
+def test_get_stats_returns_real_next_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    store.ensure_tenant(store.init_db(str(tmp_path / "t.db")), TEST_TENANT_ID)
+    stats = api.get_stats(tenant_id=TEST_TENANT_ID)
+    assert stats["next_run"] is not None
+    datetime.fromisoformat(stats["next_run"])  # must be a real, parseable ISO timestamp

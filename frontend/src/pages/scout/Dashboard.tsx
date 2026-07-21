@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from '../../router';
-import { getStats, getHealth, listTenders, postRun } from '../../api';
+import { getStats, getHealth, listTenders, getLatestReportBlob, ReportNotFoundError } from '../../api';
 import type { Stats, PortalHealth, Tender } from '../../types';
 import { formatDate, formatTime, countryFlag, displayTagLine } from '../../utils';
 import MatchChip from '../../components/MatchChip';
@@ -10,8 +10,8 @@ export default function Dashboard() {
   const [health, setHealth] = useState<PortalHealth[]>([]);
   const [topTenders, setTopTenders] = useState<Tender[]>([]);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   function load() {
     Promise.all([
@@ -26,18 +26,28 @@ export default function Dashboard() {
   }
 
   useEffect(() => { load(); }, []);
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  function handleRun() {
-    setRunning(true);
-    postRun().then(() => {
-      let count = 0;
-      pollRef.current = setInterval(() => {
-        count++;
-        getStats().then(s => setStats(s)).catch(() => {});
-        if (count >= 10) { clearInterval(pollRef.current!); setRunning(false); }
-      }, 3000);
-    }).catch(() => setRunning(false));
+  // CR-004/5 UX pass: Reports used to be its own nav item + page whose only
+  // content beyond this same last-sync info was this one export button —
+  // folded in here instead of a whole separate screen for one action.
+  async function handleExport() {
+    setExporting(true);
+    setExportError('');
+    try {
+      const blob = await getLatestReportBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tenders.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(e instanceof ReportNotFoundError ? 'No report yet — run the pipeline first.' : 'Export failed — try again.');
+    } finally {
+      setExporting(false);
+    }
   }
 
   function formatLastSync(ts: string | null): string {
@@ -98,11 +108,17 @@ export default function Dashboard() {
               {stats?.next_run && (
                 <span style={{ color: '#8892a4', fontSize: 13 }}>Next run in <strong style={{ color: '#e2e8f0' }}>{formatNextRun(stats.next_run)}</strong></span>
               )}
-              <button className="btn btn-teal" onClick={handleRun} disabled={running} style={{ fontSize: 13 }}>
-                {running ? '⟳' : '↺'} {running ? 'Running…' : 'Run now'}
+              {/* Reports (its own nav item/page before this pass) folded in
+                  here — same last-sync context, one fewer screen to learn. */}
+              <button className="btn btn-ghost" onClick={handleExport} disabled={exporting} style={{ fontSize: 13 }}>
+                {exporting ? 'Preparing…' : '⤓ Export to Excel'}
               </button>
+              {/* "Run now" itself lives in the top bar now (Scout-scoped) —
+                  this panel had its own separate copy of the exact same
+                  action, which was pure duplication. */}
             </div>
           </div>
+          {exportError && <div style={{ color: '#f87171', fontSize: 13, marginTop: -12, marginBottom: 20 }}>{exportError}</div>}
 
           {/* KPI cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>

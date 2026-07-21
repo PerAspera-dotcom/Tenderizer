@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from '../../router';
 import { listTenders, getPipeline } from '../../api';
 import type { Tender, PipelineEntry } from '../../types';
 import { daysLeft, displayTagLine } from '../../utils';
@@ -249,6 +250,19 @@ export default function PortalCalendar() {
   const today = ymd(new Date());
   const label = periodLabel(cursor, view);
 
+  // CR-002 F/D-D follow-up: this was Portal Home's job (a separate landing
+  // page whose only other content — Scout/Vault/Composer launch cards —
+  // duplicated the sidebar's own app-switcher one click away). Calendar is
+  // the actual landing screen, so the one thing Home did that wasn't
+  // duplicated elsewhere — urgent-deadline alerts — lives here instead now.
+  const alerts = useMemo(() => {
+    return pipeline
+      .filter(e => e.submission_status !== 'submitted')
+      .map(e => ({ e, d: daysLeft(e.deadline_override || e.deadline) }))
+      .filter((x): x is { e: PipelineEntry; d: number } => x.d !== null && x.d <= 14)
+      .sort((a, b) => a.d - b.d);
+  }, [pipeline]);
+
   if (loading) return <div className="loading">Loading…</div>;
   if (error) return <div className="error">{error}</div>;
 
@@ -256,6 +270,39 @@ export default function PortalCalendar() {
     <div>
       <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Calendar</h1>
       <p style={{ color: '#8892a4', marginBottom: 16 }}>Every active tender by deadline — triage status and submission urgency at a glance</p>
+
+      {/* Deadline alerts */}
+      {alerts.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          {alerts.map(({ e, d }) => {
+            const isUrgent = d <= 7;
+            return (
+              <div
+                key={e.pub_number}
+                style={{
+                  background: isUrgent ? 'rgba(248,113,113,0.08)' : 'rgba(227,179,65,0.08)',
+                  border: `1px solid ${isUrgent ? 'rgba(248,113,113,0.3)' : 'rgba(227,179,65,0.3)'}`,
+                  borderRadius: 8, padding: '10px 16px', marginBottom: 8,
+                  display: 'flex', alignItems: 'center', gap: 12,
+                }}
+              >
+                <span style={{ fontSize: 15 }}>{isUrgent ? '🔴' : '🟡'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {displayTagLine(e)}
+                  </div>
+                  <div style={{ fontSize: 12, color: isUrgent ? '#f87171' : '#e3b341', marginTop: 2 }}>
+                    {isUrgent
+                      ? `Closes in ${d} day${d !== 1 ? 's' : ''} and no tender has been sent — act now or request an extension.`
+                      : `Deadline in ${d} day${d !== 1 ? 's' : ''} — submission in progress`}
+                  </div>
+                </div>
+                <Link to="/portal/pipeline" style={{ color: '#2EE6D4', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>View →</Link>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Legend */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap', fontSize: 12, color: '#8892a4' }}>
