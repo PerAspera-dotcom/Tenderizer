@@ -270,3 +270,17 @@ def test_boamp_award_detail_none_when_winner_org_not_found(raw_boamp_supply):
 def test_boamp_award_detail_malformed_json_not_a_crash(raw_boamp_supply):
     raw = dict(raw_boamp_supply, donnees="{not valid json")
     assert normalize.normalize_boamp(raw)["raw_award_detail"] is None
+
+
+def test_boamp_award_detail_none_for_joint_venture_tenderer(raw_boamp_supply):
+    # efac:Tenderer becomes a list, not a single dict, when the winning bid
+    # was a consortium of several organizations — verified against a real
+    # production notice that crashed the first backfill run. Never guess
+    # which org in the consortium to call "the" winner.
+    donnees = _real_exhibit_donnees()
+    ext = donnees["EFORMS"]["ContractAwardNotice"]["ext:UBLExtensions"]["ext:UBLExtension"]["ext:ExtensionContent"]["efext:EformsExtension"]
+    ext["efac:NoticeResult"]["efac:TenderingParty"]["efac:Tenderer"] = [
+        {"cbc:ID": {"#text": "ORG-0003"}}, {"cbc:ID": {"#text": "ORG-0004"}},
+    ]
+    raw = dict(raw_boamp_supply, donnees=json.dumps(donnees))
+    assert normalize.normalize_boamp(raw)["raw_award_detail"] is None

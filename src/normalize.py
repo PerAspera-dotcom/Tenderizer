@@ -410,7 +410,14 @@ def _boamp_award_detail(raw):
     if not isinstance(tendering_party, dict):
         return None
 
-    winner_org_id = _boamp_text((tendering_party.get("efac:Tenderer") or {}).get("cbc:ID"))
+    # efac:Tenderer is a list, not a single dict, when the winning bid was a
+    # joint venture/consortium of several organizations (verified live —
+    # crashed a first production backfill run) — same "don't guess" call as
+    # LotResult/TenderingParty above rather than picking one org arbitrarily.
+    tenderer = tendering_party.get("efac:Tenderer")
+    if not isinstance(tenderer, dict):
+        return None
+    winner_org_id = _boamp_text(tenderer.get("cbc:ID"))
     if not winner_org_id:
         return None
 
