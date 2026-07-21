@@ -28,6 +28,36 @@ export interface Tender {
   awarded_to: string | null;
   awarded_value: string | null;
   awarded_currency: string | null;
+  award_detail: AwardDetail | null;
+}
+
+// Past-tenders data-coverage follow-up: richer winner/lot/contract detail,
+// only ever populated for single-lot/single-winner notices (see
+// src/normalize.py's _ted_award_detail/_boamp_award_detail) — every leaf is
+// independently optional, never fabricated when the source didn't disclose it.
+export interface AwardDetail {
+  winner?: {
+    registration_number?: string;
+    city?: string;
+    postal_code?: string;
+    nuts?: string;
+    country?: string;
+    size?: string;
+    decision_date?: string;
+    regulated_market?: boolean;
+  };
+  lot?: {
+    identifier?: string;
+    title?: string;
+    duration?: string;
+  };
+  contract?: {
+    identifier?: string;
+    conclusion_date?: string;
+    tender_identifier?: string;
+  };
+  framework_max_value?: string;
+  framework_max_currency?: string;
 }
 
 export interface TenderListResponse {

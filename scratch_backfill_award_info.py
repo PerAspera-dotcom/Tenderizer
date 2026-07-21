@@ -1,15 +1,20 @@
-"""One-off backfill: populate awarded_to/awarded_value/awarded_currency for
-already-stored `past_tender` records, now that normalize_ted/normalize_boamp
-fetch the structured award fields CR-002 A1 needed but never wired up
-(CR-003 G4 — see connectors/ted.py's FIELDS comment and normalize.py's
-_boamp_award_info for what changed and why).
+"""One-off backfill: populate awarded_to/awarded_value/awarded_currency (and,
+as of the past-tenders data-coverage follow-up, the richer award_detail —
+winner registration number/city/NUTS/size, lot/contract identifiers,
+framework max value) for already-stored `past_tender` records, now that
+normalize_ted/normalize_boamp fetch the structured award fields CR-002 A1
+needed but never wired up (CR-003 G4 — see connectors/ted.py's FIELDS
+comment and normalize.py's _boamp_award_info for what changed and why).
 
 update_classification() is the same escape hatch CR-002's own
 scratch_backfill_notice_type.py uses: upsert() is insert-only, so an
 already-stored row never picks up a normalize.py fix on its own. Re-fetches
 each stored past_tender notice by pub_number/idweb (raw award payloads were
 never cached) and fills in only currently-null award fields — never
-overwrites a value already populated.
+overwrites a value already populated. Re-running after the award_detail
+fields were added re-processes rows that already have awarded_to/value/
+currency but are still missing award_detail — everything else about them is
+skipped (already filled, never overwritten).
 
 Run from the project root:  python scratch_backfill_award_info.py
 """
@@ -62,7 +67,8 @@ def _refetch_boamp_by_idweb(idwebs):
 def backfill_tenant(conn, tenant_id):
     records = store.all_records(conn, tenant_id)
     pending = [r for r in records if r.get("notice_type") == "past_tender"
-               and not (r.get("awarded_to") and r.get("awarded_value") and r.get("awarded_currency"))]
+               and not (r.get("awarded_to") and r.get("awarded_value")
+                        and r.get("awarded_currency") and r.get("award_detail"))]
     if not pending:
         return None
 
@@ -87,20 +93,26 @@ def backfill_tenant(conn, tenant_id):
 
         merged = dict(rec, raw_award_winner=normalized["raw_award_winner"],
                       raw_award_value=normalized["raw_award_value"],
-                      raw_award_currency=normalized["raw_award_currency"])
-        awarded_to, awarded_value, awarded_currency = classification.extract_award_info(merged)
+                      raw_award_currency=normalized["raw_award_currency"],
+                      raw_award_detail=normalized["raw_award_detail"])
+        awarded_to, awarded_value, awarded_currency, award_detail = classification.extract_award_info(merged)
 
         # Never overwrite a field the record already had — only fill nulls.
         final_to = rec.get("awarded_to") or awarded_to
         final_value = rec.get("awarded_value") or awarded_value
         final_currency = rec.get("awarded_currency") or awarded_currency
+        final_detail = rec.get("award_detail") or award_detail
 
-        if (final_to, final_value, final_currency) != (
-                rec.get("awarded_to"), rec.get("awarded_value"), rec.get("awarded_currency")):
+        if (final_to, final_value, final_currency, final_detail) != (
+                rec.get("awarded_to"), rec.get("awarded_value"),
+                rec.get("awarded_currency"), rec.get("award_detail")):
             store.update_classification(conn, tenant_id, rec["pub_number"],
                                          notice_type=rec["notice_type"], awarded_to=final_to,
-                                         awarded_value=final_value, awarded_currency=final_currency)
+                                         awarded_value=final_value, awarded_currency=final_currency,
+                                         award_detail=final_detail)
             stats["updated"] += 1
+            if final_detail and not rec.get("award_detail"):
+                stats["gained_award_detail"] += 1
         else:
             stats["unchanged"] += 1
     stats["total_pending"] = len(pending)

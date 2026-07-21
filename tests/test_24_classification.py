@@ -2,8 +2,11 @@
 
 classify(rec) -> notice_type:str, always populated (default "tender", never
 blank). extract_award_info(rec) -> (awarded_to, awarded_value,
-awarded_currency), each None when not found in the notice text — never
-fabricated.
+awarded_currency, award_detail), each None when not found in the notice text
+— never fabricated. award_detail (past-tenders data-coverage follow-up) has
+no text-regex fallback: it's passed through only from rec's raw_award_detail
+key (set by normalize.py, already scoped to single-lot/single-winner
+notices there).
 """
 import classification
 
@@ -119,21 +122,21 @@ def test_fbo_is_last_in_precedence():
 def test_extract_awarded_to_english():
     rec = _rec("Tents — award notice",
                 description="Contract awarded to Acme Shelters Ltd. Delivery within 60 days.")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert awarded_to == "Acme Shelters Ltd"
 
 
 def test_extract_awarded_to_french_attributaire():
     rec = _rec("Tentes — avis d'attribution",
                 description="Attributaire : Société Tentes de France. Notification le 12 juin.")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert awarded_to == "Société Tentes de France"
 
 
 def test_extract_value_english():
     rec = _rec("Tents — award notice",
                 description="The contract value of 350000 EUR was accepted by the buyer.")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert value == "350000"
     assert currency == "EUR"
 
@@ -141,14 +144,14 @@ def test_extract_value_english():
 def test_extract_value_french_montant():
     rec = _rec("Tentes — avis d'attribution",
                 description="Montant du marché : 275000 EUR net de taxes.")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert value == "275000"
     assert currency == "EUR"
 
 
 def test_extract_returns_none_when_absent():
     rec = _rec("Supply of tents", description="Standard call for tenders, no award info here.")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert awarded_to is None
     assert value is None
     assert currency is None
@@ -165,7 +168,7 @@ def test_extract_prefers_structured_fields_over_text_regex():
     rec["raw_award_winner"] = "Ι. ΚΑΤΣΙΔΩΝΙΩΤΑΚΗΣ Α.Τ.Ε.Β.Ε ΚΑΤΑΣΚΕΥΑΣΤΙΚΗ ΔΙΑΣ ΑΤΕΒΕ"
     rec["raw_award_value"] = "45290.32"
     rec["raw_award_currency"] = "EUR"
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert awarded_to == "Ι. ΚΑΤΣΙΔΩΝΙΩΤΑΚΗΣ Α.Τ.Ε.Β.Ε ΚΑΤΑΣΚΕΥΑΣΤΙΚΗ ΔΙΑΣ ΑΤΕΒΕ"
     assert value == "45290.32"
     assert currency == "EUR"
@@ -178,7 +181,7 @@ def test_extract_falls_back_to_regex_for_missing_structured_field():
     rec = _rec("Tents — award notice",
                 description="The contract value of 350000 EUR was accepted by the buyer.")
     rec["raw_award_winner"] = "Acme Shelters BV"
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert awarded_to == "Acme Shelters BV"
     assert value == "350000"
     assert currency == "EUR"
@@ -191,13 +194,42 @@ def test_extract_awarded_to_non_latin_script_name():
     # structured fields are the primary route for TED/BOAMP, tested above).
     rec = _rec("Greece — award notice",
                 description="Successful tenderer: Κατασκευαστική Διάς ΑΤΕΒΕ. Notified 2026-03-03.")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert awarded_to == "Κατασκευαστική Διάς ΑΤΕΒΕ"
 
 
 def test_extract_value_ted_results_template_string():
     rec = _rec("Greece — award notice",
                 description="Value of all contracts awarded in this notice: 45290.32 EUR")
-    awarded_to, value, currency = classification.extract_award_info(rec)
+    awarded_to, value, currency, _detail = classification.extract_award_info(rec)
     assert value == "45290.32"
     assert currency == "EUR"
+
+
+# ── Past-tenders data-coverage follow-up: award_detail passthrough ──────────
+
+def test_extract_award_detail_passes_through_when_present():
+    rec = _rec("Greece – Specialist vehicles", description="16 sections", deadline="")
+    rec["raw_award_winner"] = "Winner Co"
+    rec["raw_award_value"] = "45290.32"
+    rec["raw_award_currency"] = "EUR"
+    rec["raw_award_detail"] = {"winner": {"city": "Heraklion", "registration_number": "094338244"}}
+    _to, _value, _currency, detail = classification.extract_award_info(rec)
+    assert detail == {"winner": {"city": "Heraklion", "registration_number": "094338244"}}
+
+
+def test_extract_award_detail_none_when_absent():
+    rec = _rec("Tents — award notice",
+                description="Contract awarded to Acme Shelters Ltd.")
+    _to, _value, _currency, detail = classification.extract_award_info(rec)
+    assert detail is None
+
+
+def test_extract_award_detail_has_no_regex_fallback():
+    # Even with rich award text in the description, award_detail is never
+    # derived from free text — only from the structured raw_award_detail key.
+    rec = _rec("Tents — award notice",
+                description="Contract awarded to Acme Shelters Ltd, registered in Paris, "
+                             "registration number 12345678900010, contract ref CON-9.")
+    _to, _value, _currency, detail = classification.extract_award_info(rec)
+    assert detail is None

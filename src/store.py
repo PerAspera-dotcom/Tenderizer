@@ -38,6 +38,11 @@ _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
 # from "" (dismiss_note: schema.py comment; awarded_*: CR-002 A1's "never
 # fabricated" rule — a null award field must not look like a found-but-empty one).
 _NULL_DEFAULT = {"dismiss_note", "awarded_to", "awarded_value", "awarded_currency"}
+# Same "never fabricate absence" rule as _NULL_DEFAULT, but the value itself
+# is a JSON object rather than plain text when present — needs its own
+# json.dumps/loads pass, unlike _JSON's columns (which always default to an
+# empty array/object, never real NULL).
+_NULLABLE_JSON = {"award_detail"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
                    "submitted_date", "result_due", "outcome"}
@@ -318,6 +323,8 @@ def upsert(conn, tenant_id, record):
                 values[col] = record.get(col) or ""  # None (no value/not translated) -> ''
             elif col in _NULL_DEFAULT:
                 values[col] = record.get(col)  # None stays None (no note) — never ''
+            elif col in _NULLABLE_JSON:
+                values[col] = json.dumps(record[col]) if record.get(col) else None
             else:
                 values[col] = record.get(col, "")
         c.execute(insert(tenders).values(**values))
@@ -333,6 +340,8 @@ def all_records(conn, tenant_id):
         rec = dict(zip(COLUMNS, r))
         for col in _JSON:
             rec[col] = json.loads(rec[col])
+        for col in _NULLABLE_JSON:
+            rec[col] = json.loads(rec[col]) if rec[col] else None
         out.append(rec)
     return out
 
@@ -389,17 +398,24 @@ def update_tagging(conn, tenant_id, pub_number, cpv_codes, matched_terms, match_
                   match_source=match_source, exclude_reason=exclude_reason or ""))
 
 
-def update_classification(conn, tenant_id, pub_number, notice_type, awarded_to, awarded_value, awarded_currency):
+def update_classification(conn, tenant_id, pub_number, notice_type, awarded_to, awarded_value,
+                           awarded_currency, award_detail=None):
     """CR-002 A backfill escape hatch, same shape as update_tagging() — for
     already-stored rows whose notice_type was never computed (ingested before
     classification.classify existed, so upsert()'s insert-only rule left them
     at the notice_type column's server_default). See scratch_backfill_notice_type.py.
+
+    `award_detail` (dict or None) is the richer per-winner/lot/contract detail
+    added for the Past Tenders data-coverage follow-up — see
+    scratch_backfill_award_detail.py, which is the only current caller that
+    passes a non-None value.
     """
     with conn.begin() as c:
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
         ).values(notice_type=notice_type, awarded_to=awarded_to,
-                  awarded_value=awarded_value, awarded_currency=awarded_currency))
+                  awarded_value=awarded_value, awarded_currency=awarded_currency,
+                  award_detail=json.dumps(award_detail) if award_detail else None))
 
 
 def update_language(conn, tenant_id, pub_number, language):
@@ -551,6 +567,8 @@ def get_pipeline_entries(conn, tenant_id):
         rec = dict(zip(COLUMNS + p_cols, r))
         for col in _JSON:
             rec[col] = json.loads(rec[col] or "[]")
+        for col in _NULLABLE_JSON:
+            rec[col] = json.loads(rec[col]) if rec[col] else None
         out.append(rec)
     return out
 
@@ -924,6 +942,8 @@ def get_followup_entries(conn, tenant_id):
         rec = dict(zip(COLUMNS + p_cols, r))
         for col in _JSON:
             rec[col] = json.loads(rec[col] or "[]")
+        for col in _NULLABLE_JSON:
+            rec[col] = json.loads(rec[col]) if rec[col] else None
         out.append(rec)
     return out
 

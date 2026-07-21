@@ -1,7 +1,48 @@
-import { useEffect, useState, useRef } from 'react';
+import { Fragment, useEffect, useState, useRef } from 'react';
 import { listTenders } from '../../api';
-import type { Tender } from '../../types';
+import type { Tender, AwardDetail } from '../../types';
 import { formatDate, countryFlag, formatValue, hasTranslatedTagLine, displayTagLine } from '../../utils';
+
+function DetailField({ label, value }: { label: string; value?: string | null }) {
+  if (!value) return null;
+  return (
+    <div>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 2 }}>{label}</div>
+      <div className="mono" style={{ fontSize: 12, color: '#c8d0de' }}>{value}</div>
+    </div>
+  );
+}
+
+// Past-tenders data-coverage follow-up: winner org / lot / contract detail,
+// shown expanded (row click) rather than as more table columns — only a
+// minority of rows have it (single-lot/single-winner notices only), and the
+// full set is too much to cram into the table itself.
+function AwardDetailPanel({ detail }: { detail: AwardDetail }) {
+  const w = detail.winner ?? {};
+  const lot = detail.lot ?? {};
+  const contract = detail.contract ?? {};
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px 20px', padding: '14px 20px' }}>
+      <DetailField label="Registration no." value={w.registration_number} />
+      <DetailField label="Winner city" value={w.city} />
+      <DetailField label="Postal code" value={w.postal_code} />
+      <DetailField label="NUTS / country" value={[w.nuts, w.country].filter(Boolean).join(' · ') || undefined} />
+      <DetailField label="Company size" value={w.size} />
+      <DetailField
+        label="Regulated market"
+        value={w.regulated_market === undefined ? undefined : (w.regulated_market ? 'Listed' : 'Not listed')}
+      />
+      <DetailField label="Decision date" value={w.decision_date} />
+      <DetailField label="Lot" value={lot.identifier} />
+      <DetailField label="Lot title" value={lot.title} />
+      <DetailField label="Duration" value={lot.duration} />
+      <DetailField label="Contract ref." value={contract.identifier} />
+      <DetailField label="Contract concluded" value={contract.conclusion_date} />
+      <DetailField label="Tender ref." value={contract.tender_identifier} />
+      <DetailField label="Framework max value" value={formatValue(detail.framework_max_value, detail.framework_max_currency)} />
+    </div>
+  );
+}
 
 const PORTAL_OPTS = [
   { value: '', label: 'All portals' },
@@ -21,6 +62,7 @@ export default function PastTenders() {
   const [portal, setPortal] = useState('');
   const [country, setCountry] = useState('');
   const [countries, setCountries] = useState<string[]>([]);
+  const [expandedHash, setExpandedHash] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function load(params: { q?: string; source?: string; country?: string }) {
@@ -111,44 +153,68 @@ export default function PastTenders() {
           <table>
             <thead>
               <tr>
-                <th style={{ width: '32%' }}>Title</th>
+                <th style={{ width: '30%' }}>Title</th>
                 <th>Portal</th>
                 <th>Published</th>
                 <th>Awarded To</th>
                 <th>Awarded Value</th>
                 <th>Open</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {tenders.map(t => (
-                <tr key={t.hash}>
-                  <td>
-                    <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320, fontSize: 13 }}>
-                      {hasTranslatedTagLine(t) && (
-                        <span title={`Translated — original: ${t.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
-                      )}
-                      {displayTagLine(t)}
-                    </div>
-                    <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
-                      {t.buyer}
-                    </div>
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <span style={{ fontSize: 14, marginRight: 4 }}>{countryFlag(t.country)}</span>
-                    <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t.source}</span>
-                  </td>
-                  <td><span className="mono" style={{ fontSize: 13 }}>{formatDate(t.pub_date)}</span></td>
-                  <td style={{ fontSize: 13 }}>{t.awarded_to || <span style={{ color: '#4c5a70' }}>—</span>}</td>
-                  <td className="mono" style={{ fontSize: 13 }}>
-                    {formatValue(t.awarded_value, t.awarded_currency) || <span style={{ color: '#4c5a70' }}>—</span>}
-                  </td>
-                  <td>
-                    {t.url ? (
-                      <a href={t.url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>Open ↗</a>
-                    ) : <span style={{ color: '#4c5a70' }}>—</span>}
-                  </td>
-                </tr>
-              ))}
+              {tenders.map(t => {
+                const isExpanded = expandedHash === t.hash;
+                return (
+                  <Fragment key={t.hash}>
+                    <tr>
+                      <td>
+                        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320, fontSize: 13 }}>
+                          {hasTranslatedTagLine(t) && (
+                            <span title={`Translated — original: ${t.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
+                          )}
+                          {displayTagLine(t)}
+                        </div>
+                        <div style={{ color: '#8892a4', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
+                          {t.buyer}
+                        </div>
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 14, marginRight: 4 }}>{countryFlag(t.country)}</span>
+                        <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t.source}</span>
+                      </td>
+                      <td><span className="mono" style={{ fontSize: 13 }}>{formatDate(t.pub_date)}</span></td>
+                      <td style={{ fontSize: 13 }}>{t.awarded_to || <span style={{ color: '#4c5a70' }}>—</span>}</td>
+                      <td className="mono" style={{ fontSize: 13 }}>
+                        {formatValue(t.awarded_value, t.awarded_currency) || <span style={{ color: '#4c5a70' }}>—</span>}
+                      </td>
+                      <td>
+                        {t.url ? (
+                          <a href={t.url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>Open ↗</a>
+                        ) : <span style={{ color: '#4c5a70' }}>—</span>}
+                      </td>
+                      <td>
+                        {t.award_detail && (
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 12, padding: '4px 8px' }}
+                            onClick={() => setExpandedHash(isExpanded ? null : t.hash)}
+                          >
+                            {isExpanded ? '▾' : '▸'} Detail
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {isExpanded && t.award_detail && (
+                      <tr>
+                        <td colSpan={7} style={{ padding: 0, background: 'rgba(46,230,212,0.03)', borderTop: 'none' }}>
+                          <AwardDetailPanel detail={t.award_detail} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

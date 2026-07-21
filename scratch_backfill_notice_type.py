@@ -32,17 +32,19 @@ def backfill_tenant(conn, tenant_id):
     for rec in records:
         new_type = classification.classify(rec)
         if new_type == "past_tender":
-            awarded_to, awarded_value, awarded_currency = classification.extract_award_info(rec)
+            awarded_to, awarded_value, awarded_currency, award_detail = classification.extract_award_info(rec)
         else:
-            awarded_to, awarded_value, awarded_currency = None, None, None
+            awarded_to, awarded_value, awarded_currency, award_detail = None, None, None, None
 
         changed = (new_type != (rec.get("notice_type") or "tender")
                    or awarded_to != rec.get("awarded_to")
                    or awarded_value != rec.get("awarded_value")
-                   or awarded_currency != rec.get("awarded_currency"))
+                   or awarded_currency != rec.get("awarded_currency")
+                   or award_detail != rec.get("award_detail"))
         if changed:
             store.update_classification(conn, tenant_id, rec["pub_number"],
-                                         new_type, awarded_to, awarded_value, awarded_currency)
+                                         new_type, awarded_to, awarded_value, awarded_currency,
+                                         award_detail=award_detail)
             stats["updated"] += 1
             stats[f"reclassified_as_{new_type}"] += 1
         else:

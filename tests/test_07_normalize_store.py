@@ -91,6 +91,79 @@ def test_notice_level_award_value_preferred_over_per_lot(raw_ted_supply):
     assert r["raw_award_value"] == "45290.32"
 
 
+# ── Past-tenders data-coverage follow-up: winner/lot/contract detail (TED) —
+# field values below are the REAL live response for TED 391890-2026 (the
+# exact notice CR-003/CR-005's screenshots used), fetched via the
+# UNSUPPORTED_VALUE field-probe technique connectors/ted.py's FIELDS
+# comment documents. ────────────────────────────────────────────────────────
+
+def _ted_391890_award_fields():
+    return {
+        "winner-name": {"ell": ["Ι. ΚΑΤΣΙΔΩΝΙΩΤΑΚΗΣ Α.Τ.Ε.Β.Ε ΚΑΤΑΣΚΕΥΑΣΤΙΚΗ ΔΙΑΣ ΑΤΕΒΕ"]},
+        "winner-city": ["Ηράκλειο "],
+        "winner-country": ["GRC"],
+        "winner-country-sub": ["EL431"],
+        "winner-post-code": ["71409 "],
+        "winner-identifier": ["094338244"],
+        "winner-size": ["medium"],
+        "winner-decision-date": ["2026-03-03+02:00"],
+        "result-lot-identifier": ["LOT-0001"],
+        "title-lot": {"ell": ["Τμήμα 10: Φορητός φωτισμός"]},
+        "contract-duration-period-lot": [{"unit": "MONTH", "value": "6"}],
+        "contract-identifier": ["2820/2026"],
+        "contract-conclusion-date": ["2026-05-28+03:00"],
+        "tender-identifier": ["355935"],
+        "result-value-notice": "45290.32", "result-value-cur-notice": "EUR",
+    }
+
+
+def test_ted_award_detail_full_single_lot(raw_ted_supply):
+    raw = dict(raw_ted_supply, **_ted_391890_award_fields())
+    detail = normalize.normalize_ted(raw)["raw_award_detail"]
+    assert detail == {
+        "winner": {
+            "registration_number": "094338244", "city": "Ηράκλειο", "postal_code": "71409",
+            "nuts": "EL431", "country": "GRC", "size": "medium", "decision_date": "2026-03-03",
+        },
+        "lot": {"identifier": "LOT-0001", "title": "Τμήμα 10: Φορητός φωτισμός", "duration": "6 months"},
+        "contract": {"identifier": "2820/2026", "conclusion_date": "2026-05-28", "tender_identifier": "355935"},
+    }
+
+
+def test_ted_award_detail_trims_trailing_whitespace(raw_ted_supply):
+    # winner-city/-post-code come back with real trailing whitespace live.
+    raw = dict(raw_ted_supply, **_ted_391890_award_fields())
+    detail = normalize.normalize_ted(raw)["raw_award_detail"]
+    assert detail["winner"]["city"] == "Ηράκλειο"
+    assert detail["winner"]["postal_code"] == "71409"
+
+
+def test_ted_award_detail_none_when_no_lot_identifier(raw_ted_supply):
+    assert normalize.normalize_ted(raw_ted_supply)["raw_award_detail"] is None
+
+
+def test_ted_award_detail_none_for_multi_lot_notice(raw_ted_supply):
+    # Real multi-lot notices have mismatched array lengths/order across
+    # winner-name vs. result-lot-identifier (verified live) — never guessed.
+    raw = dict(raw_ted_supply, **{
+        "result-lot-identifier": ["LOT-0001", "LOT-0002"],
+        "winner-name": {"nld": ["LITES", "AMPLI"]},
+        "winner-identifier": ["001", "002"],
+    })
+    assert normalize.normalize_ted(raw)["raw_award_detail"] is None
+
+
+def test_ted_award_detail_partial_fields_still_populate(raw_ted_supply):
+    # Only some fields present (e.g. no contract identifier disclosed) —
+    # populates what's there, omits the rest, never fabricates.
+    raw = dict(raw_ted_supply, **{
+        "result-lot-identifier": ["LOT-0001"],
+        "winner-city": ["Paris"],
+    })
+    detail = normalize.normalize_ted(raw)["raw_award_detail"]
+    assert detail == {"winner": {"city": "Paris"}, "lot": {"identifier": "LOT-0001"}}
+
+
 def test_upsert_new_returns_true(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     assert store.upsert(conn, TEST_TENANT_ID, normalize.normalize_ted(raw_ted_supply)) is True
@@ -112,6 +185,46 @@ def test_stored_record_roundtrips_cpv_list(tmp_path, raw_ted_supply):
     conn = store.init_db(str(tmp_path/"t.db"))
     store.upsert(conn, TEST_TENANT_ID, normalize.normalize_ted(raw_ted_supply))
     assert store.all_records(conn, TEST_TENANT_ID)[0]["cpv_codes"] == ["39522530", "39522500"]
+
+
+# ── Past-tenders data-coverage follow-up: award_detail is nullable JSON
+# (real SQL NULL when absent, never a fabricated "{}") ──────────────────────
+
+def test_award_detail_roundtrips_when_present(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    rec["award_detail"] = {"winner": {"city": "Paris"}, "lot": {"identifier": "LOT-0001"}}
+    store.upsert(conn, TEST_TENANT_ID, rec)
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["award_detail"] == {"winner": {"city": "Paris"}, "lot": {"identifier": "LOT-0001"}}
+
+
+def test_award_detail_is_none_not_fabricated_when_absent(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(conn, TEST_TENANT_ID, normalize.normalize_ted(raw_ted_supply))
+    assert store.all_records(conn, TEST_TENANT_ID)[0]["award_detail"] is None
+
+
+def test_update_classification_sets_award_detail(tmp_path, raw_ted_supply):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    store.upsert(conn, TEST_TENANT_ID, rec)
+    store.update_classification(conn, TEST_TENANT_ID, rec["pub_number"], "past_tender",
+                                 "Winner Co", "45290.32", "EUR",
+                                 award_detail={"winner": {"city": "Heraklion"}})
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["award_detail"] == {"winner": {"city": "Heraklion"}}
+
+
+def test_update_classification_award_detail_defaults_to_none(tmp_path, raw_ted_supply):
+    # Existing callers (scratch_backfill_notice_type.py) that don't pass
+    # award_detail must keep working unchanged.
+    conn = store.init_db(str(tmp_path / "t.db"))
+    rec = normalize.normalize_ted(raw_ted_supply)
+    store.upsert(conn, TEST_TENANT_ID, rec)
+    store.update_classification(conn, TEST_TENANT_ID, rec["pub_number"], "past_tender",
+                                 "Winner Co", "45290.32", "EUR")
+    assert store.all_records(conn, TEST_TENANT_ID)[0]["award_detail"] is None
 
 def test_cpv_codes_deduped_at_ingest(raw_ted_supply):
     # CR-001 R2: TED can list the same CPV code twice (e.g. main + additional

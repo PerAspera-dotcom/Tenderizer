@@ -132,19 +132,27 @@ _CURRENCY_SYMBOLS = {"€": "EUR", "$": "USD", "£": "GBP"}
 
 
 def extract_award_info(rec):
-    """(awarded_to, awarded_value, awarded_currency) — each None if not found.
+    """(awarded_to, awarded_value, awarded_currency, award_detail) — each
+    None if not found.
 
     Structured fields (rec's raw_award_* keys, set by normalize.py from the
     connector's own winner/result-value fields) win per-field; regex-over-
     text fills in whichever field a structured source didn't supply.
     Independent per field: an awarded_to hit and a value hit can come from
     different patterns/languages in the same bilingual notice.
+
+    award_detail (winner registration number/city/NUTS/size, lot/contract
+    identifiers, framework max value — past-tenders data-coverage follow-up)
+    has no regex fallback: it's only ever the structured connector data
+    (normalize.py's _ted_award_detail/_boamp_award_detail), already scoped to
+    single-lot/single-winner notices there — never guessed from free text.
     """
     awarded_to = rec.get("raw_award_winner") or None
     awarded_value = rec.get("raw_award_value") or None
     awarded_currency = rec.get("raw_award_currency") or None
+    award_detail = rec.get("raw_award_detail") or None
     if awarded_to and awarded_value and awarded_currency:
-        return awarded_to, awarded_value, awarded_currency
+        return awarded_to, awarded_value, awarded_currency, award_detail
 
     text = _text(rec)
     if not awarded_to:
@@ -165,4 +173,4 @@ def extract_award_info(rec):
                     awarded_currency = _CURRENCY_SYMBOLS.get(currency, currency.upper())
                 break
 
-    return awarded_to, awarded_value, awarded_currency
+    return awarded_to, awarded_value, awarded_currency, award_detail

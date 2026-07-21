@@ -162,3 +162,111 @@ def test_malformed_donnees_json_yields_no_award_info_not_a_crash(raw_boamp_suppl
     r = normalize.normalize_boamp(raw)
     assert r["raw_award_value"] is None
     assert r["raw_award_currency"] is None
+
+
+# ── Past-tenders data-coverage follow-up: winner/lot/contract detail (BOAMP)
+# — the structure below is the REAL live `donnees` shape for a genuine BOAMP
+# award notice (SAS EXHIBIT / ORG-0003, three organizations in the same
+# notice: buyer ORG-0001, an unrelated ORG-0002, and the actual winner
+# ORG-0003), fetched by searching BOAMP's live API for the winner name. ─────
+
+def _real_exhibit_donnees():
+    return {"EFORMS": {"ContractAwardNotice": {"ext:UBLExtensions": {"ext:UBLExtension": {
+        "ext:ExtensionContent": {"efext:EformsExtension": {
+            "efac:Organizations": {"efac:Organization": [
+                {"efac:Company": {
+                    "cac:PartyIdentification": {"cbc:ID": {"@schemeName": "organization", "#text": "ORG-0001"}},
+                    "cac:PartyName": {"cbc:Name": {"@languageID": "FRA", "#text": "SPL Théâtre Communautaire"}},
+                    "cac:PostalAddress": {"cbc:CityName": "Antibes", "cbc:PostalZone": "06600",
+                                           "cac:Country": {"cbc:IdentificationCode": {"@listName": "country", "#text": "FRA"}}},
+                    "cac:PartyLegalEntity": {"cbc:CompanyID": "75177766500025"},
+                }},
+                {"efac:Company": {
+                    "cac:PartyIdentification": {"cbc:ID": {"@schemeName": "organization", "#text": "ORG-0002"}},
+                    "cac:PartyName": {"cbc:Name": {"@languageID": "FRA", "#text": "Tribunal de Grande Instance"}},
+                    "cac:PartyLegalEntity": {"cbc:CompanyID": "17130111200289"},
+                }},
+                {
+                    "efbc:ListedOnRegulatedMarketIndicator": "true",
+                    "efac:Company": {
+                        "efbc:CompanySizeCode": {"@listName": "economic-operator-size", "#text": "medium"},
+                        "cac:PartyIdentification": {"cbc:ID": {"@schemeName": "organization", "#text": "ORG-0003"}},
+                        "cac:PartyName": {"cbc:Name": {"@languageID": "FRA", "#text": "SAS EXHIBIT"}},
+                        "cac:PostalAddress": {
+                            "cbc:CityName": "CARROS", "cbc:PostalZone": "06510",
+                            "cbc:CountrySubentityCode": {"@listName": "nuts", "#text": "FRL03"},
+                            "cac:Country": {"cbc:IdentificationCode": {"@listName": "country", "#text": "FRA"}},
+                        },
+                        "cac:PartyLegalEntity": {"cbc:CompanyID": "50233392500084"},
+                    },
+                },
+            ]},
+            "efac:NoticeResult": {
+                "efbc:OverallMaximumFrameworkContractsAmount": {"@currencyID": "EUR", "#text": "200000"},
+                "efac:LotResult": {
+                    "cbc:ID": {"@schemeName": "result", "#text": "RES-0001"},
+                    "efac:LotTender": {"cbc:ID": {"@schemeName": "tender", "#text": "TEN-0001"}},
+                    "efac:TenderLot": {"cbc:ID": {"@schemeName": "Lot", "#text": "LOT-0001"}},
+                },
+                "efac:SettledContract": {
+                    "cbc:ID": {"@schemeName": "contract", "#text": "CON-0001"},
+                    "cbc:IssueDate": "2026-07-13+01:00",
+                    "efac:ContractReference": {"cbc:ID": "Impression de documents divers Lot 4"},
+                },
+                "efac:TenderingParty": {
+                    "cbc:ID": {"@schemeName": "tendering-party", "#text": "TPA-0001"},
+                    "cbc:Name": "EXHIBIT",
+                    "efac:Tenderer": {"cbc:ID": {"@schemeName": "organization", "#text": "ORG-0003"}},
+                },
+            },
+        }}}}}}}
+
+
+def test_boamp_award_detail_resolves_correct_org_among_several(raw_boamp_supply):
+    # Three organizations in the same notice (buyer, unrelated, winner) —
+    # must resolve ORG-0003 specifically via the TenderingParty->Tenderer
+    # ID reference, not just grab the first/last org in the list.
+    raw = dict(raw_boamp_supply, titulaire=["SAS EXHIBIT"], donnees=json.dumps(_real_exhibit_donnees()))
+    detail = normalize.normalize_boamp(raw)["raw_award_detail"]
+    assert detail == {
+        "winner": {
+            "registration_number": "50233392500084", "city": "CARROS", "postal_code": "06510",
+            "nuts": "FRL03", "country": "FRA", "size": "medium", "regulated_market": True,
+        },
+        "lot": {"identifier": "LOT-0001"},
+        "contract": {"identifier": "Impression de documents divers Lot 4",
+                     "conclusion_date": "2026-07-13", "tender_identifier": "TEN-0001"},
+        "framework_max_value": "200000", "framework_max_currency": "EUR",
+    }
+
+
+def test_boamp_award_detail_none_when_no_donnees(raw_boamp_supply):
+    assert normalize.normalize_boamp(raw_boamp_supply)["raw_award_detail"] is None
+
+
+def test_boamp_award_detail_none_when_no_notice_result(raw_boamp_supply):
+    raw = dict(raw_boamp_supply, donnees=json.dumps({"unrelated": "content"}))
+    assert normalize.normalize_boamp(raw)["raw_award_detail"] is None
+
+
+def test_boamp_award_detail_none_for_multi_lot_result(raw_boamp_supply):
+    donnees = _real_exhibit_donnees()
+    ext = donnees["EFORMS"]["ContractAwardNotice"]["ext:UBLExtensions"]["ext:UBLExtension"]["ext:ExtensionContent"]["efext:EformsExtension"]
+    ext["efac:NoticeResult"]["efac:LotResult"] = [
+        ext["efac:NoticeResult"]["efac:LotResult"], {"cbc:ID": {"#text": "RES-0002"}},
+    ]
+    raw = dict(raw_boamp_supply, donnees=json.dumps(donnees))
+    assert normalize.normalize_boamp(raw)["raw_award_detail"] is None
+
+
+def test_boamp_award_detail_none_when_winner_org_not_found(raw_boamp_supply):
+    donnees = _real_exhibit_donnees()
+    ext = donnees["EFORMS"]["ContractAwardNotice"]["ext:UBLExtensions"]["ext:UBLExtension"]["ext:ExtensionContent"]["efext:EformsExtension"]
+    ext["efac:NoticeResult"]["efac:TenderingParty"]["efac:Tenderer"]["cbc:ID"]["#text"] = "ORG-9999"
+    raw = dict(raw_boamp_supply, donnees=json.dumps(donnees))
+    assert normalize.normalize_boamp(raw)["raw_award_detail"] is None
+
+
+def test_boamp_award_detail_malformed_json_not_a_crash(raw_boamp_supply):
+    raw = dict(raw_boamp_supply, donnees="{not valid json")
+    assert normalize.normalize_boamp(raw)["raw_award_detail"] is None

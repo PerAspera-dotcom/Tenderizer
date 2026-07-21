@@ -84,6 +84,106 @@ def _dedupe(codes):
     return list(dict.fromkeys(codes))
 
 
+def _trim_date(v):
+    """'2026-05-28+03:00' -> '2026-05-28' — TED's date fields carry a UTC
+    offset suffix; every other date field in this app (deadline, pub_date)
+    is a plain YYYY-MM-DD, so award dates match that convention too.
+    """
+    return (v or "")[:10] or None
+
+
+def _duration_str(period):
+    """{"unit": "MONTH", "value": "6"} -> "6 months" (contract-duration-
+    period-lot's shape). None if the field wasn't present or isn't the
+    expected shape — never guessed.
+    """
+    if not isinstance(period, dict):
+        return None
+    value, unit = period.get("value"), period.get("unit")
+    if not value or not unit:
+        return None
+    unit = unit.lower()
+    return f"{value} {unit}" + ("" if value == "1" else "s")
+
+
+def _prune_none(d):
+    """Drop keys whose value is None (or, recursively, a dict of all-None
+    values) — keeps the stored award_detail JSON small and lets callers
+    check "was anything found at all" with a plain truthiness test.
+    """
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            v = _prune_none(v)
+            if not v:
+                continue
+        elif v is None:
+            continue
+        out[k] = v
+    return out
+
+
+def _ted_award_detail(raw):
+    """Richer per-winner/lot/contract detail (past-tenders data-coverage
+    follow-up): winner org registration number/city/postal code/NUTS/
+    country/size/decision date, lot identifier/title/duration, contract
+    identifier/conclusion date/tender identifier, and any framework-
+    agreement max value — all confirmed live against TED's search API
+    (see connectors/ted.py's FIELDS comment).
+
+    Only populated for single-lot/single-winner notices. TED's search API
+    returns these as flat, independently-populated arrays with NO shared
+    index guarantee once a notice has more than one lot result — verified
+    live against real multi-lot notices, where e.g. winner-name had fewer
+    entries than result-lot-identifier (an unsuccessful lot has a result
+    but no winner) and the two arrays were ordered differently besides.
+    Blindly zipping them by position would silently mis-pair a winner with
+    the wrong lot, so multi-lot notices are left with only the existing
+    notice-level total (raw_award_value/-currency) — never a fabricated
+    pairing.
+    """
+    lot_ids = raw.get("result-lot-identifier") or []
+    if len(lot_ids) != 1:
+        return None
+
+    def one(key):
+        # _first() returns "" (not None) for a wholly-missing field — strip
+        # first, then let the final `or None` turn any resulting empty/
+        # whitespace-only string back into a real absence.
+        v = _first(raw.get(key))
+        if isinstance(v, str):
+            v = v.strip()
+        return v or None
+
+    title_lot, _ = _pick_lang(raw.get("title-lot", {}))
+    duration = _duration_str(_first(raw.get("contract-duration-period-lot")))
+
+    detail = {
+        "winner": {
+            "registration_number": one("winner-identifier"),
+            "city": one("winner-city"),
+            "postal_code": one("winner-post-code"),
+            "nuts": one("winner-country-sub"),
+            "country": one("winner-country"),
+            "size": one("winner-size"),
+            "decision_date": _trim_date(one("winner-decision-date")),
+        },
+        "lot": {
+            "identifier": lot_ids[0],
+            "title": title_lot or None,
+            "duration": duration,
+        },
+        "contract": {
+            "identifier": one("contract-identifier"),
+            "conclusion_date": _trim_date(one("contract-conclusion-date")),
+            "tender_identifier": one("tender-identifier"),
+        },
+        "framework_max_value": one("result-framework-maximum-value-notice"),
+        "framework_max_currency": one("result-framework-maximum-value-cur-notice"),
+    }
+    return _prune_none(detail) or None
+
+
 def normalize_ted(raw):
     tag_line, tag_lang = _pick_lang(raw.get("notice-title", {}))
     description, _desc_lang = _pick_lang(raw.get("description-proc", {}))
@@ -127,6 +227,9 @@ def normalize_ted(raw):
         "raw_award_winner": award_winner or None,
         "raw_award_value": award_value or None,
         "raw_award_currency": award_currency or None,
+        # Past-tenders data-coverage follow-up: winner/lot/contract detail,
+        # single-lot notices only (see _ted_award_detail's docstring).
+        "raw_award_detail": _ted_award_detail(raw),
     }
 
 def record_hash(record):
@@ -225,6 +328,136 @@ def _boamp_award_info(raw):
     return found.get("value"), found.get("currency")
 
 
+def _boamp_find_first(data, key):
+    """First value found for `key` anywhere in the tree, or None — same
+    whole-tree walk as _boamp_cpv_codes/_boamp_award_info (BOAMP mixes
+    several notice-type/vintage shapes in the same feed, so a fixed path
+    isn't reliable across all of them).
+    """
+    found = []
+
+    def walk(node):
+        if found:
+            return
+        if isinstance(node, dict):
+            if key in node:
+                found.append(node[key])
+                return
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(data)
+    return found[0] if found else None
+
+
+def _boamp_text(node):
+    """eForms leaf values are either a bare string or {"#text": ..., "@...":
+    ...} depending on whether the tag carries attributes — normalise both to
+    a plain string (or None).
+    """
+    if isinstance(node, dict):
+        v = node.get("#text")
+        return v.strip() if isinstance(v, str) else v
+    if isinstance(node, str):
+        return node.strip()
+    return None
+
+
+def _boamp_amount(node):
+    return _boamp_text(node) if isinstance(node, dict) else None
+
+
+def _boamp_currency(node):
+    return node.get("@currencyID") if isinstance(node, dict) else None
+
+
+def _boamp_award_detail(raw):
+    """Same idea as _ted_award_detail, but reading BOAMP's raw eForms
+    XML-as-JSON (`donnees`) directly rather than a flat search-API field
+    list — BOAMP's structure is properly ID-correlated (efac:Organizations
+    entries carry their own ORG-xxxx id, referenced from efac:NoticeResult's
+    TenderingParty -> Tenderer), so the winner org can be resolved correctly
+    even when several organizations/roles appear in the same notice
+    (verified live against a real notice: SAS EXHIBIT / ORG-0003, among two
+    unrelated buyer-side organizations in the same Organizations list).
+
+    Still restricted to single-lot notices, same reasoning as
+    _ted_award_detail: efac:LotResult can also repeat for multiple lots, and
+    fully correlating those would mean walking LotResult -> LotTender ->
+    TenderingParty -> Tenderer chains that can each independently become
+    lists — not worth the complexity for a domain that's overwhelmingly
+    single-lot in practice. Multi-lot notices are left with only the
+    existing notice-level total (raw_award_value/-currency).
+    """
+    donnees = raw.get("donnees")
+    if not donnees:
+        return None
+    try:
+        data = json.loads(donnees)
+    except (TypeError, ValueError):
+        return None
+
+    notice_result = _boamp_find_first(data, "efac:NoticeResult")
+    if not isinstance(notice_result, dict):
+        return None
+    lot_result = notice_result.get("efac:LotResult")
+    if not isinstance(lot_result, dict):  # missing, or a list (multi-lot) -> skip
+        return None
+    tendering_party = notice_result.get("efac:TenderingParty")
+    if not isinstance(tendering_party, dict):
+        return None
+
+    winner_org_id = _boamp_text((tendering_party.get("efac:Tenderer") or {}).get("cbc:ID"))
+    if not winner_org_id:
+        return None
+
+    orgs = _boamp_find_first(data, "efac:Organization") or []
+    if isinstance(orgs, dict):
+        orgs = [orgs]
+    winner_org = next(
+        (o for o in orgs if _boamp_text(
+            (o.get("efac:Company") or {}).get("cac:PartyIdentification", {}).get("cbc:ID")
+        ) == winner_org_id),
+        None,
+    )
+    if winner_org is None:
+        return None
+
+    company = winner_org.get("efac:Company") or {}
+    address = company.get("cac:PostalAddress") or {}
+    settled_contract = notice_result.get("efac:SettledContract") or {}
+    framework = notice_result.get("efbc:OverallMaximumFrameworkContractsAmount")
+
+    listed = winner_org.get("efbc:ListedOnRegulatedMarketIndicator")
+    detail = {
+        "winner": {
+            "registration_number": _boamp_text((company.get("cac:PartyLegalEntity") or {}).get("cbc:CompanyID")),
+            "city": _boamp_text(address.get("cbc:CityName")),
+            "postal_code": _boamp_text(address.get("cbc:PostalZone")),
+            "nuts": _boamp_text(address.get("cbc:CountrySubentityCode")),
+            "country": _boamp_text((address.get("cac:Country") or {}).get("cbc:IdentificationCode")),
+            "size": _boamp_text(company.get("efbc:CompanySizeCode")),
+            "regulated_market": (listed == "true") if listed is not None else None,
+        },
+        "lot": {
+            "identifier": _boamp_text((lot_result.get("efac:TenderLot") or {}).get("cbc:ID")),
+            "title": None,  # not reliably present at this path across vintages — never guessed
+            "duration": None,
+        },
+        "contract": {
+            "identifier": _boamp_text((settled_contract.get("efac:ContractReference") or {}).get("cbc:ID")),
+            "conclusion_date": _trim_date(_boamp_text(settled_contract.get("cbc:IssueDate"))),
+            "tender_identifier": _boamp_text((lot_result.get("efac:LotTender") or {}).get("cbc:ID")),
+        },
+        "framework_max_value": _boamp_amount(framework),
+        "framework_max_currency": _boamp_currency(framework),
+    }
+    return _prune_none(detail) or None
+
+
 def normalize_boamp(raw):
     """Normalise a BOAMP record into the SAME schema as normalize_ted.
 
@@ -265,4 +498,7 @@ def normalize_boamp(raw):
         "raw_award_winner": award_winner or None,
         "raw_award_value": award_value or None,
         "raw_award_currency": award_currency or None,
+        # Past-tenders data-coverage follow-up: winner/lot/contract detail,
+        # single-lot notices only (see _boamp_award_detail's docstring).
+        "raw_award_detail": _boamp_award_detail(raw),
     }

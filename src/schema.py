@@ -74,6 +74,14 @@ tenders = Table(
     Column("awarded_to", Text, nullable=True),
     Column("awarded_value", Text, nullable=True),
     Column("awarded_currency", Text, nullable=True),
+    # Past-tenders data-coverage follow-up: winner org detail (registration
+    # number, city, postal code, NUTS, country, size), lot identifier/title/
+    # duration, contract identifier/conclusion date/tender identifier, and
+    # any framework-agreement max value — JSON, real NULL when nothing was
+    # found (never a fabricated/empty object; see normalize.py's
+    # _ted_award_detail/_boamp_award_detail for why this is only populated
+    # for single-lot/single-winner notices).
+    Column("award_detail", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 

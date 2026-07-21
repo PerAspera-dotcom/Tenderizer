@@ -90,9 +90,9 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
                 # CR-002 A: additive, post-filter — tags what's already kept
                 # (or excluded), never changes it.
                 rec["notice_type"] = classification.classify(rec)
-                rec["awarded_to"], rec["awarded_value"], rec["awarded_currency"] = (
+                rec["awarded_to"], rec["awarded_value"], rec["awarded_currency"], rec["award_detail"] = (
                     classification.extract_award_info(rec)
-                    if rec["notice_type"] == "past_tender" else (None, None, None)
+                    if rec["notice_type"] == "past_tender" else (None, None, None, None)
                 )
                 store.upsert(conn, tenant_id, rec)
                 this_run_records.append(rec)

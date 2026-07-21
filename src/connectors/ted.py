@@ -41,6 +41,11 @@ ENDPOINT = "https://api.ted.europa.eu/v3/notices/search"
 # tender-value-cur (per-lot, kept as a fallback for notices with no
 # notice-level total). See normalize.py's normalize_ted for how these feed
 # classification.extract_award_info.
+#
+# Past-tenders data-coverage follow-up (2026-07, same UNSUPPORTED_VALUE probe
+# technique): winner org detail + lot/contract identifiers, all confirmed live
+# against TED 391890-2026 (the exact notice CR-003/CR-005's screenshots used) —
+# see normalize.py's _ted_award_detail for how these feed award_detail.
 FIELDS = [
     "publication-number", "notice-title", "description-proc",
     "buyer-name", "buyer-country", "contract-nature", "procedure-type", "notice-type",
@@ -48,6 +53,11 @@ FIELDS = [
     "estimated-value-proc", "estimated-value-cur-proc",
     "winner-name", "result-value-notice", "result-value-cur-notice",
     "tender-value", "tender-value-cur",
+    "winner-city", "winner-country", "winner-country-sub", "winner-post-code",
+    "winner-identifier", "winner-size", "winner-decision-date",
+    "result-lot-identifier", "title-lot", "contract-duration-period-lot",
+    "contract-identifier", "contract-conclusion-date", "tender-identifier",
+    "result-framework-maximum-value-notice", "result-framework-maximum-value-cur-notice",
 ]
 
 

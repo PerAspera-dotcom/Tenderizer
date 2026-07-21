@@ -327,6 +327,51 @@ def test_active_notice_is_tagged_tender_with_no_award_info(tmp_path, raw_ted_sup
     assert stored["awarded_to"] is None
 
 
+# ── Past-tenders data-coverage follow-up: award_detail wired through the
+# full pipeline (single-lot notice, structured TED fields) ─────────────────
+
+def test_past_tender_with_single_lot_structured_fields_gets_award_detail(tmp_path, raw_ted_supply):
+    import store, copy
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "391890-2026"
+    del raw["deadline-receipt-request"]
+    raw.update({
+        "winner-name": {"ell": ["Ι. ΚΑΤΣΙΔΩΝΙΩΤΑΚΗΣ Α.Τ.Ε.Β.Ε ΚΑΤΑΣΚΕΥΑΣΤΙΚΗ ΔΙΑΣ ΑΤΕΒΕ"]},
+        "result-value-notice": "45290.32", "result-value-cur-notice": "EUR",
+        "winner-city": ["Ηράκλειο "], "winner-country": ["GRC"], "winner-country-sub": ["EL431"],
+        "winner-identifier": ["094338244"], "winner-size": ["medium"],
+        "result-lot-identifier": ["LOT-0001"], "contract-identifier": ["2820/2026"],
+        "contract-conclusion-date": ["2026-05-28+03:00"],
+    })
+
+    db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["notice_type"] == "past_tender"
+    assert stored["award_detail"]["winner"]["registration_number"] == "094338244"
+    assert stored["award_detail"]["winner"]["city"] == "Ηράκλειο"
+    assert stored["award_detail"]["contract"]["identifier"] == "2820/2026"
+    assert stored["award_detail"]["lot"]["identifier"] == "LOT-0001"
+
+
+def test_past_tender_without_lot_identifier_has_no_award_detail(tmp_path, raw_ted_supply):
+    import store, copy
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "222444-2026"
+    del raw["deadline-receipt-request"]
+
+    db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    stored = store.all_records(conn, TEST_TENANT_ID)[0]
+    assert stored["award_detail"] is None
+
+
 def test_matched_total_does_not_accumulate_across_runs(tmp_path, raw_ted_supply):
     # Re-running with nothing new to fetch must report 0 matched this run,
     # not the 1 match already sitting in the tenders table from run #1 —
