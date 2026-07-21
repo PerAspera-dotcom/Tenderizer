@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocumentBlob } from '../../api';
 import type { PipelineEntry, DocumentEntry } from '../../types';
-import { formatDate, daysLeft, countryFlag, needsTranslation, displayTagLine } from '../../utils';
+import { formatDate, daysLeft, countryFlag, hasTranslatedTagLine, displayTagLine } from '../../utils';
 import { useNavigate } from '../../router';
 
 function formatSize(bytes: number): string {
@@ -184,7 +184,7 @@ export default function PortalPipeline() {
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, marginTop: 5, flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isActive ? '#e2e8f0' : '#c8d0de' }}>
-                      {needsTranslation(e) && e.translation_status === 'ok' && (
+                      {hasTranslatedTagLine(e) && (
                         <span title={`Translated — original: ${e.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
                       )}
                       {displayTagLine(e)}

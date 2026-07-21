@@ -7,20 +7,38 @@ export function needsTranslation(t: Pick<Tender, 'language'>): boolean {
   return !!t.language && t.language !== 'eng' && t.language !== 'en';
 }
 
+// CR-005 follow-up: run.py's per-run translation step makes two independent
+// DeepL calls (tag_line, description) and only marks the combined
+// `translation_status` 'ok' when BOTH succeed — so a tender where the
+// (short) title call succeeded but the (longer) description call didn't
+// — e.g. a free-tier monthly quota that's enough for one call but not the
+// other — sits at translation_status='unavailable' indefinitely, even
+// though tag_line_en holds a perfectly good translation. Gating display on
+// the combined status (as this used to) threw that real, already-paid-for
+// translation away and showed the original for both fields. Each field now
+// falls back independently on its own emptiness, not the combined status.
 export function displayTagLine(
-  t: Pick<Tender, 'tag_line' | 'tag_line_en' | 'translation_status' | 'language'>,
+  t: Pick<Tender, 'tag_line' | 'tag_line_en' | 'language'>,
   showOriginal = false,
 ): string {
-  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.tag_line;
+  if (!needsTranslation(t) || showOriginal) return t.tag_line;
   return t.tag_line_en || t.tag_line;
 }
 
 export function displayDescription(
-  t: Pick<Tender, 'description' | 'description_en' | 'translation_status' | 'language'>,
+  t: Pick<Tender, 'description' | 'description_en' | 'language'>,
   showOriginal = false,
 ): string {
-  if (!needsTranslation(t) || showOriginal || t.translation_status !== 'ok') return t.description;
+  if (!needsTranslation(t) || showOriginal) return t.description;
   return t.description_en || t.description;
+}
+
+export function hasTranslatedTagLine(t: Pick<Tender, 'tag_line_en' | 'language'>): boolean {
+  return needsTranslation(t) && !!t.tag_line_en;
+}
+
+export function hasTranslatedDescription(t: Pick<Tender, 'description_en' | 'language'>): boolean {
+  return needsTranslation(t) && !!t.description_en;
 }
 
 export function formatDate(dateStr: string | null | undefined): string {

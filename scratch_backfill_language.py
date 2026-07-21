@@ -1,6 +1,6 @@
 """One-off backfill: detect `language` + translate tag_line/description for
-already-stored shortlisted tenders that predate CR-001 R3 (DeepL translation)
-and were never picked up by it.
+already-stored tenders that predate CR-001 R3 (DeepL translation) and were
+never picked up by it.
 
 store.upsert() is insert-only (never rewrites a record another run already
 stored — see store.update_tagging's docstring), and the `language` column was
@@ -18,11 +18,16 @@ includes detected_source_language, so one call on tag_line both backfills
 separately (via the cache, so identical text across notices isn't billed
 twice).
 
-Scoped to status='shortlisted' only — that's what's actually in front of a
-user in the Portal right now, and it keeps DeepL quota spend bounded rather
-than backfilling the entire historical backlog (dismissed/never-triaged
-tenders) in one pass. Re-running is safe/idempotent: any row already
-carrying a `language` value is skipped.
+CR-005: originally scoped to status='shortlisted' only (the first pass, run
+2026-07-16). That missed every other surfaced tender — including Review
+Queue's status='new' rows, which is exactly where CR-005's screenshot found
+a still-untranslated Polish notice. Broadened to match run.py's own ongoing
+per-run translation filter exactly (`not exclude_reason` — the same test
+that decides whether a record gets translated on every subsequent scrape),
+so this backfill and the live pipeline now agree on scope instead of the
+backfill being a narrower one-off. Still bounded (excluded/filtered-out
+tenders are skipped, matching what the pipeline would do anyway) and still
+idempotent: any row already carrying a `language` value is skipped.
 
 Run from the project root:  python scratch_backfill_language.py
 """
@@ -38,7 +43,7 @@ from schema import tenders
 
 def backfill_tenant(conn, tenant_id):
     records = [r for r in store.all_records(conn, tenant_id)
-               if r.get("status") == "shortlisted" and not r.get("language")]
+               if not r.get("exclude_reason") and not r.get("language")]
     if not records:
         return None
 

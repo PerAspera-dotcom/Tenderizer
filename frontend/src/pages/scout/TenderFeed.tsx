@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from '../../router';
 import { listTenders } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, needsTranslation, displayTagLine } from '../../utils';
+import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 
 const PORTAL_OPTS = [
@@ -136,7 +136,7 @@ export default function TenderFeed() {
                       {t.status === 'dismissed' && t.dismiss_note && (
                         <span title={`Dismissed: ${t.dismiss_note}`} style={{ marginRight: 4 }}>📝</span>
                       )}
-                      {needsTranslation(t) && t.translation_status === 'ok' && (
+                      {hasTranslatedTagLine(t) && (
                         <span title={`Translated — original: ${t.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
                       )}
                       {displayTagLine(t)}

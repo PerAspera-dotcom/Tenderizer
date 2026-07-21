@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listTenders, patchTender } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, displayTagLine, displayDescription } from '../../utils';
+import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
@@ -149,7 +149,7 @@ export default function ReviewQueue() {
               const isActive = selected?.pub_number === t.pub_number;
               const dotColor = statusDotColor(t.status);
               const barColor = conf >= 80 ? '#2EE6D4' : '#e3b341';
-              const translated = needsTranslation(t) && t.translation_status === 'ok';
+              const translated = hasTranslatedTagLine(t);
               return (
                 <div
                   key={t.pub_number}
@@ -213,7 +213,7 @@ export default function ReviewQueue() {
 
                 {needsTranslation(selected) && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-                    {selected.translation_status === 'ok' ? (
+                    {hasTranslatedTagLine(selected) ? (
                       <>
                         <span style={{ color: '#8892a4', fontSize: 12 }}>
                           🌐 {showOriginal ? `Original (${selected.language})` : 'Translated to English'}
@@ -222,6 +222,16 @@ export default function ReviewQueue() {
                                 onClick={() => setShowOriginal(o => !o)}>
                           {showOriginal ? 'Show translation' : 'Show original'}
                         </button>
+                        {/* CR-005 follow-up: the title and description are translated by two
+                            independent DeepL calls — one can succeed while the other doesn't
+                            (e.g. a quota that covers the short title but not the longer body).
+                            Surface that rather than silently showing an untranslated body under
+                            a banner that claims everything's translated. */}
+                        {!showOriginal && !hasTranslatedDescription(selected) && (
+                          <span style={{ color: '#e3b341', fontSize: 12, background: 'rgba(227,179,65,0.1)', border: '1px solid rgba(227,179,65,0.3)', borderRadius: 4, padding: '2px 8px' }}>
+                            ⚠ Description translation unavailable — showing original
+                          </span>
+                        )}
                       </>
                     ) : (
                       <span style={{ color: '#e3b341', fontSize: 12, background: 'rgba(227,179,65,0.1)', border: '1px solid rgba(227,179,65,0.3)', borderRadius: 4, padding: '2px 8px' }}>
