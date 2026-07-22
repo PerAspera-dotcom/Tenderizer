@@ -15,7 +15,18 @@ logger = logging.getLogger(__name__)
 def send_alert(subject, message):
     logger.warning("ALERT: %s — %s", subject, message)
     _send_sentry(subject, message)
-    _send_email(subject, message)
+    _send_email(subject, message, os.getenv("ALERT_EMAIL_TO"))
+
+
+def send_tenant_email(to_addr, subject, message):
+    """Same SMTP primitive as send_alert, but for tenant-facing mail (daily
+    digest, pipeline owner-handoff) — skips Sentry (that's for ops errors,
+    not routine tenant notifications) and requires an explicit recipient
+    rather than the ops ALERT_EMAIL_TO.
+    """
+    if not to_addr:
+        return
+    _send_email(subject, message, to_addr)
 
 
 def _send_sentry(subject, message):
@@ -25,9 +36,8 @@ def _send_sentry(subject, message):
     sentry_sdk.capture_message(f"{subject}: {message}", level="error")
 
 
-def _send_email(subject, message):
+def _send_email(subject, message, to_addr):
     host = os.getenv("SMTP_HOST")
-    to_addr = os.getenv("ALERT_EMAIL_TO")
     if not host or not to_addr:
         return
     msg = EmailMessage()

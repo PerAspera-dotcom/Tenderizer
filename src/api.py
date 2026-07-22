@@ -77,6 +77,9 @@ async def _lifespan(_app: FastAPI):
         # internally) — wrapped again here as defense in depth so a bug in
         # that handling still can't take the scheduler down.
         _scheduler.add_job(_run_backup_job, "cron", hour=3, minute=0, id="daily_backup")
+        # Notifications & workflow: daily digest, after the scrape + backup
+        # so it reports the freshest data and doesn't compete with them.
+        _scheduler.add_job(_run_daily_digest, "cron", hour=4, minute=0, id="daily_digest")
         _scheduler.start()
     yield
     if _scheduler is not None and _scheduler.running:
@@ -419,6 +422,21 @@ def _run_backup_job():
         logging.exception("scheduled backup job crashed outside run_backup()'s own handling")
 
 
+def _run_daily_digest():
+    import alerts, digest
+    conn = _db()
+    for tenant_id in store.list_provisioned_tenant_ids(conn):
+        try:
+            settings = store.get_tenant_settings(conn, tenant_id)
+            if not settings["notify_on_complete"] or not settings["notify_email"]:
+                continue
+            body = digest.build_daily_digest(conn, tenant_id)
+            if body:
+                alerts.send_tenant_email(settings["notify_email"], "Tenderizer — daily digest", body)
+        except Exception:
+            logging.exception(f"daily digest failed for tenant {tenant_id}")
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/config/cpv")
@@ -535,15 +553,31 @@ class PipelinePatch(BaseModel):
 
 _VALID_SUBMISSION = {"not_started", "drafting", "submitted"}
 
+
+def _send_owner_handoff_email(tenant_id, pub_number, old_owner, new_owner):
+    import alerts
+    conn = _db()
+    settings = store.get_tenant_settings(conn, tenant_id)
+    if not settings["notify_on_complete"] or not settings["notify_email"]:
+        return
+    tender = _find_tender(conn, tenant_id, pub_number)
+    label = f"{tender['tag_line']} ({pub_number})" if tender else pub_number
+    body = f"Pipeline owner for {label} changed: {old_owner or 'unassigned'} → {new_owner}"
+    alerts.send_tenant_email(settings["notify_email"], "Tenderizer — pipeline owner changed", body)
+
+
 @app.patch("/api/pipeline/{pub_number}")
-def patch_pipeline(pub_number: str, body: PipelinePatch,
+def patch_pipeline(pub_number: str, body: PipelinePatch, background: BackgroundTasks,
                     tenant_id: int = Depends(get_current_tenant_id)):
     if body.submission_status and body.submission_status not in _VALID_SUBMISSION:
         raise HTTPException(422, f"submission_status must be one of {_VALID_SUBMISSION}")
     conn   = _db()
     store.ensure_pipeline_entry(conn, tenant_id, pub_number)
     fields = body.model_dump(exclude_none=True)
-    store.set_pipeline_entry(conn, tenant_id, pub_number, fields)
+    changed = store.set_pipeline_entry(conn, tenant_id, pub_number, fields)
+    if "owner" in changed:
+        old_owner, new_owner = changed["owner"]
+        background.add_task(_send_owner_handoff_email, tenant_id, pub_number, old_owner, new_owner)
     return {"pub_number": pub_number, **fields}
 
 

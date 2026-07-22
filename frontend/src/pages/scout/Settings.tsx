@@ -52,8 +52,7 @@ export default function Settings() {
       }}>
         The scrape now runs for real every day at 02:00 UTC (plus "Run now" any time) — but that
         schedule is fixed for every tenant, not read from the fields below yet, so Schedule/Run
-        window here are still saved preferences only. Notify-on-complete is saved too, but nothing
-        sends it yet.
+        window here are still saved preferences only.
       </div>
 
       <div className="card" style={{ padding: '20px 24px', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -99,14 +98,18 @@ export default function Settings() {
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 10 }}>
             Notifications
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 10, cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 4, cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={data.notify_on_complete}
               onChange={e => update('notify_on_complete', e.target.checked)}
             />
-            Notify me when a run completes
+            Email me daily digests and pipeline handoff alerts
           </label>
+          <p style={{ color: '#8892a4', fontSize: 12, marginBottom: 10, maxWidth: 420 }}>
+            One email/day with new matches and tenders closing within 14 days (skipped on quiet
+            days), plus a note whenever a pipeline tender's owner changes.
+          </p>
           <input
             className="input-field"
             type="email"

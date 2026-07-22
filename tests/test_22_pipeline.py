@@ -8,11 +8,20 @@ the one CR-001 process gap ("extend or add a unit test for the new
 behaviour... do not batch") this repo's own audit found. No behaviour
 changed here, only tests added.
 """
+from fastapi import BackgroundTasks
+
 import store
 import api
 from conftest import TEST_TENANT_ID
 
 OTHER_TENANT_ID = 999
+
+
+def _patch_pipeline(pub_number, body, tenant_id=TEST_TENANT_ID):
+    """api.patch_pipeline now takes a BackgroundTasks (owner-handoff email) —
+    tests don't care about the queued task itself, just supply a fresh one.
+    """
+    return api.patch_pipeline(pub_number, body, BackgroundTasks(), tenant_id=tenant_id)
 
 
 def _tender(pub_number, status="shortlisted"):
@@ -72,6 +81,26 @@ def test_set_pipeline_entry_updates_only_valid_fields(tmp_path):
     assert len(followup) == 1
     assert followup[0]["notes"] == "hello"
     assert followup[0]["submission_status"] == "submitted"
+
+
+def test_set_pipeline_entry_returns_changed_fields(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("P-1"))
+    store.ensure_pipeline_entry(conn, TEST_TENANT_ID, "P-1")
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice"})
+
+    changed = store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Bob", "notes": "hi"})
+    assert changed == {"owner": ("Alice", "Bob"), "notes": (None, "hi")}
+
+
+def test_set_pipeline_entry_returns_empty_dict_when_nothing_changes(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("P-1"))
+    store.ensure_pipeline_entry(conn, TEST_TENANT_ID, "P-1")
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice"})
+
+    assert store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice"}) == {}
+    assert store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"bogus": "x"}) == {}
 
 
 def test_set_pipeline_entry_noop_when_no_valid_fields(tmp_path):
@@ -161,7 +190,7 @@ def test_get_pipeline_returns_shortlisted_only(tmp_path, monkeypatch):
 def test_patch_pipeline_creates_entry_and_updates_fields(tmp_path, monkeypatch):
     _seed_api(tmp_path, monkeypatch)
 
-    result = api.patch_pipeline("P-1", api.PipelinePatch(notes="on track", owner="Alice"),
+    result = _patch_pipeline("P-1", api.PipelinePatch(notes="on track", owner="Alice"),
                                  tenant_id=TEST_TENANT_ID)
     assert result["notes"] == "on track"
 
@@ -172,7 +201,7 @@ def test_patch_pipeline_creates_entry_and_updates_fields(tmp_path, monkeypatch):
 def test_patch_pipeline_rejects_invalid_submission_status(tmp_path, monkeypatch):
     _seed_api(tmp_path, monkeypatch)
     try:
-        api.patch_pipeline("P-1", api.PipelinePatch(submission_status="bogus"),
+        _patch_pipeline("P-1", api.PipelinePatch(submission_status="bogus"),
                             tenant_id=TEST_TENANT_ID)
         assert False, "expected HTTPException"
     except Exception as e:
@@ -184,15 +213,59 @@ def test_patch_pipeline_only_affects_calling_tenant(tmp_path, monkeypatch):
     store.ensure_tenant(conn, OTHER_TENANT_ID)
     store.upsert(conn, OTHER_TENANT_ID, _tender("P-1"))  # same pub_number, other tenant
 
-    api.patch_pipeline("P-1", api.PipelinePatch(notes="mine"), tenant_id=TEST_TENANT_ID)
+    _patch_pipeline("P-1", api.PipelinePatch(notes="mine"), tenant_id=TEST_TENANT_ID)
 
     assert api.get_pipeline(tenant_id=TEST_TENANT_ID)[0]["notes"] == "mine"
     assert api.get_pipeline(tenant_id=OTHER_TENANT_ID)[0]["notes"] is None
 
 
+# ── Notifications: owner-handoff email queuing ───────────────────────────────
+
+def test_patch_pipeline_queues_handoff_task_on_owner_change(tmp_path, monkeypatch):
+    conn = _seed_api(tmp_path, monkeypatch)
+    store.set_tenant_settings(conn, TEST_TENANT_ID,
+                               {"notify_on_complete": True, "notify_email": "a@b.com"})
+    background = BackgroundTasks()
+    api.patch_pipeline("P-1", api.PipelinePatch(owner="Alice"), background, tenant_id=TEST_TENANT_ID)
+    assert len(background.tasks) == 1
+
+
+def test_patch_pipeline_does_not_queue_handoff_task_without_owner_change(tmp_path, monkeypatch):
+    _seed_api(tmp_path, monkeypatch)
+    background = BackgroundTasks()
+    api.patch_pipeline("P-1", api.PipelinePatch(notes="hello"), background, tenant_id=TEST_TENANT_ID)
+    assert len(background.tasks) == 0
+
+
+def test_send_owner_handoff_email_noop_when_notify_off(tmp_path, monkeypatch):
+    conn = _seed_api(tmp_path, monkeypatch)
+    store.set_tenant_settings(conn, TEST_TENANT_ID,
+                               {"notify_on_complete": False, "notify_email": "a@b.com"})
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    captured = []
+    import alerts
+    monkeypatch.setattr(alerts, "send_tenant_email", lambda *a, **kw: captured.append(a))
+    api._send_owner_handoff_email(TEST_TENANT_ID, "P-1", None, "Alice")
+    assert captured == []
+
+
+def test_send_owner_handoff_email_sends_when_notify_on(tmp_path, monkeypatch):
+    conn = _seed_api(tmp_path, monkeypatch)
+    store.set_tenant_settings(conn, TEST_TENANT_ID,
+                               {"notify_on_complete": True, "notify_email": "a@b.com"})
+    captured = []
+    import alerts
+    monkeypatch.setattr(alerts, "send_tenant_email", lambda to_addr, subject, body: captured.append((to_addr, body)))
+    api._send_owner_handoff_email(TEST_TENANT_ID, "P-1", "Alice", "Bob")
+    assert len(captured) == 1
+    to_addr, body = captured[0]
+    assert to_addr == "a@b.com"
+    assert "Alice" in body and "Bob" in body and "P-1" in body
+
+
 def test_get_followup_returns_submitted_only(tmp_path, monkeypatch):
     _seed_api(tmp_path, monkeypatch)
-    api.patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"),
+    _patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"),
                         tenant_id=TEST_TENANT_ID)
 
     result = api.get_followup(tenant_id=TEST_TENANT_ID)
@@ -201,7 +274,7 @@ def test_get_followup_returns_submitted_only(tmp_path, monkeypatch):
 
 def test_patch_followup_updates_outcome(tmp_path, monkeypatch):
     _seed_api(tmp_path, monkeypatch)
-    api.patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"),
+    _patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"),
                         tenant_id=TEST_TENANT_ID)
 
     result = api.patch_followup("P-1", api.FollowupPatch(outcome="won"), tenant_id=TEST_TENANT_ID)
@@ -313,8 +386,8 @@ def test_record_pipeline_change_appends_directly(tmp_path):
 
 def test_get_pipeline_history_endpoint_round_trips(tmp_path, monkeypatch):
     _seed_api(tmp_path, monkeypatch)
-    api.patch_pipeline("P-1", api.PipelinePatch(owner="Alice"), tenant_id=TEST_TENANT_ID)
-    api.patch_pipeline("P-1", api.PipelinePatch(owner="Bob"), tenant_id=TEST_TENANT_ID)
+    _patch_pipeline("P-1", api.PipelinePatch(owner="Alice"), tenant_id=TEST_TENANT_ID)
+    _patch_pipeline("P-1", api.PipelinePatch(owner="Bob"), tenant_id=TEST_TENANT_ID)
 
     result = api.get_pipeline_history("P-1", tenant_id=TEST_TENANT_ID)
     assert result["pub_number"] == "P-1"
@@ -327,8 +400,8 @@ def test_patch_followup_only_affects_calling_tenant(tmp_path, monkeypatch):
     conn = _seed_api(tmp_path, monkeypatch)
     store.ensure_tenant(conn, OTHER_TENANT_ID)
     store.upsert(conn, OTHER_TENANT_ID, _tender("P-1"))
-    api.patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"), tenant_id=TEST_TENANT_ID)
-    api.patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"), tenant_id=OTHER_TENANT_ID)
+    _patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"), tenant_id=TEST_TENANT_ID)
+    _patch_pipeline("P-1", api.PipelinePatch(submission_status="submitted"), tenant_id=OTHER_TENANT_ID)
 
     api.patch_followup("P-1", api.FollowupPatch(outcome="won"), tenant_id=TEST_TENANT_ID)
 

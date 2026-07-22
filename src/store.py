@@ -730,11 +730,14 @@ def set_pipeline_entry(conn, tenant_id, pub_number, fields):
     """Diffs against the current row and logs only the fields that actually
     changed — inlines the history insert (rather than calling
     record_pipeline_change) so the read-diff-write-log sequence stays one
-    atomic transaction.
+    atomic transaction. Returns {field: (old_value, new_value)} for every
+    field that actually changed (empty dict if nothing did) — callers (e.g.
+    api.patch_pipeline, for the owner-handoff email) use this instead of
+    re-deriving a diff themselves.
     """
     valid = {k: v for k, v in fields.items() if k in PIPELINE_FIELDS}
     if not valid:
-        return
+        return {}
     with conn.begin() as c:
         current = c.execute(select(*(pipeline.c[f] for f in valid)).where(
             (pipeline.c.tenant_id == tenant_id) & (pipeline.c.pub_number == pub_number)
@@ -749,6 +752,7 @@ def set_pipeline_entry(conn, tenant_id, pub_number, fields):
                 tenant_id=tenant_id, pub_number=pub_number, field=field,
                 old_value=old_value, new_value=new_value,
                 changed_at=datetime.now(timezone.utc).isoformat()))
+    return changed
 
 
 def get_pipeline_entries(conn, tenant_id):
