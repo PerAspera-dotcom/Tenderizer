@@ -105,6 +105,26 @@ pipeline = Table(
 
 PIPELINE_COLUMNS = [c.name for c in pipeline.columns]
 
+# Tenancy hardening: append-only audit trail for pipeline field edits (who
+# changed submission_status/owner/notes/deadline_override/outcome, and when)
+# — pipeline itself is blind-overwrite, no prior value kept. Modeled on
+# source_health's shape below (one row per event, not a JSON blob on the
+# parent row). No changed_by column: today tenant_id already IS the user
+# (1 Clerk user = 1 tenant, no Organization concept — see the `tenants`
+# comment above), so tenant_id already answers "who". A real user column
+# becomes necessary only once/if multi-user-per-tenant membership exists.
+pipeline_history = Table(
+    "pipeline_history", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("field", Text, nullable=False),
+    Column("old_value", Text, nullable=True),
+    Column("new_value", Text, nullable=True),
+    Column("changed_at", Text, nullable=False, server_default=""),
+)
+Index("ix_pipeline_history_tenant_pub", pipeline_history.c.tenant_id, pipeline_history.c.pub_number)
+
 # CR-002 E (D-C decided: minimal slice now — upload + store only, no
 # requirement parsing/translation; that full pipeline is Composer's Phase 2
 # Ingest & Config, POST /api/composer/ingest, deliberately not built here).

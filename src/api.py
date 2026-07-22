@@ -547,6 +547,11 @@ def patch_pipeline(pub_number: str, body: PipelinePatch,
     return {"pub_number": pub_number, **fields}
 
 
+@app.get("/api/pipeline/{pub_number}/history")
+def get_pipeline_history(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    return {"pub_number": pub_number, "history": store.get_pipeline_history(_db(), tenant_id, pub_number)}
+
+
 @app.get("/api/followup")
 def get_followup(tenant_id: int = Depends(get_current_tenant_id)):
     return store.get_followup_entries(_db(), tenant_id)
@@ -1130,6 +1135,7 @@ def post_composer_generate(pub_number: str, background: BackgroundTasks,
 
 @app.get("/api/composer/{pub_number}/download/proposal.docx")
 def download_composer_proposal(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    _require_shortlisted_tender(_db(), tenant_id, pub_number)
     path = _composer_output_path(tenant_id, pub_number, "technical_proposal.docx")
     if not path.exists():
         raise HTTPException(404, "No proposal generated yet")
@@ -1148,6 +1154,7 @@ def download_composer_matrix(pub_number: str, tenant_id: int = Depends(get_curre
 
 @app.get("/api/composer/{pub_number}/download/gaps_report.txt")
 def download_composer_gaps(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    _require_shortlisted_tender(_db(), tenant_id, pub_number)
     path = _composer_output_path(tenant_id, pub_number, "gaps_report.txt")
     if not path.exists():
         raise HTTPException(404, "No gaps report generated yet")

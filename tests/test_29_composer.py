@@ -596,6 +596,21 @@ def test_download_endpoints_404_before_generate(tmp_path, monkeypatch):
         assert getattr(e, "status_code", None) == 404
 
 
+def test_download_endpoints_404_for_unknown_pub_number(tmp_path, monkeypatch):
+    """Tenancy hardening: proposal/gaps downloads must validate pub_number
+    against a real, owned tender before touching the filesystem — matches
+    every other pub_number-scoped composer endpoint (and matrix download,
+    which already did this via a DB-scoped query).
+    """
+    _seed(tmp_path, monkeypatch)
+    for fn in (api.download_composer_proposal, api.download_composer_gaps):
+        try:
+            fn("NOT-A-REAL-PUB", tenant_id=TEST_TENANT_ID)
+            assert False, "expected HTTPException"
+        except Exception as e:
+            assert getattr(e, "status_code", None) == 404
+
+
 def test_download_proposal_after_generate(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
     req_id = store.add_composer_requirements(conn, TEST_TENANT_ID, "P-1", [

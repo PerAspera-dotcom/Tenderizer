@@ -1,8 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
-import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocumentBlob } from '../../api';
-import type { PipelineEntry, DocumentEntry } from '../../types';
-import { formatDate, daysLeft, countryFlag, hasTranslatedTagLine, displayTagLine } from '../../utils';
+import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocumentBlob, getPipelineHistory } from '../../api';
+import type { PipelineEntry, DocumentEntry, PipelineHistoryEntry } from '../../types';
+import { formatDate, formatTime, daysLeft, countryFlag, hasTranslatedTagLine, displayTagLine } from '../../utils';
 import { useNavigate } from '../../router';
+
+const HISTORY_FIELD_LABELS: Record<string, string> = {
+  submission_status: 'Status', deadline_override: 'Deadline', owner: 'Owner',
+  notes: 'Notes', outcome: 'Outcome',
+};
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -43,6 +48,9 @@ export default function PortalPipeline() {
   const [documents, setDocuments] = useState<DocumentEntry[]>([]);
   const [uploading, setUploading] = useState(false);
   const [docError, setDocError] = useState('');
+  // Tenancy hardening: pipeline_history audit trail
+  const [history, setHistory] = useState<PipelineHistoryEntry[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   function load() {
     getPipeline()
@@ -67,12 +75,17 @@ export default function PortalPipeline() {
       setAmendOpen(false);
       setAmendValue('');
       loadDocuments(selected.pub_number);
+      loadHistory(selected.pub_number);
     }
   }, [selected?.pub_number]);
 
   function loadDocuments(pub_number: string) {
     setDocError('');
     listDocuments(pub_number).then(setDocuments).catch(() => setDocError('Failed to load documents'));
+  }
+
+  function loadHistory(pub_number: string) {
+    getPipelineHistory(pub_number).then(r => setHistory(r.history)).catch(() => {});
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -116,6 +129,7 @@ export default function PortalPipeline() {
     if (!selected) return;
     await patchPipeline(selected.pub_number, { submission_status: status });
     load();
+    loadHistory(selected.pub_number);
   }
 
   async function applyAmend() {
@@ -123,18 +137,19 @@ export default function PortalPipeline() {
     await patchPipeline(selected.pub_number, { deadline_override: amendValue });
     setAmendOpen(false);
     load();
+    loadHistory(selected.pub_number);
   }
 
   function handleNotesBlur() {
     if (!selected) return;
     if (notesTimer.current) clearTimeout(notesTimer.current);
-    patchPipeline(selected.pub_number, { notes }).catch(() => {});
+    patchPipeline(selected.pub_number, { notes }).then(() => loadHistory(selected.pub_number)).catch(() => {});
   }
 
   function handleOwnerBlur() {
     if (!selected) return;
     if (ownerTimer.current) clearTimeout(ownerTimer.current);
-    patchPipeline(selected.pub_number, { owner }).catch(() => {});
+    patchPipeline(selected.pub_number, { owner }).then(() => loadHistory(selected.pub_number)).catch(() => {});
   }
 
   if (loading) return <div className="loading">Loading…</div>;
@@ -354,6 +369,35 @@ export default function PortalPipeline() {
                     <input type="file" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
                   </label>
                   {docError && <div style={{ color: '#f87171', fontSize: 12, marginTop: 8 }}>{docError}</div>}
+                </div>
+
+                {/* Tenancy hardening: pipeline_history audit trail */}
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #1a2334' }}>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#4c5a70' }}
+                    onClick={() => setHistoryOpen(o => !o)}
+                  >
+                    {historyOpen ? '▾' : '▸'} Recent changes {history.length > 0 ? `(${history.length})` : ''}
+                  </button>
+                  {historyOpen && (
+                    history.length === 0 ? (
+                      <div style={{ color: '#8892a4', fontSize: 12, marginTop: 8 }}>No changes recorded yet.</div>
+                    ) : (
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {history.map((h, i) => (
+                          <div key={i} style={{ fontSize: 12, color: '#8892a4', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <span className="mono" style={{ color: '#6b7990', flexShrink: 0 }}>
+                              {formatDate(h.changed_at)} {formatTime(h.changed_at)}
+                            </span>
+                            <span>
+                              {HISTORY_FIELD_LABELS[h.field] ?? h.field}: {h.old_value ?? '—'} → {h.new_value ?? '—'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
             </div>

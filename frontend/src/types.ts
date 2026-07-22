@@ -123,6 +123,14 @@ export interface FollowupEntry extends PipelineEntry {
   outcome: string;
 }
 
+// Tenancy hardening: pipeline_history audit trail
+export interface PipelineHistoryEntry {
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  changed_at: string;
+}
+
 // CR-002 E: minimal document upload slice (shortlisted tenders only)
 export interface DocumentEntry {
   id: number;

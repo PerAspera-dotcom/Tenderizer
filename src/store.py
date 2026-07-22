@@ -30,7 +30,7 @@ from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
 from schema import composer_documents, composer_matrix, composer_requirements
 from schema import composer_style_examples, tenant_composer_settings, tenant_style_guide
 from schema import tenant_vault_rules, tenant_vault_settings
-from schema import documents, metadata, pipeline, source_health, tenant_cpv, tenant_keywords
+from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
@@ -707,14 +707,48 @@ def ensure_pipeline_entry(conn, tenant_id, pub_number):
             c.execute(insert(pipeline).values(tenant_id=tenant_id, pub_number=pub_number))
 
 
+def record_pipeline_change(conn, tenant_id, pub_number, field, old_value, new_value):
+    with conn.begin() as c:
+        c.execute(insert(pipeline_history).values(
+            tenant_id=tenant_id, pub_number=pub_number, field=field,
+            old_value=old_value, new_value=new_value,
+            changed_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_pipeline_history(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            pipeline_history.c.field, pipeline_history.c.old_value,
+            pipeline_history.c.new_value, pipeline_history.c.changed_at,
+        ).where(
+            (pipeline_history.c.tenant_id == tenant_id) & (pipeline_history.c.pub_number == pub_number)
+        ).order_by(pipeline_history.c.id.desc())).fetchall()
+    return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
+
+
 def set_pipeline_entry(conn, tenant_id, pub_number, fields):
+    """Diffs against the current row and logs only the fields that actually
+    changed — inlines the history insert (rather than calling
+    record_pipeline_change) so the read-diff-write-log sequence stays one
+    atomic transaction.
+    """
     valid = {k: v for k, v in fields.items() if k in PIPELINE_FIELDS}
     if not valid:
         return
     with conn.begin() as c:
+        current = c.execute(select(*(pipeline.c[f] for f in valid)).where(
+            (pipeline.c.tenant_id == tenant_id) & (pipeline.c.pub_number == pub_number)
+        )).fetchone()
+        changed = ({f: (current[i], valid[f]) for i, f in enumerate(valid) if current[i] != valid[f]}
+                   if current is not None else {})
         c.execute(update(pipeline).where(
             (pipeline.c.tenant_id == tenant_id) & (pipeline.c.pub_number == pub_number)
         ).values(**valid))
+        for field, (old_value, new_value) in changed.items():
+            c.execute(insert(pipeline_history).values(
+                tenant_id=tenant_id, pub_number=pub_number, field=field,
+                old_value=old_value, new_value=new_value,
+                changed_at=datetime.now(timezone.utc).isoformat()))
 
 
 def get_pipeline_entries(conn, tenant_id):

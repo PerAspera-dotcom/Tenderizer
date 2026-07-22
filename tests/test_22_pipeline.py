@@ -246,6 +246,83 @@ def test_shortlist_round_trip_end_to_end(tmp_path, monkeypatch):
     assert pipeline[0]["submission_status"] == "not_started"
 
 
+# ── Tenancy hardening: pipeline_history audit trail ─────────────────────────
+
+def test_set_pipeline_entry_logs_only_changed_fields(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("P-1"))
+    store.ensure_pipeline_entry(conn, TEST_TENANT_ID, "P-1")
+
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice", "notes": "first"})
+    history = store.get_pipeline_history(conn, TEST_TENANT_ID, "P-1")
+    assert {h["field"] for h in history} == {"owner", "notes"}
+    for h in history:
+        assert h["old_value"] is None
+        assert h["changed_at"]
+
+
+def test_set_pipeline_entry_reapplying_same_value_logs_nothing(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("P-1"))
+    store.ensure_pipeline_entry(conn, TEST_TENANT_ID, "P-1")
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice"})
+
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice"})  # no-op re-PATCH
+
+    history = store.get_pipeline_history(conn, TEST_TENANT_ID, "P-1")
+    assert len(history) == 1  # only the first, real change
+
+
+def test_pipeline_history_records_old_and_new_values_newest_first(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("P-1"))
+    store.ensure_pipeline_entry(conn, TEST_TENANT_ID, "P-1")
+
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"submission_status": "drafting"})
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"submission_status": "submitted"})
+
+    history = [h for h in store.get_pipeline_history(conn, TEST_TENANT_ID, "P-1")
+               if h["field"] == "submission_status"]
+    assert len(history) == 2
+    assert history[0]["old_value"] == "drafting" and history[0]["new_value"] == "submitted"
+    assert history[1]["old_value"] == "not_started" and history[1]["new_value"] == "drafting"
+
+
+def test_pipeline_history_is_tenant_scoped(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.ensure_tenant(conn, OTHER_TENANT_ID)
+    store.upsert(conn, TEST_TENANT_ID, _tender("P-1"))
+    store.upsert(conn, OTHER_TENANT_ID, _tender("P-1"))
+    store.ensure_pipeline_entry(conn, TEST_TENANT_ID, "P-1")
+    store.ensure_pipeline_entry(conn, OTHER_TENANT_ID, "P-1")
+
+    store.set_pipeline_entry(conn, TEST_TENANT_ID, "P-1", {"owner": "Alice"})
+    store.set_pipeline_entry(conn, OTHER_TENANT_ID, "P-1", {"owner": "Bob"})
+
+    assert [h["new_value"] for h in store.get_pipeline_history(conn, TEST_TENANT_ID, "P-1")] == ["Alice"]
+    assert [h["new_value"] for h in store.get_pipeline_history(conn, OTHER_TENANT_ID, "P-1")] == ["Bob"]
+
+
+def test_record_pipeline_change_appends_directly(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.record_pipeline_change(conn, TEST_TENANT_ID, "P-1", "notes", None, "hello")
+    history = store.get_pipeline_history(conn, TEST_TENANT_ID, "P-1")
+    assert history == [{"field": "notes", "old_value": None, "new_value": "hello",
+                         "changed_at": history[0]["changed_at"]}]
+
+
+def test_get_pipeline_history_endpoint_round_trips(tmp_path, monkeypatch):
+    _seed_api(tmp_path, monkeypatch)
+    api.patch_pipeline("P-1", api.PipelinePatch(owner="Alice"), tenant_id=TEST_TENANT_ID)
+    api.patch_pipeline("P-1", api.PipelinePatch(owner="Bob"), tenant_id=TEST_TENANT_ID)
+
+    result = api.get_pipeline_history("P-1", tenant_id=TEST_TENANT_ID)
+    assert result["pub_number"] == "P-1"
+    owner_changes = [h for h in result["history"] if h["field"] == "owner"]
+    assert len(owner_changes) == 2
+    assert owner_changes[0]["new_value"] == "Bob"  # newest first
+
+
 def test_patch_followup_only_affects_calling_tenant(tmp_path, monkeypatch):
     conn = _seed_api(tmp_path, monkeypatch)
     store.ensure_tenant(conn, OTHER_TENANT_ID)
