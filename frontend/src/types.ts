@@ -138,11 +138,41 @@ export interface VaultDoc {
   id: number;
   filename: string;
   doc_type: 'Datasheet' | 'Drawing' | 'Certificate' | string | null;
-  status: 'indexed' | 'processing';
+  status: 'indexed' | 'processing' | 'needs_review';
   metadata: Record<string, string>;
   cpv_codes: string[];
   confidence: number | null;
   fields_extracted: number | null;
+  tags: string[];
+}
+
+export interface VaultRules {
+  hints: string[];
+}
+
+export interface VaultSettings {
+  confidence_threshold: number;
+  extraction_model: string;
+}
+
+export interface ComposerSettings {
+  good_similarity: number;
+  partial_similarity: number;
+  top_k: number;
+  model: string;
+}
+
+export interface ComposerStyleGuide {
+  style_guide: string | null;
+  source_doc_count: number;
+  generated_at: string | null;
+}
+
+export interface ComposerStyleExample {
+  id: number;
+  filename: string;
+  size: number;
+  uploaded_at: string;
 }
 
 // CR-004 F3 — GET /api/vault/search result row. `text`/`similarity` are only

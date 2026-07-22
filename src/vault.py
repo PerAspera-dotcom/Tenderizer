@@ -153,12 +153,17 @@ def _parse_metadata_response(text):
     return data
 
 
-def extract_metadata(path, content_type):
+def extract_metadata(path, content_type, extra_hints=None):
     """(doc_type, metadata_dict, cpv_codes, confidence) via Claude Vision —
     PDF only (no visual content to extract from a DOCX the same way).
     Returns None if ANTHROPIC_API_KEY isn't configured, the file isn't a PDF,
     or the response couldn't be parsed — caller leaves the doc `processing`
     rather than treating any of these as a crash.
+
+    `extra_hints` — optional list of tenant-supplied extraction hints
+    (Vault Rules page), appended to the prompt verbatim so an analyst can
+    steer the model toward fields it wouldn't otherwise think to check
+    without hand-writing a new prompt per tenant.
     """
     if not os.getenv("ANTHROPIC_API_KEY"):
         return None
@@ -169,9 +174,13 @@ def extract_metadata(path, content_type):
     images = _pdf_first_pages_as_images(path)
     if not images:
         return None
+    prompt = _METADATA_PROMPT
+    if extra_hints:
+        prompt += "\nAdditional extraction guidance from this tenant:\n" + "\n".join(
+            f"- {hint}" for hint in extra_hints)
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
                for img in images]
-    content.append({"type": "text", "text": _METADATA_PROMPT})
+    content.append({"type": "text", "text": prompt})
     client = anthropic.Anthropic()
     message = client.messages.create(
         model=CLAUDE_MODEL, max_tokens=1024,
@@ -217,20 +226,29 @@ def search_vault(tenant_id, doc_ids, query, top_k=8):
     return chunks[:top_k]
 
 
-def process_upload(tenant_id, doc_id, path, content_type):
+def process_upload(tenant_id, doc_id, path, content_type, extra_hints=None, confidence_threshold=None):
     """The full background-task pipeline for one uploaded document: embed
     for retrieval, then extract display metadata. Returns the fields
     `store.update_vault_document_metadata` needs; always ends in a terminal
-    status ('indexed') — there's no retry queue in this slice, so a doc that
-    got no metadata (no API key, unsupported type, or an unparseable
-    response) still becomes indexed with empty metadata, not stuck
-    'processing' forever.
+    status ('indexed' or 'needs_review') — there's no retry queue in this
+    slice, so a doc that got no metadata (no API key, unsupported type, or an
+    unparseable response) still becomes indexed with empty metadata, not
+    stuck 'processing' forever.
+
+    `confidence_threshold` (Vault Settings) — when the extraction succeeds
+    but its self-reported confidence is below this, status is
+    'needs_review' instead of 'indexed' so the analyst notices it in the
+    Library list; a failed extraction (no confidence to compare) is left as
+    'indexed' as before, unaffected by the threshold.
     """
     ingest_and_embed(tenant_id, doc_id, path, content_type)
-    extracted = extract_metadata(path, content_type)
+    extracted = extract_metadata(path, content_type, extra_hints=extra_hints)
     if extracted is None:
         return {"doc_type": None, "metadata": {}, "cpv_codes": [], "confidence": None,
                 "fields_extracted": 0, "status": "indexed"}
     doc_type, metadata, cpv_codes, confidence = extracted
+    status = "indexed"
+    if confidence_threshold is not None and confidence is not None and confidence < confidence_threshold:
+        status = "needs_review"
     return {"doc_type": doc_type, "metadata": metadata, "cpv_codes": cpv_codes,
-            "confidence": confidence, "fields_extracted": len(metadata), "status": "indexed"}
+            "confidence": confidence, "fields_extracted": len(metadata), "status": status}

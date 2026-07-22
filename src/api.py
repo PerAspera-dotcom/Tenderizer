@@ -644,7 +644,11 @@ VAULT_UPLOAD_DIR = ROOT / "data" / "vault_uploads"
 
 
 def _run_vault_processing(tenant_id, doc_id, path, content_type):
-    result = vault.process_upload(tenant_id, doc_id, path, content_type)
+    conn = _db()
+    hints = store.get_vault_rules(conn, tenant_id)["hints"]
+    threshold = store.get_vault_settings(conn, tenant_id)["confidence_threshold"]
+    result = vault.process_upload(tenant_id, doc_id, path, content_type,
+                                   extra_hints=hints, confidence_threshold=threshold)
     store.update_vault_document_metadata(
         _db(), tenant_id, doc_id, doc_type=result["doc_type"], metadata=result["metadata"],
         cpv_codes=result["cpv_codes"], confidence=result["confidence"],
@@ -675,8 +679,9 @@ async def ingest_vault_document(background: BackgroundTasks, file: UploadFile = 
 
 
 @app.get("/api/vault/docs")
-def get_vault_docs(q: Optional[str] = None, tenant_id: int = Depends(get_current_tenant_id)):
-    results = store.list_vault_documents(_db(), tenant_id, q=q)
+def get_vault_docs(q: Optional[str] = None, tag: Optional[str] = None,
+                    tenant_id: int = Depends(get_current_tenant_id)):
+    results = store.list_vault_documents(_db(), tenant_id, q=q, tag=tag)
     processing = sum(1 for d in results if d["status"] == "processing")
     return {"total": len(results), "processing": processing, "results": results}
 
@@ -752,6 +757,51 @@ def search_vault_endpoint(query: Optional[str] = None, cpv: Optional[str] = None
                          "cpv_codes": d["cpv_codes"], "confidence": d["confidence"],
                          "text": c["text"], "similarity": c["similarity"]})
     return {"results": results}
+
+
+class VaultTagsBody(BaseModel):
+    tags: list[str]
+
+@app.patch("/api/vault/docs/{document_id}/tags")
+def patch_vault_doc_tags(document_id: int, body: VaultTagsBody,
+                          tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    if store.get_vault_document(conn, tenant_id, document_id) is None:
+        raise HTTPException(404, "Document not found")
+    store.set_vault_document_tags(conn, tenant_id, document_id, body.tags)
+    return {"id": document_id, "tags": body.tags}
+
+
+@app.get("/api/vault/tags")
+def get_vault_tags(tenant_id: int = Depends(get_current_tenant_id)):
+    return {"tags": store.list_vault_tags(_db(), tenant_id)}
+
+
+class VaultRulesBody(BaseModel):
+    hints: list[str]
+
+@app.get("/api/vault/rules")
+def get_vault_rules_config(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_vault_rules(_db(), tenant_id)
+
+@app.put("/api/vault/rules")
+def put_vault_rules_config(body: VaultRulesBody, tenant_id: int = Depends(get_current_tenant_id)):
+    store.set_vault_rules(_db(), tenant_id, body.hints)
+    return {"saved": True}
+
+
+class VaultSettingsBody(BaseModel):
+    confidence_threshold: Optional[float] = None
+
+@app.get("/api/vault/settings")
+def get_vault_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
+    settings = store.get_vault_settings(_db(), tenant_id)
+    return {**settings, "extraction_model": vault.CLAUDE_MODEL}
+
+@app.put("/api/vault/settings")
+def put_vault_settings_config(body: VaultSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
+    store.set_vault_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
+    return {"saved": True}
 
 
 # ── Composer — per-tender proposal drafting pipeline ────────────────────────
@@ -1000,7 +1050,11 @@ def resolve_composer_requirement(requirement_id: int, tenant_id: int = Depends(g
 def _run_composer_generate(tenant_id, pub_number):
     conn = _db()
     requirements = store.list_composer_requirements(conn, tenant_id, pub_number)
-    for r in composer.run_generate(tenant_id, pub_number, requirements):
+    style_guide = store.get_style_guide(conn, tenant_id)["style_guide"]
+    settings = store.get_composer_settings(conn, tenant_id)
+    for r in composer.run_generate(tenant_id, pub_number, requirements, style_guide=style_guide,
+                                    top_k=settings["top_k"], good_similarity=settings["good_similarity"],
+                                    partial_similarity=settings["partial_similarity"]):
         store.update_composer_requirement_result(conn, tenant_id, r["id"], r["gap_status"],
                                                   r["similarity"], r["response_text"], r["citations"])
 
@@ -1098,6 +1152,94 @@ def download_composer_gaps(pub_number: str, tenant_id: int = Depends(get_current
     if not path.exists():
         raise HTTPException(404, "No gaps report generated yet")
     return FileResponse(str(path), filename="gaps_report.txt", media_type="text/plain")
+
+
+# ── Composer Settings + Style Guide — tenant-wide, not tender-scoped ────────
+
+class ComposerSettingsBody(BaseModel):
+    good_similarity:    Optional[float] = None
+    partial_similarity: Optional[float] = None
+    top_k:              Optional[int]   = None
+
+@app.get("/api/composer/settings")
+def get_composer_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
+    settings = store.get_composer_settings(_db(), tenant_id)
+    return {**settings, "model": composer.CLAUDE_MODEL}
+
+@app.put("/api/composer/settings")
+def put_composer_settings_config(body: ComposerSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
+    store.set_composer_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
+    return {"saved": True}
+
+
+@app.get("/api/composer/style")
+def get_composer_style(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_style_guide(_db(), tenant_id)
+
+
+class ComposerStyleBody(BaseModel):
+    style_guide: str
+
+@app.put("/api/composer/style")
+def put_composer_style(body: ComposerStyleBody, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    current = store.get_style_guide(conn, tenant_id)
+    store.set_style_guide(conn, tenant_id, body.style_guide, current["source_doc_count"],
+                           datetime.now(timezone.utc).isoformat())
+    return store.get_style_guide(conn, tenant_id)
+
+
+STYLE_UPLOAD_DIR = ROOT / "data" / "composer_style_uploads"
+
+
+@app.post("/api/composer/style/examples")
+async def upload_style_example(file: UploadFile = File(...),
+                                 tenant_id: int = Depends(get_current_tenant_id)):
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, "File too large")
+
+    tenant_dir = STYLE_UPLOAD_DIR / str(tenant_id)
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    ext = pathlib.Path(file.filename or "").suffix[:10]
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    storage_path = tenant_dir / stored_name
+    storage_path.write_bytes(content)
+
+    extracted_text = vault.parse_document(str(storage_path), file.content_type) or ""
+    doc_id = store.add_style_example(_db(), tenant_id, file.filename or stored_name,
+                                      file.content_type, len(content), str(storage_path), extracted_text)
+    return {"id": doc_id, "filename": file.filename or stored_name}
+
+
+@app.get("/api/composer/style/examples")
+def list_style_examples(tenant_id: int = Depends(get_current_tenant_id)):
+    return {"results": store.list_style_examples(_db(), tenant_id)}
+
+
+@app.delete("/api/composer/style/examples/{example_id}")
+def delete_style_example(example_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    example = store.get_style_example(conn, tenant_id, example_id)
+    if example is None:
+        raise HTTPException(404, "Example not found")
+    store.delete_style_example(conn, tenant_id, example_id)
+    if os.path.exists(example["storage_path"]):
+        os.remove(example["storage_path"])
+    return {"deleted": True}
+
+
+@app.post("/api/composer/style/extract")
+def extract_composer_style(tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    texts = store.get_style_example_texts(conn, tenant_id)
+    if not texts:
+        raise HTTPException(409, "Upload at least one example proposal before extracting a style guide")
+    guide = composer.extract_style_guide(texts)
+    if guide is None:
+        raise HTTPException(409, "ANTHROPIC_API_KEY is not configured")
+    store.set_style_guide(conn, tenant_id, guide, len(texts), datetime.now(timezone.utc).isoformat())
+    return store.get_style_guide(conn, tenant_id)
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

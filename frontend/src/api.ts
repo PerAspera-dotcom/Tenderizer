@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, DocumentEntry, VaultDoc, VaultSearchResponse, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -190,15 +190,56 @@ export async function getLatestReportBlob(): Promise<Blob> {
 
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
-export function listVaultDocs(q?: string): Promise<{ total: number; processing: number; results: VaultDoc[] }> {
-  const qs = q ? `?q=${encodeURIComponent(q)}` : '';
-  return apiFetch(`/api/vault/docs${qs}`);
+export function listVaultDocs(q?: string, tag?: string): Promise<{ total: number; processing: number; results: VaultDoc[] }> {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (tag) params.set('tag', tag);
+  const qs = params.toString();
+  return apiFetch(`/api/vault/docs${qs ? '?' + qs : ''}`);
 }
 
 export function uploadVaultDoc(file: File): Promise<VaultDoc> {
   const form = new FormData();
   form.append('file', file);
   return apiFetch<VaultDoc>('/api/vault/ingest', { method: 'POST', body: form });
+}
+
+export function setVaultDocTags(id: number, tags: string[]): Promise<{ id: number; tags: string[] }> {
+  return apiFetch(`/api/vault/docs/${id}/tags`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tags }),
+  });
+}
+
+export function listVaultTags(): Promise<{ tags: string[] }> {
+  return apiFetch('/api/vault/tags');
+}
+
+// ── Vault Rules / Settings ───────────────────────────────────────────────────
+
+export function getVaultRules(): Promise<VaultRules> {
+  return apiFetch('/api/vault/rules');
+}
+
+export function putVaultRules(hints: string[]): Promise<{ saved: boolean }> {
+  return apiFetch('/api/vault/rules', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hints }),
+  });
+}
+
+export function getVaultSettings(): Promise<VaultSettings> {
+  return apiFetch('/api/vault/settings');
+}
+
+export function putVaultSettings(body: Partial<VaultSettings>): Promise<{ saved: boolean }> {
+  return apiFetch('/api/vault/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 // CR-004 F3 — Composer's "Source materials" panel: search the Vault library
@@ -301,4 +342,48 @@ export function downloadComposerMatrixBlob(pub: string): Promise<Blob> {
 
 export function downloadComposerGapsBlob(pub: string): Promise<Blob> {
   return _downloadComposerBlob(pub, 'gaps_report.txt');
+}
+
+// ── Composer Settings / Style Guide (tenant-wide, not tender-scoped) ────────
+
+export function getComposerSettings(): Promise<ComposerSettings> {
+  return apiFetch('/api/composer/settings');
+}
+
+export function putComposerSettings(body: Partial<ComposerSettings>): Promise<{ saved: boolean }> {
+  return apiFetch('/api/composer/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export function getComposerStyle(): Promise<ComposerStyleGuide> {
+  return apiFetch('/api/composer/style');
+}
+
+export function putComposerStyle(style_guide: string): Promise<ComposerStyleGuide> {
+  return apiFetch('/api/composer/style', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ style_guide }),
+  });
+}
+
+export function listStyleExamples(): Promise<{ results: ComposerStyleExample[] }> {
+  return apiFetch('/api/composer/style/examples');
+}
+
+export function uploadStyleExample(file: File): Promise<{ id: number; filename: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetch('/api/composer/style/examples', { method: 'POST', body: form });
+}
+
+export function deleteStyleExample(id: number): Promise<{ deleted: boolean }> {
+  return apiFetch(`/api/composer/style/examples/${id}`, { method: 'DELETE' });
+}
+
+export function extractComposerStyle(): Promise<ComposerStyleGuide> {
+  return apiFetch('/api/composer/style/extract', { method: 'POST' });
 }

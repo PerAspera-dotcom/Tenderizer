@@ -14,10 +14,14 @@ import PortalsHealth from './pages/scout/PortalsHealth';
 import MatchingConfig from './pages/scout/MatchingConfig';
 import Settings from './pages/scout/Settings';
 import VaultLibrary from './pages/vault/VaultLibrary';
+import VaultRules from './pages/vault/VaultRules';
+import VaultCollections from './pages/vault/VaultCollections';
+import VaultSettings from './pages/vault/VaultSettings';
 import ComposerIngest from './pages/composer/ComposerIngest';
 import ProposalReview from './pages/composer/ProposalReview';
 import GapsReport from './pages/composer/GapsReport';
-import StubPage from './pages/StubPage';
+import ComposerStyle from './pages/composer/ComposerStyle';
+import ComposerSettings from './pages/composer/ComposerSettings';
 
 function Router() {
   const { pathname } = useLocation();
@@ -34,14 +38,14 @@ function Router() {
     '/scout/matching': <Layout><MatchingConfig /></Layout>,
     '/scout/settings': <Layout><Settings /></Layout>,
     '/vault/library': <Layout><VaultLibrary /></Layout>,
-    '/vault/rules': <Layout><StubPage title="Metadata Rules" subtitle="Define extraction rules for Vault documents" /></Layout>,
-    '/vault/collections': <Layout><StubPage title="Collections" subtitle="Group and tag your document library" /></Layout>,
-    '/vault/settings': <Layout><StubPage title="Vault Settings" subtitle="Extraction model, confidence thresholds" /></Layout>,
+    '/vault/rules': <Layout><VaultRules /></Layout>,
+    '/vault/collections': <Layout><VaultCollections /></Layout>,
+    '/vault/settings': <Layout><VaultSettings /></Layout>,
     '/composer/ingest': <Layout><ComposerIngest /></Layout>,
     '/composer/review': <Layout><ProposalReview /></Layout>,
     '/composer/gaps': <Layout><GapsReport /></Layout>,
-    '/composer/style': <Layout><StubPage title="Style Guide" subtitle="House style extracted from example proposals" /></Layout>,
-    '/composer/settings': <Layout><StubPage title="Composer Settings" subtitle="API key, thresholds, model" /></Layout>,
+    '/composer/style': <Layout><ComposerStyle /></Layout>,
+    '/composer/settings': <Layout><ComposerSettings /></Layout>,
   };
 
   // CR-002 F/D-D: Calendar is now the Portal's default landing screen.

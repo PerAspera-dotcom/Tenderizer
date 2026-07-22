@@ -243,7 +243,8 @@ def test_get_vault_docs_search_filters_results(tmp_path, monkeypatch):
 def test_run_vault_processing_updates_store(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
     doc_id = store.add_vault_document(conn, TEST_TENANT_ID, "spec.pdf", "application/pdf", 1, "/p1")
-    monkeypatch.setattr(vault, "process_upload", lambda tenant_id, doc_id, path, content_type: {
+    monkeypatch.setattr(vault, "process_upload", lambda tenant_id, doc_id, path, content_type,
+                         extra_hints=None, confidence_threshold=None: {
         "doc_type": "Datasheet", "metadata": {"Material": "PES"}, "cpv_codes": ["39522530"],
         "confidence": 0.9, "fields_extracted": 1, "status": "indexed"})
 

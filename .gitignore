@@ -17,6 +17,7 @@ data/vault_uploads/
 data/vault_chroma/
 data/composer_chroma/
 data/composer_uploads/
+data/composer_style_uploads/
 data/composer_output/
 data/backups/
 reports/*.xlsx

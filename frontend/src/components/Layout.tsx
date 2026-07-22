@@ -10,7 +10,7 @@ type AppId = 'portal' | 'scout' | 'vault' | 'composer';
 const VAULT_NAV: NavItem[] = [
   { label: 'Library', path: '/vault/library' },
   { label: 'Metadata Rules', path: '/vault/rules' },
-  { label: 'Collections', path: '/vault/collections' },
+  { label: 'Tags', path: '/vault/collections' },
   { label: 'Settings', path: '/vault/settings' },
 ];
 
@@ -51,10 +51,7 @@ const SCOUT_NAV: NavItem[] = [
   { label: 'Settings', path: '/scout/settings' },
 ];
 
-const STUB_PATHS = [
-  '/vault/rules', '/vault/collections', '/vault/settings',
-  '/composer/style', '/composer/settings',
-];
+const STUB_PATHS: string[] = [];
 
 const APP_INFO: Record<AppId, { name: string; subtitle: string; badge: string; color: string }> = {
   portal: { name: 'Portal', subtitle: 'Pipeline, deadlines & foll…', badge: 'PORTAL', color: '#2EE6D4' },

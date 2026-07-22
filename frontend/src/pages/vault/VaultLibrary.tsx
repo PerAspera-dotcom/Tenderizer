@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { listVaultDocs, uploadVaultDoc } from '../../api';
+import { useSearchParams } from '../../router';
+import { listVaultDocs, uploadVaultDoc, setVaultDocTags } from '../../api';
 import type { VaultDoc } from '../../types';
 
 function TypePill({ type }: { type: string }) {
@@ -27,11 +28,15 @@ function MetadataChip({ value }: { value: string }) {
 }
 
 export default function VaultLibrary() {
+  const [params, setParams] = useSearchParams();
+  const tagFilter = params.get('tag') ?? undefined;
+
   const [docs, setDocs] = useState<VaultDoc[]>([]);
   const [total, setTotal] = useState(0);
   const [processing, setProcessing] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const [tagDraft, setTagDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -39,7 +44,7 @@ export default function VaultLibrary() {
 
   async function refresh(q: string) {
     try {
-      const body = await listVaultDocs(q || undefined);
+      const body = await listVaultDocs(q || undefined, tagFilter);
       setDocs(body.results);
       setTotal(body.total);
       setProcessing(body.processing);
@@ -57,7 +62,7 @@ export default function VaultLibrary() {
     const handle = setTimeout(() => refresh(search), 250);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  }, [search, tagFilter]);
 
   // Poll while anything is still processing (parse/embed/metadata-extraction
   // run as a background task — see src/vault.py's process_upload).
@@ -66,9 +71,25 @@ export default function VaultLibrary() {
     const handle = setInterval(() => refresh(search), 3000);
     return () => clearInterval(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [processing, search]);
+  }, [processing, search, tagFilter]);
 
   const selected = docs.find(d => d.id === selectedId) ?? null;
+
+  async function addTag() {
+    const tag = tagDraft.trim();
+    if (!tag || !selected || selected.tags.includes(tag)) return;
+    const next = [...selected.tags, tag];
+    await setVaultDocTags(selected.id, next);
+    setDocs(ds => ds.map(d => d.id === selected.id ? { ...d, tags: next } : d));
+    setTagDraft('');
+  }
+
+  async function removeTag(tag: string) {
+    if (!selected) return;
+    const next = selected.tags.filter(t => t !== tag);
+    await setVaultDocTags(selected.id, next);
+    setDocs(ds => ds.map(d => d.id === selected.id ? { ...d, tags: next } : d));
+  }
 
   async function handleFilesSelected(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -102,6 +123,18 @@ export default function VaultLibrary() {
       </p>
 
       {error && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+      {tagFilter && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ color: '#8a97ac', fontSize: 12 }}>Filtered by tag:</span>
+          <span className="mono" style={{ background: 'rgba(96,165,250,0.08)', color: '#9cc1fb', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 5, fontSize: 11, padding: '2px 8px' }}>
+            {tagFilter}
+          </span>
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => setParams(new URLSearchParams())}>
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Search + action */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
@@ -176,9 +209,20 @@ export default function VaultLibrary() {
                     ))}
                   </div>
                 )}
+                {doc.tags.length > 0 && (
+                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
+                    {doc.tags.map(tag => (
+                      <span key={tag} className="mono" style={{ background: 'rgba(96,165,250,0.08)', color: '#9cc1fb', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 5, fontSize: 10, padding: '1px 6px' }}>
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {doc.status === 'indexed' ? (
                     <><span className="dot-live" /><span style={{ fontSize: 11, color: '#34d399' }}>Indexed</span></>
+                  ) : doc.status === 'needs_review' ? (
+                    <><span style={{ fontSize: 11 }}>⚠</span><span style={{ fontSize: 11, color: '#f87171' }}>Needs review</span></>
                   ) : (
                     <><span style={{ fontSize: 11 }}>⏳</span><span style={{ fontSize: 11, color: '#e3b341' }}>Processing</span></>
                   )}
@@ -237,6 +281,30 @@ export default function VaultLibrary() {
                       </div>
                     </div>
                   )}
+                  <div style={{ borderTop: '1px solid #1f2b40', paddingTop: 12, marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 6 }}>
+                      Tags
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {selected.tags.map(tag => (
+                        <span key={tag} className="mono" style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(96,165,250,0.08)', color: '#9cc1fb', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 5, fontSize: 11, padding: '2px 4px 2px 8px' }}>
+                          {tag}
+                          <button onClick={() => removeTag(tag)} style={{ background: 'none', border: 'none', color: '#9cc1fb', cursor: 'pointer', fontSize: 12, padding: '0 4px' }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        className="input-field"
+                        style={{ flex: 1, fontSize: 12 }}
+                        placeholder="Add a tag…"
+                        value={tagDraft}
+                        onChange={e => setTagDraft(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
+                      />
+                      <button className="btn btn-blue" style={{ fontSize: 11 }} onClick={addTag} disabled={!tagDraft.trim()}>Add</button>
+                    </div>
+                  </div>
                   {selected.fields_extracted !== null && selected.confidence !== null && (
                     <div style={{ borderTop: '1px solid #1f2b40', paddingTop: 10, display: 'flex', gap: 12, color: '#8a97ac', fontSize: 12 }}>
                       <span>{selected.fields_extracted} fields extracted</span>

@@ -28,6 +28,8 @@ import match
 from normalize import record_hash
 from schema import DEFAULT_TENANT_ID, TENDERS_COLUMNS as COLUMNS
 from schema import composer_documents, composer_matrix, composer_requirements
+from schema import composer_style_examples, tenant_composer_settings, tenant_style_guide
+from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 
@@ -299,6 +301,173 @@ def set_tenant_settings(conn, tenant_id, data):
                 tenant_settings.c.tenant_id == tenant_id).values(**current))
         else:
             c.execute(insert(tenant_settings).values(tenant_id=tenant_id, **current))
+
+
+_DEFAULT_VAULT_RULES = {"hints": []}
+
+
+def get_vault_rules(conn, tenant_id):
+    with conn.connect() as c:
+        row = c.execute(select(tenant_vault_rules.c.hints).where(
+            tenant_vault_rules.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return dict(_DEFAULT_VAULT_RULES)
+    return {"hints": json.loads(row[0])}
+
+
+def set_vault_rules(conn, tenant_id, hints):
+    """Full overwrite — the frontend always sends the complete hint list
+    (add/remove happens client-side before Save), unlike the merge-semantics
+    settings tables above.
+    """
+    values = {"hints": json.dumps(hints)}
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_vault_rules.c.tenant_id).where(
+            tenant_vault_rules.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_vault_rules).where(
+                tenant_vault_rules.c.tenant_id == tenant_id).values(**values))
+        else:
+            c.execute(insert(tenant_vault_rules).values(tenant_id=tenant_id, **values))
+
+
+_DEFAULT_VAULT_SETTINGS = {"confidence_threshold": 0.6}
+
+
+def get_vault_settings(conn, tenant_id):
+    with conn.connect() as c:
+        row = c.execute(select(tenant_vault_settings.c.confidence_threshold).where(
+            tenant_vault_settings.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return dict(_DEFAULT_VAULT_SETTINGS)
+    return {"confidence_threshold": row[0]}
+
+
+def set_vault_settings(conn, tenant_id, data):
+    """Merge semantics, like set_tenant_settings: only overwrites keys
+    present in `data`.
+    """
+    current = get_vault_settings(conn, tenant_id)
+    for key in _DEFAULT_VAULT_SETTINGS:
+        if key in data:
+            current[key] = data[key]
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_vault_settings.c.tenant_id).where(
+            tenant_vault_settings.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_vault_settings).where(
+                tenant_vault_settings.c.tenant_id == tenant_id).values(**current))
+        else:
+            c.execute(insert(tenant_vault_settings).values(tenant_id=tenant_id, **current))
+
+
+_DEFAULT_COMPOSER_SETTINGS = {"good_similarity": 0.35, "partial_similarity": 0.20, "top_k": 5}
+
+
+def get_composer_settings(conn, tenant_id):
+    with conn.connect() as c:
+        row = c.execute(select(
+            tenant_composer_settings.c.good_similarity, tenant_composer_settings.c.partial_similarity,
+            tenant_composer_settings.c.top_k,
+        ).where(tenant_composer_settings.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return dict(_DEFAULT_COMPOSER_SETTINGS)
+    return {"good_similarity": row[0], "partial_similarity": row[1], "top_k": row[2]}
+
+
+def set_composer_settings(conn, tenant_id, data):
+    current = get_composer_settings(conn, tenant_id)
+    for key in _DEFAULT_COMPOSER_SETTINGS:
+        if key in data:
+            current[key] = data[key]
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_composer_settings.c.tenant_id).where(
+            tenant_composer_settings.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_composer_settings).where(
+                tenant_composer_settings.c.tenant_id == tenant_id).values(**current))
+        else:
+            c.execute(insert(tenant_composer_settings).values(tenant_id=tenant_id, **current))
+
+
+def get_style_guide(conn, tenant_id):
+    """{style_guide, source_doc_count, generated_at} — style_guide is None
+    until the first extract/save (no default text is fabricated).
+    """
+    with conn.connect() as c:
+        row = c.execute(select(
+            tenant_style_guide.c.style_guide, tenant_style_guide.c.source_doc_count,
+            tenant_style_guide.c.generated_at,
+        ).where(tenant_style_guide.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return {"style_guide": None, "source_doc_count": 0, "generated_at": None}
+    return {"style_guide": row[0], "source_doc_count": row[1], "generated_at": row[2]}
+
+
+def set_style_guide(conn, tenant_id, style_guide, source_doc_count, generated_at):
+    """Full overwrite — one style guide per tenant, replaced wholesale on
+    each extract or manual edit (see schema.py's tenant_style_guide comment).
+    """
+    values = {"style_guide": style_guide, "source_doc_count": source_doc_count,
+              "generated_at": generated_at}
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_style_guide.c.tenant_id).where(
+            tenant_style_guide.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_style_guide).where(
+                tenant_style_guide.c.tenant_id == tenant_id).values(**values))
+        else:
+            c.execute(insert(tenant_style_guide).values(tenant_id=tenant_id, **values))
+
+
+def add_style_example(conn, tenant_id, filename, content_type, size, storage_path, extracted_text):
+    with conn.begin() as c:
+        result = c.execute(insert(composer_style_examples).values(
+            tenant_id=tenant_id, filename=filename, content_type=content_type or "",
+            size=size, storage_path=storage_path, extracted_text=extracted_text or "",
+            uploaded_at=date.today().isoformat()))
+        return result.inserted_primary_key[0]
+
+
+def list_style_examples(conn, tenant_id):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            composer_style_examples.c.id, composer_style_examples.c.filename,
+            composer_style_examples.c.size, composer_style_examples.c.uploaded_at,
+        ).where(composer_style_examples.c.tenant_id == tenant_id)
+         .order_by(composer_style_examples.c.id)).fetchall()
+    return [{"id": r[0], "filename": r[1], "size": r[2], "uploaded_at": r[3]} for r in rows]
+
+
+def get_style_example_texts(conn, tenant_id):
+    """Just the extracted text of every uploaded example — what
+    extract_style_guide needs, without the row metadata list_style_examples
+    returns for the UI.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(composer_style_examples.c.extracted_text).where(
+            composer_style_examples.c.tenant_id == tenant_id)).fetchall()
+    return [r[0] for r in rows if r[0]]
+
+
+def get_style_example(conn, tenant_id, example_id):
+    with conn.connect() as c:
+        row = c.execute(select(
+            composer_style_examples.c.filename, composer_style_examples.c.storage_path,
+        ).where(
+            (composer_style_examples.c.tenant_id == tenant_id)
+            & (composer_style_examples.c.id == example_id)
+        )).fetchone()
+    if not row:
+        return None
+    return {"filename": row[0], "storage_path": row[1]}
+
+
+def delete_style_example(conn, tenant_id, example_id):
+    with conn.begin() as c:
+        c.execute(composer_style_examples.delete().where(
+            (composer_style_examples.c.tenant_id == tenant_id)
+            & (composer_style_examples.c.id == example_id)))
 
 
 def upsert(conn, tenant_id, record):
@@ -627,21 +796,23 @@ def add_vault_document(conn, tenant_id, filename, content_type, size, storage_pa
 def _vault_doc_row(r):
     return {"id": r[0], "filename": r[1], "doc_type": r[2], "status": r[3],
             "metadata": json.loads(r[4]), "cpv_codes": json.loads(r[5]),
-            "confidence": r[6], "fields_extracted": r[7]}
+            "confidence": r[6], "fields_extracted": r[7], "tags": json.loads(r[8])}
 
 
 _VAULT_LIST_COLS = (vault_documents.c.id, vault_documents.c.filename, vault_documents.c.doc_type,
                      vault_documents.c.status, vault_documents.c.metadata_json,
                      vault_documents.c.cpv_codes, vault_documents.c.confidence,
-                     vault_documents.c.fields_extracted)
+                     vault_documents.c.fields_extracted, vault_documents.c.tags)
 
 
-def list_vault_documents(conn, tenant_id, q=None):
+def list_vault_documents(conn, tenant_id, q=None, tag=None):
     """[{id, filename, doc_type, status, metadata, cpv_codes, confidence,
-    fields_extracted}], matching the VaultDoc shape the frontend expects
-    (frontend/src/types.ts). `q` matches against filename only — metadata
-    values vary too much in shape (numbers, units, free text) for a single
-    LIKE to search meaningfully across all of them.
+    fields_extracted, tags}], matching the VaultDoc shape the frontend
+    expects (frontend/src/types.ts). `q` matches against filename only —
+    metadata values vary too much in shape (numbers, units, free text) for a
+    single LIKE to search meaningfully across all of them. `tag` matches
+    exact membership in the tags array (post-filtered in Python, like
+    find_vault_documents' cpv filter, since the tag set is small).
     """
     where = vault_documents.c.tenant_id == tenant_id
     if q:
@@ -649,7 +820,28 @@ def list_vault_documents(conn, tenant_id, q=None):
     with conn.connect() as c:
         rows = c.execute(select(*_VAULT_LIST_COLS).where(where)
                           .order_by(vault_documents.c.id)).fetchall()
-    return [_vault_doc_row(r) for r in rows]
+    docs = [_vault_doc_row(r) for r in rows]
+    if tag:
+        docs = [d for d in docs if tag in d["tags"]]
+    return docs
+
+
+def set_vault_document_tags(conn, tenant_id, document_id, tags):
+    with conn.begin() as c:
+        c.execute(update(vault_documents).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        ).values(tags=json.dumps(tags)))
+
+
+def list_vault_tags(conn, tenant_id):
+    """Distinct tags in use across this tenant's library, for the Tags
+    browse page — sorted for a stable UI order.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(vault_documents.c.tags).where(
+            vault_documents.c.tenant_id == tenant_id)).fetchall()
+    tags = {t for (raw,) in rows for t in json.loads(raw)}
+    return sorted(tags)
 
 
 def get_vault_document(conn, tenant_id, document_id):
@@ -676,7 +868,7 @@ def update_vault_document_metadata(conn, tenant_id, document_id, doc_type, metad
                   fields_extracted=fields_extracted, status=status))
 
 
-def find_vault_documents(conn, tenant_id, cpv=None, material=None):
+def find_vault_documents(conn, tenant_id, cpv=None, material=None, tag=None):
     """CR-004 F3 — Composer's "Source materials" panel: indexed Vault
     documents filtered by CPV code and/or a substring match against
     extracted metadata values. Deliberately separate from
@@ -690,6 +882,8 @@ def find_vault_documents(conn, tenant_id, cpv=None, material=None):
     if material:
         needle = material.lower()
         docs = [d for d in docs if needle in json.dumps(d["metadata"]).lower()]
+    if tag:
+        docs = [d for d in docs if tag in d["tags"]]
     return docs
 
 

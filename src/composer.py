@@ -325,13 +325,13 @@ def retrieve_evidence(tenant_id, pub_number, query, roles, top_k=TOP_K):
     return chunks[:top_k]
 
 
-def _gap_status(chunks):
+def _gap_status(chunks, good_similarity=GOOD_SIMILARITY, partial_similarity=PARTIAL_SIMILARITY):
     if not chunks:
         return "completed"
     best = max(c["similarity"] for c in chunks)
-    if best >= GOOD_SIMILARITY:
+    if best >= good_similarity:
         return "complete"
-    if best >= PARTIAL_SIMILARITY:
+    if best >= partial_similarity:
         return "linked"
     return "completed"
 
@@ -372,6 +372,39 @@ def generate_response(requirement_text, evidence_chunks, style_guide=None):
     return message.content[0].text.strip()
 
 
+_STYLE_PROMPT = """You are analysing a set of example technical proposals to extract a reusable \
+writing style guide for future proposals.
+
+EXAMPLE PROPOSALS:
+{examples}
+
+Produce a style guide covering:
+- Tone (formal/informal, first vs. third person, confidence level)
+- Compliance language conventions (how compliance/conformance claims are phrased)
+- Sentence patterns (typical structure, length, opening-claim style)
+- Phrases to use and phrases to avoid
+
+Return only the style guide text, formatted as short labeled sections — no preamble, no meta-commentary \
+about the examples themselves."""
+
+
+def extract_style_guide(example_texts):
+    """Synthesizes a single house-style guide from one or more example
+    proposals' extracted text. Returns None if ANTHROPIC_API_KEY isn't
+    configured or there's no text to learn from — caller leaves the
+    tenant's style guide unchanged rather than overwriting it with nothing.
+    """
+    if not os.getenv("ANTHROPIC_API_KEY") or not example_texts:
+        return None
+    examples = "\n\n---\n\n".join(example_texts)
+    prompt = _STYLE_PROMPT.format(examples=examples)
+    import anthropic
+    client = anthropic.Anthropic()
+    message = client.messages.create(model=CLAUDE_MODEL, max_tokens=1200,
+                                      messages=[{"role": "user", "content": prompt}])
+    return message.content[0].text.strip()
+
+
 _REFINE_PROMPT = """You wrote this proposal response:
 {current}
 
@@ -400,7 +433,8 @@ def refine_section(requirement_text, current_response, feedback, evidence_chunks
     return message.content[0].text.strip()
 
 
-def run_generate(tenant_id, pub_number, requirements, style_guide=None):
+def run_generate(tenant_id, pub_number, requirements, style_guide=None,
+                  top_k=TOP_K, good_similarity=GOOD_SIMILARITY, partial_similarity=PARTIAL_SIMILARITY):
     """requirements: [{id, title, extracted}] (validated requirements only —
     the caller enforces the validation gate). For each: retrieve tech
     evidence, derive gap_status from similarity, and generate a response
@@ -408,12 +442,16 @@ def run_generate(tenant_id, pub_number, requirements, style_guide=None):
     [{id, gap_status, similarity, response_text, citations}] in the same
     order given — the caller persists these via
     store.update_composer_requirement_result.
+
+    `top_k`/`good_similarity`/`partial_similarity` — tenant-configurable
+    (Composer Settings); default to this module's constants when not
+    overridden.
     """
     results = []
     for req in requirements:
         query = f"{req['title']} {req['extracted']}"
-        tech_chunks = retrieve_evidence(tenant_id, pub_number, query, roles=["tech"])
-        status = _gap_status(tech_chunks)
+        tech_chunks = retrieve_evidence(tenant_id, pub_number, query, roles=["tech"], top_k=top_k)
+        status = _gap_status(tech_chunks, good_similarity=good_similarity, partial_similarity=partial_similarity)
         best_sim = max((c["similarity"] for c in tech_chunks), default=0.0)
         response_text, citations = None, []
         if status != "completed":

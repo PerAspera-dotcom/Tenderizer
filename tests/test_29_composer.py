@@ -523,7 +523,7 @@ def test_run_composer_generate_persists_results_and_writes_docx(tmp_path, monkey
         {"title": "Fire resistance", "extracted": "M2 required", "source": "§4.2", "confidence": 0.9}])[0]
     store.update_composer_requirement_validation(conn, TEST_TENANT_ID, req_id, "validated")
 
-    monkeypatch.setattr(composer, "run_generate", lambda tenant_id, pub_number, requirements, style_guide=None: [
+    monkeypatch.setattr(composer, "run_generate", lambda tenant_id, pub_number, requirements, style_guide=None, top_k=None, good_similarity=None, partial_similarity=None: [
         {"id": req_id, "gap_status": "complete", "similarity": 0.6,
          "response_text": "We comply.", "citations": [{"doc": "tech.pdf", "score": 0.6}]},
     ])
@@ -601,7 +601,7 @@ def test_download_proposal_after_generate(tmp_path, monkeypatch):
     req_id = store.add_composer_requirements(conn, TEST_TENANT_ID, "P-1", [
         {"title": "T", "extracted": "E", "source": "S", "confidence": 0.5}])[0]
     store.update_composer_requirement_validation(conn, TEST_TENANT_ID, req_id, "validated")
-    monkeypatch.setattr(composer, "run_generate", lambda tenant_id, pub_number, requirements, style_guide=None: [
+    monkeypatch.setattr(composer, "run_generate", lambda tenant_id, pub_number, requirements, style_guide=None, top_k=None, good_similarity=None, partial_similarity=None: [
         {"id": req_id, "gap_status": "complete", "similarity": 0.6, "response_text": "ok", "citations": []}])
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 

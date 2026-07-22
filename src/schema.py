@@ -153,6 +153,10 @@ vault_documents = Table(
     Column("confidence", Float, nullable=True),
     Column("fields_extracted", Integer, nullable=True),
     Column("uploaded_at", Text, nullable=False, server_default=""),
+    # Freeform analyst-assigned tags (Vault Collections, scoped down to tags
+    # rather than a full collections entity — see CLAUDE_CODE_NEXT.md). Same
+    # JSON-array-of-strings encoding as cpv_codes.
+    Column("tags", Text, nullable=False, server_default="[]"),
 )
 VAULT_DOCUMENTS_COLUMNS = [c.name for c in vault_documents.columns]
 
@@ -265,6 +269,57 @@ tenant_settings = Table(
     Column("run_window_end", Text, nullable=False, server_default="06:00"),       # "HH:MM"
     Column("notify_on_complete", Boolean, nullable=False, server_default="0"),
     Column("notify_email", Text, nullable=False, server_default=""),
+)
+
+# Vault/Composer secondary-feature config (settings pages formerly stubbed —
+# see CLAUDE_CODE_NEXT.md). Same lazy-default, single-row-per-tenant shape as
+# tenant_settings: no row until the first PUT, get_* falls back to a default
+# dict in store.py rather than requiring ensure_tenant to seed these.
+
+tenant_vault_rules = Table(
+    "tenant_vault_rules", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("hints", Text, nullable=False, server_default="[]"),  # JSON: [str]
+)
+
+tenant_vault_settings = Table(
+    "tenant_vault_settings", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("confidence_threshold", Float, nullable=False, server_default="0.6"),
+)
+
+tenant_composer_settings = Table(
+    "tenant_composer_settings", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("good_similarity", Float, nullable=False, server_default="0.35"),
+    Column("partial_similarity", Float, nullable=False, server_default="0.20"),
+    Column("top_k", Integer, nullable=False, server_default="5"),
+)
+
+# One style guide per tenant (not per-tender — "house style" is meant to be
+# reused across every future proposal), overwritten wholesale on each
+# extract/edit rather than merged like the settings tables above.
+tenant_style_guide = Table(
+    "tenant_style_guide", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("style_guide", Text, nullable=True),
+    Column("source_doc_count", Integer, nullable=False, server_default="0"),
+    Column("generated_at", Text, nullable=True),
+)
+
+# Example proposals uploaded purely to derive tenant_style_guide from —
+# tenant-wide like vault_documents, not tied to any one tender's composer
+# session, since the style they capture should apply to every future draft.
+composer_style_examples = Table(
+    "composer_style_examples", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False, server_default=""),
+    Column("size", Integer, nullable=False, server_default="0"),
+    Column("storage_path", Text, nullable=False),
+    Column("extracted_text", Text, nullable=False, server_default=""),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
 )
 
 # CR-004 F4 — one row per (tenant, source, run) scrape attempt, logged by
