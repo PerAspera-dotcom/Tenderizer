@@ -33,7 +33,7 @@ Status as of 2026-07-08. **tender-izer.com is fully live and verified end-to-end
 
 - **Backend (manual, until the GitHub App is authorized — see above):**
   `curl -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_TOKEN" -d '{"query":"mutation { serviceInstanceDeploy(environmentId: \"7f5e871b-2567-47da-9cc4-e14434400746\", serviceId: \"5b12317b-18b8-44e2-9596-e945eef0b4ce\", latestCommit: true) }"}'` — or ask me.
-- **Frontend:** `cd frontend && npx vercel deploy --prod` (linked via CLI, not GitHub import — pushes alone don't redeploy it).
+- **Frontend:** `npx vercel deploy --prod` **from the repo root** (not `frontend/`) — the Vercel project's Root Directory is set to `frontend`, so running it from inside `frontend/` makes the CLI look for `frontend/frontend` and fail. Linked via CLI, not GitHub import — pushes alone don't redeploy it.
 - **Rollback:** both Railway and Vercel keep full deployment history — redeploy a prior build from either dashboard.
 - **Data:** Postgres lives only on Railway now. No more `pg_dump`/`pg_restore` needed unless migrating hosts again.
 
