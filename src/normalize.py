@@ -374,6 +374,22 @@ def _boamp_currency(node):
     return node.get("@currencyID") if isinstance(node, dict) else None
 
 
+def _boamp_dict(node):
+    """A dict node stays as-is; anything else (missing, or a list — eForms'
+    XML-to-JSON conversion turns a *repeated* sibling element into a list but
+    leaves a single one as a bare dict, and several of these wrapper fields
+    can legitimately repeat on a real notice even when the notice is
+    otherwise single-lot/single-winner: verified live, crashing with
+    "'list' object has no attribute 'get'" first for efac:Tenderer
+    [consortium winners] and then for efac:LotTender [multiple tender refs
+    under one lot result]) is treated as "this one field wasn't usably
+    present" — the surrounding winner-org correlation (which is what
+    actually has to be unambiguous) is unaffected, only that one leaf value
+    is left None rather than guessed.
+    """
+    return node if isinstance(node, dict) else {}
+
+
 def _boamp_award_detail(raw):
     """Same idea as _ted_award_detail, but reading BOAMP's raw eForms
     XML-as-JSON (`donnees`) directly rather than a flat search-API field
@@ -426,38 +442,38 @@ def _boamp_award_detail(raw):
         orgs = [orgs]
     winner_org = next(
         (o for o in orgs if _boamp_text(
-            (o.get("efac:Company") or {}).get("cac:PartyIdentification", {}).get("cbc:ID")
+            _boamp_dict(_boamp_dict(o.get("efac:Company")).get("cac:PartyIdentification")).get("cbc:ID")
         ) == winner_org_id),
         None,
     )
     if winner_org is None:
         return None
 
-    company = winner_org.get("efac:Company") or {}
-    address = company.get("cac:PostalAddress") or {}
-    settled_contract = notice_result.get("efac:SettledContract") or {}
+    company = _boamp_dict(winner_org.get("efac:Company"))
+    address = _boamp_dict(company.get("cac:PostalAddress"))
+    settled_contract = _boamp_dict(notice_result.get("efac:SettledContract"))
     framework = notice_result.get("efbc:OverallMaximumFrameworkContractsAmount")
 
     listed = winner_org.get("efbc:ListedOnRegulatedMarketIndicator")
     detail = {
         "winner": {
-            "registration_number": _boamp_text((company.get("cac:PartyLegalEntity") or {}).get("cbc:CompanyID")),
+            "registration_number": _boamp_text(_boamp_dict(company.get("cac:PartyLegalEntity")).get("cbc:CompanyID")),
             "city": _boamp_text(address.get("cbc:CityName")),
             "postal_code": _boamp_text(address.get("cbc:PostalZone")),
             "nuts": _boamp_text(address.get("cbc:CountrySubentityCode")),
-            "country": _boamp_text((address.get("cac:Country") or {}).get("cbc:IdentificationCode")),
+            "country": _boamp_text(_boamp_dict(address.get("cac:Country")).get("cbc:IdentificationCode")),
             "size": _boamp_text(company.get("efbc:CompanySizeCode")),
             "regulated_market": (listed == "true") if listed is not None else None,
         },
         "lot": {
-            "identifier": _boamp_text((lot_result.get("efac:TenderLot") or {}).get("cbc:ID")),
+            "identifier": _boamp_text(_boamp_dict(lot_result.get("efac:TenderLot")).get("cbc:ID")),
             "title": None,  # not reliably present at this path across vintages — never guessed
             "duration": None,
         },
         "contract": {
-            "identifier": _boamp_text((settled_contract.get("efac:ContractReference") or {}).get("cbc:ID")),
+            "identifier": _boamp_text(_boamp_dict(settled_contract.get("efac:ContractReference")).get("cbc:ID")),
             "conclusion_date": _trim_date(_boamp_text(settled_contract.get("cbc:IssueDate"))),
-            "tender_identifier": _boamp_text((lot_result.get("efac:LotTender") or {}).get("cbc:ID")),
+            "tender_identifier": _boamp_text(_boamp_dict(lot_result.get("efac:LotTender")).get("cbc:ID")),
         },
         "framework_max_value": _boamp_amount(framework),
         "framework_max_currency": _boamp_currency(framework),

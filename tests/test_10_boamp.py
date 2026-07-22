@@ -272,6 +272,25 @@ def test_boamp_award_detail_malformed_json_not_a_crash(raw_boamp_supply):
     assert normalize.normalize_boamp(raw)["raw_award_detail"] is None
 
 
+def test_boamp_award_detail_survives_lot_tender_as_list(raw_boamp_supply):
+    # efac:LotTender/efac:TenderLot under a LotResult can also be a list
+    # (multiple tender refs under one lot result) rather than a single dict
+    # — verified against a real production notice (26-72674) that crashed a
+    # live scrape. Unlike the winner-org correlation itself, these are just
+    # descriptive reference fields: losing them shouldn't discard the
+    # correctly-resolved winner/address detail alongside them.
+    donnees = _real_exhibit_donnees()
+    ext = donnees["EFORMS"]["ContractAwardNotice"]["ext:UBLExtensions"]["ext:UBLExtension"]["ext:ExtensionContent"]["efext:EformsExtension"]
+    ext["efac:NoticeResult"]["efac:LotResult"]["efac:LotTender"] = [
+        {"cbc:ID": {"#text": "TEN-0001"}}, {"cbc:ID": {"#text": "TEN-0002"}},
+    ]
+    raw = dict(raw_boamp_supply, donnees=json.dumps(donnees))
+    detail = normalize.normalize_boamp(raw)["raw_award_detail"]
+    assert detail is not None
+    assert detail["winner"]["registration_number"] == "50233392500084"  # unaffected
+    assert "tender_identifier" not in detail["contract"]  # ambiguous field dropped, not guessed
+
+
 def test_boamp_award_detail_none_for_joint_venture_tenderer(raw_boamp_supply):
     # efac:Tenderer becomes a list, not a single dict, when the winning bid
     # was a consortium of several organizations — verified against a real
