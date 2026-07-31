@@ -14,7 +14,7 @@ Tender Feed via the API.
 import config
 import store
 import api
-from conftest import TEST_TENANT_ID
+from conftest import TEST_TENANT_ID, make_identity
 
 
 def _rec(pub_number, exclude_reason="", deadline="2030-01-01T00:00:00+00:00"):
@@ -110,7 +110,7 @@ def test_patch_tender_belonging_to_another_tenant_is_403(tmp_path, monkeypatch):
     store.upsert(other_conn, 999, _rec("OTHER-TENANT-1"))
 
     try:
-        api.patch_tender("OTHER-TENANT-1", api.StatusBody(status="reviewed"), tenant_id=TEST_TENANT_ID)
+        api.patch_tender("OTHER-TENANT-1", api.StatusBody(status="reviewed"), identity=make_identity())
         assert False, "expected HTTPException"
     except Exception as e:
         assert getattr(e, "status_code", None) == 403

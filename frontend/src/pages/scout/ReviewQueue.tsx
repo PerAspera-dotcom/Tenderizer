@@ -74,7 +74,7 @@ export default function ReviewQueue() {
       .finally(() => setLoading(false));
   }
 
-  // CR-002 C2: dismiss note — inline panel, optional, not required to dismiss.
+  // CR-006 D2: dismissal reason — inline panel, required to dismiss.
   const [dismissOpen, setDismissOpen] = useState(false);
   const [dismissNote, setDismissNote] = useState('');
 
@@ -101,7 +101,8 @@ export default function ReviewQueue() {
 
   function confirmDismiss() {
     const note = dismissNote.trim();
-    applyStatus('dismissed', note || undefined);
+    if (!note) return;  // CR-006 D2: client-side guard — mirrors the API's 400
+    applyStatus('dismissed', note);
     setDismissOpen(false);
     setDismissNote('');
   }
@@ -360,8 +361,8 @@ export default function ReviewQueue() {
                   </button>
                   <button
                     className="btn"
-                    disabled={patching}
-                    onClick={() => selected.status === 'dismissed' ? applyStatus('dismissed') : setDismissOpen(o => !o)}
+                    disabled={patching || selected.status === 'dismissed'}
+                    onClick={() => setDismissOpen(o => !o)}
                     style={{
                       background: selected.status === 'dismissed' ? '#f87171' : 'rgba(248,113,113,0.1)',
                       color: selected.status === 'dismissed' ? '#0f1623' : '#f87171',
@@ -383,11 +384,11 @@ export default function ReviewQueue() {
                   )}
                 </div>
 
-                {/* CR-002 C2: optional note captured on dismiss */}
+                {/* CR-006 D2: reason required to dismiss — Confirm stays disabled until non-empty */}
                 {dismissOpen && selected.status !== 'dismissed' && (
                   <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 8 }}>
-                      Note (optional)
+                      Reason (required)
                     </div>
                     <textarea
                       className="input-field"
@@ -397,7 +398,7 @@ export default function ReviewQueue() {
                       onChange={e => setDismissNote(e.target.value)}
                     />
                     <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                      <button className="btn" disabled={patching} onClick={confirmDismiss}
+                      <button className="btn" disabled={patching || !dismissNote.trim()} onClick={confirmDismiss}
                               style={{ background: '#f87171', color: '#0f1623', fontWeight: 600, fontSize: 12 }}>
                         Confirm dismiss
                       </button>
@@ -410,12 +411,19 @@ export default function ReviewQueue() {
                   </div>
                 )}
 
-                {selected.status === 'dismissed' && selected.dismiss_note && (
+                {selected.status === 'dismissed' && selected.dismissal_reason && (
                   <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 6 }}>
-                      Dismiss note
+                      Dismissal reason
                     </div>
-                    <div style={{ fontSize: 13, color: '#c8d0de' }}>{selected.dismiss_note}</div>
+                    <div style={{ fontSize: 13, color: '#c8d0de' }}>{selected.dismissal_reason}</div>
+                    {(selected.dismissed_by || selected.dismissed_at) && (
+                      <div style={{ fontSize: 11, color: '#8892a4', marginTop: 6 }}>
+                        {selected.dismissed_by && <>by {selected.dismissed_by}</>}
+                        {selected.dismissed_by && selected.dismissed_at && ' · '}
+                        {selected.dismissed_at && formatDate(selected.dismissed_at)}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

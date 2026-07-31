@@ -63,9 +63,20 @@ tenders = Table(
     Column("tag_line_en", Text, nullable=False, server_default=""),
     Column("description_en", Text, nullable=False, server_default=""),
     Column("translation_status", Text, nullable=False, server_default=""),
-    # CR-002 C2: optional note captured on dismiss. Nullable, no server_default —
-    # absent means NULL, never '' (see store.upsert's _NULL_DEFAULT handling).
-    Column("dismiss_note", Text, nullable=True),
+    # CR-006: reason captured on dismiss — required by the API whenever status
+    # transitions to 'dismissed' (enforced at the app layer, not a DB CHECK).
+    # Nullable in the schema itself (never-dismissed tenders have none), no
+    # server_default — absent means NULL, never '' (see store.upsert's
+    # _NULL_DEFAULT handling). Renamed from CR-002 C2's optional `dismiss_note`.
+    Column("dismissal_reason", Text, nullable=True),
+    # CR-006 D3: who/when for the dismissal above. Stamped server-side from the
+    # authenticated Clerk identity, never client-supplied (see api.py). Kept on
+    # the record after a reinstate (set_status only overwrites on a fresh
+    # dismiss, never clears) so it doubles as the CR's "history" requirement —
+    # there's no separate audit-log table for tender status (see
+    # CLAUDE_CODE_NEXT.md's tenancy-hardening note: no audit trail for tenders).
+    Column("dismissed_by", Text, nullable=True),
+    Column("dismissed_at", Text, nullable=True),
     # CR-002 A: additive classification tag, always populated (never blank —
     # see classification.classify's DEFAULT_TYPE fallback). Award fields are
     # best-effort extraction (classification.extract_award_info) and stay

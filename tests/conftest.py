@@ -1,8 +1,21 @@
 import pytest
 
+import api
+
 # Phase 2/3 multi-tenancy: any tenant_id works for tests since it's just a
 # scoping key, but tests share this one constant for consistency/readability.
 TEST_TENANT_ID = 1
+
+# CR-006: api.patch_tender takes an Identity (tenant_id + account_name, both
+# normally resolved from a verified Clerk token) rather than a bare
+# tenant_id — tests construct one directly rather than going through
+# get_current_identity's JWT verification, mirroring how TEST_TENANT_ID
+# already bypasses get_current_tenant_id.
+TEST_ACCOUNT_NAME = "tester@example.com"
+
+
+def make_identity(tenant_id=TEST_TENANT_ID, account_name=TEST_ACCOUNT_NAME):
+    return api.Identity(tenant_id=tenant_id, account_name=account_name)
 
 
 @pytest.fixture(autouse=True)

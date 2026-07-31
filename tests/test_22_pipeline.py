@@ -12,7 +12,7 @@ from fastapi import BackgroundTasks
 
 import store
 import api
-from conftest import TEST_TENANT_ID
+from conftest import TEST_TENANT_ID, make_identity
 
 OTHER_TENANT_ID = 999
 
@@ -308,7 +308,7 @@ def test_shortlist_round_trip_end_to_end(tmp_path, monkeypatch):
     assert api.get_pipeline(tenant_id=TEST_TENANT_ID) == []
 
     # The Review Queue's Shortlist action.
-    api.patch_tender("ROUNDTRIP-1", api.StatusBody(status="shortlisted"), tenant_id=TEST_TENANT_ID)
+    api.patch_tender("ROUNDTRIP-1", api.StatusBody(status="shortlisted"), identity=make_identity())
 
     # After: gone from the `new` list/badge count...
     assert "ROUNDTRIP-1" not in {r["pub_number"] for r in api.list_tenders(

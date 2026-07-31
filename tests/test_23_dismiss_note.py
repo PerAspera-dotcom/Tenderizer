@@ -1,13 +1,16 @@
-"""Step 23 — CR-002 C2: optional note on dismiss.
+"""Step 23 — CR-002 C2's dismissal note, since CR-006 renamed to dismissal_reason.
 
-dismiss_note is additive (schema.py) and NULL by default (store.upsert's
-_NULL_DEFAULT) — "no note" must stay distinguishable from "", and a note is
-only ever written alongside the dismiss action itself (store.set_status),
-never as a standalone field.
+dismissal_reason is additive (schema.py) and NULL by default (store.upsert's
+_NULL_DEFAULT) — "no reason" must stay distinguishable from "", and a reason
+is only ever written alongside the dismiss action itself (store.set_status),
+never as a standalone field. CR-006 makes the reason mandatory through the
+API layer — see test_36_dismissal_attribution.py for that, plus attribution
+and reinstate coverage. This file stays focused on the store-level
+read/write/persist-across-transitions behavior, mirroring its original scope.
 """
 import store
 import api
-from conftest import TEST_TENANT_ID
+from conftest import TEST_TENANT_ID, make_identity
 
 
 def _rec(pub_number):
@@ -31,44 +34,46 @@ def _get(conn, pub_number):
     return next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == pub_number)
 
 
-def test_fresh_ingest_has_no_dismiss_note(tmp_path, monkeypatch):
+def test_fresh_ingest_has_no_dismissal_reason(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
-    assert _get(conn, "PUB-1")["dismiss_note"] is None
+    assert _get(conn, "PUB-1")["dismissal_reason"] is None
 
 
-def test_set_status_dismissed_with_note_persists_it(tmp_path, monkeypatch):
+def test_set_status_dismissed_with_reason_persists_it(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
-    store.set_status(conn, TEST_TENANT_ID, "PUB-1", "dismissed", dismiss_note="Wrong sector, mislabelled CPV")
+    store.set_status(conn, TEST_TENANT_ID, "PUB-1", "dismissed",
+                      dismissal_reason="Wrong sector, mislabelled CPV")
     rec = _get(conn, "PUB-1")
     assert rec["status"] == "dismissed"
-    assert rec["dismiss_note"] == "Wrong sector, mislabelled CPV"
+    assert rec["dismissal_reason"] == "Wrong sector, mislabelled CPV"
 
 
-def test_set_status_dismissed_without_note_leaves_it_null(tmp_path, monkeypatch):
+def test_set_status_dismissed_without_reason_leaves_it_null(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
     store.set_status(conn, TEST_TENANT_ID, "PUB-1", "dismissed")
-    assert _get(conn, "PUB-1")["dismiss_note"] is None
+    assert _get(conn, "PUB-1")["dismissal_reason"] is None
 
 
-def test_set_status_none_note_does_not_clear_an_existing_note(tmp_path, monkeypatch):
+def test_set_status_none_reason_does_not_clear_an_existing_reason(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
-    store.set_status(conn, TEST_TENANT_ID, "PUB-1", "dismissed", dismiss_note="Duplicate of another notice")
-    store.set_status(conn, TEST_TENANT_ID, "PUB-1", "shortlisted")  # no note arg -> untouched
-    assert _get(conn, "PUB-1")["dismiss_note"] == "Duplicate of another notice"
+    store.set_status(conn, TEST_TENANT_ID, "PUB-1", "dismissed",
+                      dismissal_reason="Duplicate of another notice")
+    store.set_status(conn, TEST_TENANT_ID, "PUB-1", "shortlisted")  # no reason arg -> untouched
+    assert _get(conn, "PUB-1")["dismissal_reason"] == "Duplicate of another notice"
 
 
-def test_api_patch_dismissed_with_note(tmp_path, monkeypatch):
+def test_api_patch_dismissed_with_reason(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     result = api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Out of scope"),
-                               tenant_id=TEST_TENANT_ID)
+                               identity=make_identity())
     assert result["status"] == "dismissed"
     rec = api.get_tender("PUB-1", include_excluded=True, tenant_id=TEST_TENANT_ID)
-    assert rec["dismiss_note"] == "Out of scope"
+    assert rec["dismissal_reason"] == "Out of scope"
 
 
 def test_api_patch_note_ignored_on_non_dismiss_status(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     api.patch_tender("PUB-1", api.StatusBody(status="reviewed", note="should not be stored"),
-                      tenant_id=TEST_TENANT_ID)
+                      identity=make_identity())
     rec = api.get_tender("PUB-1", include_excluded=True, tenant_id=TEST_TENANT_ID)
-    assert rec["dismiss_note"] is None
+    assert rec["dismissal_reason"] is None

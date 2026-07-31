@@ -23,7 +23,9 @@ export interface Tender {
   translation_status: string;
   value: string;
   value_currency: string;
-  dismiss_note: string | null;
+  dismissal_reason: string | null;
+  dismissed_by: string | null;
+  dismissed_at: string | null;
   notice_type: string;
   awarded_to: string | null;
   awarded_value: string | null;

@@ -106,6 +106,31 @@ def _db():
 _bearer = HTTPBearer(auto_error=False)
 
 
+def _verify_claims(creds: Optional[HTTPAuthorizationCredentials]) -> dict:
+    """Shared by get_current_tenant_id and get_current_identity below — both
+    need a verified claims dict, just project different fields out of it.
+    401 on a missing or invalid/expired token.
+    """
+    if creds is None:
+        raise HTTPException(401, "Missing bearer token")
+    try:
+        return auth.verify_token(creds.credentials)
+    except auth.AuthError as e:
+        raise HTTPException(401, f"Invalid or expired token: {e}")
+    # auth.AuthNotConfigured (CLERK_JWKS_URL unset) deliberately propagates
+    # uncaught -> FastAPI's default 500 — that's a server misconfiguration,
+    # not a bad token, and every token would fail identically until fixed.
+
+
+def _resolve_tenant_id(claims: dict) -> int:
+    clerk_user_id = claims["sub"]
+    conn = _db()
+    tenant_id = store.get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
+    if tenant_id is None:
+        tenant_id = store.create_tenant_for_clerk_user(conn, clerk_user_id, claims.get("email"))
+    return tenant_id
+
+
 def get_current_tenant_id(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> int:
@@ -117,22 +142,34 @@ def get_current_tenant_id(
     first time is auto-provisioned a new tenant (1 Clerk user = 1 tenant,
     confirmed choice — see schema.py) rather than rejected.
     """
-    if creds is None:
-        raise HTTPException(401, "Missing bearer token")
-    try:
-        claims = auth.verify_token(creds.credentials)
-    except auth.AuthError as e:
-        raise HTTPException(401, f"Invalid or expired token: {e}")
-    # auth.AuthNotConfigured (CLERK_JWKS_URL unset) deliberately propagates
-    # uncaught -> FastAPI's default 500 — that's a server misconfiguration,
-    # not a bad token, and every token would fail identically until fixed.
+    claims = _verify_claims(creds)
+    return _resolve_tenant_id(claims)
 
-    clerk_user_id = claims["sub"]
-    conn = _db()
-    tenant_id = store.get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
-    if tenant_id is None:
-        tenant_id = store.create_tenant_for_clerk_user(conn, clerk_user_id, claims.get("email"))
-    return tenant_id
+
+class Identity:
+    """tenant_id + a human-readable account name, both taken from a verified
+    Clerk token — never client-supplied. CR-006 D3: dismissal attribution
+    needs "who", not just "which tenant", which get_current_tenant_id alone
+    doesn't expose (its 54 other call sites only ever needed the tenant).
+    Kept as its own dependency rather than changing get_current_tenant_id's
+    return type, to avoid touching every existing route.
+    """
+    def __init__(self, tenant_id: int, account_name: str):
+        self.tenant_id = tenant_id
+        self.account_name = account_name
+
+
+def get_current_identity(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> Identity:
+    claims = _verify_claims(creds)
+    tenant_id = _resolve_tenant_id(claims)
+    # Clerk session tokens always carry 'sub'; 'email' is only present if the
+    # Clerk instance's session token template includes it (true here — see
+    # create_tenant_for_clerk_user's claims.get("email") above). Fall back to
+    # the Clerk user id so attribution never silently ends up empty.
+    account_name = claims.get("email") or claims["sub"]
+    return Identity(tenant_id=tenant_id, account_name=account_name)
 
 
 def require_ops_access(
@@ -249,10 +286,14 @@ def list_tenders(
     else:
         records = [r for r in records if (r.get("notice_type") or "tender") != "past_tender"]
 
-    # Default: hide expired deadlines; show future deadlines and empty-deadline rows
-    today = date.today().isoformat()
-    records = [r for r in records
-               if not r.get("deadline") or r["deadline"][:10] >= today]
+    # Default: hide expired deadlines; show future deadlines and empty-deadline
+    # rows. CR-006: a dismissed tender is being reviewed for its dismissal, not
+    # its live deadline — an old dismissal with a since-passed deadline must
+    # still show up on the Dismissed tab, so this filter doesn't apply there.
+    if status != "dismissed":
+        today = date.today().isoformat()
+        records = [r for r in records
+                   if not r.get("deadline") or r["deadline"][:10] >= today]
 
     records.sort(key=lambda r: (r.get("deadline") or "9999-99-99"))
     return {"total": len(records), "results": records[offset: offset + limit]}
@@ -276,13 +317,14 @@ def get_tender(pub_number: str, include_excluded: bool = False,
 
 class StatusBody(BaseModel):
     status: str
-    note: Optional[str] = None  # CR-002 C2: optional dismiss note
+    note: Optional[str] = None  # CR-006: dismissal reason — required when status="dismissed"
 
 _VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed"}
 
 @app.patch("/api/tenders/{pub_number}")
 def patch_tender(pub_number: str, body: StatusBody,
-                  tenant_id: int = Depends(get_current_tenant_id)):
+                  identity: Identity = Depends(get_current_identity)):
+    tenant_id = identity.tenant_id
     if body.status not in _VALID_STATUSES:
         raise HTTPException(422, f"status must be one of {_VALID_STATUSES}")
     conn = _db()
@@ -290,11 +332,18 @@ def patch_tender(pub_number: str, body: StatusBody,
         if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
             raise HTTPException(403, "Forbidden")
         raise HTTPException(404, "Tender not found")
-    # note is only ever persisted alongside status="dismissed" — a note sent
-    # with any other status is silently ignored rather than 422ing, since the
-    # field only makes sense on the dismiss action (CR-002 C2).
-    note = body.note if body.status == "dismissed" else None
-    store.set_status(conn, tenant_id, pub_number, body.status, dismiss_note=note)
+    # CR-006 D2: a reason is only relevant, and now required, on the dismiss
+    # action itself — a note sent with any other status is silently ignored
+    # rather than 422ing, same as CR-002 C2's original optional-note behavior.
+    if body.status == "dismissed":
+        if not (body.note or "").strip():
+            raise HTTPException(400, "A reason is required to dismiss a tender")
+        store.set_status(conn, tenant_id, pub_number, body.status,
+                          dismissal_reason=body.note.strip(),
+                          dismissed_by=identity.account_name,
+                          dismissed_at=datetime.now(timezone.utc).isoformat())
+    else:
+        store.set_status(conn, tenant_id, pub_number, body.status)
     return {"pub_number": pub_number, "status": body.status}
 
 

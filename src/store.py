@@ -36,10 +36,12 @@ from schema import tenant_portals, tenant_settings, tenants, tenders, translatio
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
                   "language", "tag_line_en", "description_en", "translation_status"}
-# CR-002 C2/A: columns that must stay real SQL NULL when absent, distinguishable
-# from "" (dismiss_note: schema.py comment; awarded_*: CR-002 A1's "never
-# fabricated" rule — a null award field must not look like a found-but-empty one).
-_NULL_DEFAULT = {"dismiss_note", "awarded_to", "awarded_value", "awarded_currency"}
+# CR-002 C2/A / CR-006: columns that must stay real SQL NULL when absent,
+# distinguishable from "" (dismissal_reason/dismissed_by/dismissed_at:
+# schema.py comment; awarded_*: CR-002 A1's "never fabricated" rule — a null
+# award field must not look like a found-but-empty one).
+_NULL_DEFAULT = {"dismissal_reason", "dismissed_by", "dismissed_at",
+                 "awarded_to", "awarded_value", "awarded_currency"}
 # Same "never fabricate absence" rule as _NULL_DEFAULT, but the value itself
 # is a JSON object rather than plain text when present — needs its own
 # json.dumps/loads pass, unlike _JSON's columns (which always default to an
@@ -65,11 +67,22 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE tenders ADD COLUMN tag_line_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN description_en TEXT DEFAULT ''",
     "ALTER TABLE tenders ADD COLUMN translation_status TEXT DEFAULT ''",
-    "ALTER TABLE tenders ADD COLUMN dismiss_note TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN notice_type TEXT DEFAULT 'tender'",
     "ALTER TABLE tenders ADD COLUMN awarded_to TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN awarded_value TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN awarded_currency TEXT DEFAULT NULL",
+    # CR-006: rename dismiss_note -> dismissal_reason (SQLite 3.25+ supports
+    # RENAME COLUMN), preserving any notes already recorded. The old
+    # "ADD COLUMN dismiss_note" step is deliberately gone (not just left as a
+    # no-op) — on a fresh DB, create_all() creates dismissal_reason directly
+    # and never creates dismiss_note at all, so keeping that step would
+    # resurrect a stray, permanently-unused dismiss_note column on every new
+    # DB. The ADD COLUMN fallback below only fires for DBs that had neither
+    # column (pre-CR-002, never ran the old migration either).
+    "ALTER TABLE tenders RENAME COLUMN dismiss_note TO dismissal_reason",
+    "ALTER TABLE tenders ADD COLUMN dismissal_reason TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN dismissed_by TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN dismissed_at TEXT DEFAULT NULL",
 ]
 
 
@@ -527,16 +540,24 @@ def pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
     return row is not None
 
 
-def set_status(conn, tenant_id, pub_number, status, dismiss_note=None):
-    """CR-002 C2: `dismiss_note` is only ever written here, alongside the
-    status change that produced it — never as a standalone update — so a note
-    can't outlive or predate the dismiss action it was attached to. Passing
-    None leaves the existing stored note untouched (e.g. a later Shortlist
-    after a dismiss note was recorded doesn't need to clear it).
+def set_status(conn, tenant_id, pub_number, status, dismissal_reason=None,
+                dismissed_by=None, dismissed_at=None):
+    """CR-002 C2 / CR-006: `dismissal_reason`/`dismissed_by`/`dismissed_at` are
+    only ever written here, alongside the status change that produced them —
+    never as a standalone update — so they can't outlive or predate the
+    dismiss action they were attached to. Passing None for any of them leaves
+    the existing stored value untouched (e.g. a later reinstate after a
+    dismissal doesn't clear who/why/when it was dismissed — that's the
+    "history" CR-006 D4 asks for; see schema.py's dismissed_by comment for why
+    there's no separate audit-log table backing it).
     """
     values = {"status": status}
-    if dismiss_note is not None:
-        values["dismiss_note"] = dismiss_note
+    if dismissal_reason is not None:
+        values["dismissal_reason"] = dismissal_reason
+    if dismissed_by is not None:
+        values["dismissed_by"] = dismissed_by
+    if dismissed_at is not None:
+        values["dismissed_at"] = dismissed_at
     with conn.begin() as c:
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)

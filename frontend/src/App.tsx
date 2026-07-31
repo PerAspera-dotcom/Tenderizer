@@ -10,6 +10,7 @@ import Dashboard from './pages/scout/Dashboard';
 import TenderFeed from './pages/scout/TenderFeed';
 import PastTenders from './pages/scout/PastTenders';
 import ReviewQueue from './pages/scout/ReviewQueue';
+import DismissedTenders from './pages/scout/DismissedTenders';
 import PortalsHealth from './pages/scout/PortalsHealth';
 import MatchingConfig from './pages/scout/MatchingConfig';
 import Settings from './pages/scout/Settings';
@@ -34,6 +35,7 @@ function Router() {
     '/scout/tender-feed': <Layout><TenderFeed /></Layout>,
     '/scout/past-tenders': <Layout><PastTenders /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
+    '/scout/dismissed': <Layout><DismissedTenders /></Layout>,
     '/scout/portals': <Layout><PortalsHealth /></Layout>,
     '/scout/matching': <Layout><MatchingConfig /></Layout>,
     '/scout/settings': <Layout><Settings /></Layout>,

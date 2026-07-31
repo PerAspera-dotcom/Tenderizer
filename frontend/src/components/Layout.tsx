@@ -46,6 +46,7 @@ const SCOUT_NAV: NavItem[] = [
   { label: 'Tender Feed', path: '/scout/tender-feed' },
   { label: 'Past Tenders', path: '/scout/past-tenders' },
   { label: 'Review Queue', path: '/scout/review-queue', badgeKey: 'newCount' },
+  { label: 'Dismissed', path: '/scout/dismissed' },
   { label: 'Portals & Health', path: '/scout/portals', groupStart: 'Configuration' },
   { label: 'Matching Config', path: '/scout/matching' },
   { label: 'Settings', path: '/scout/settings' },
