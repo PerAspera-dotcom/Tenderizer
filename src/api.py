@@ -347,6 +347,11 @@ def patch_tender(pub_number: str, body: StatusBody,
     return {"pub_number": pub_number, "status": body.status}
 
 
+@app.get("/api/tenders/{pub_number}/history")
+def get_tender_history(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    return {"pub_number": pub_number, "history": store.get_tender_history(_db(), tenant_id, pub_number)}
+
+
 # ── Stats & health ────────────────────────────────────────────────────────────
 
 @app.get("/api/stats")

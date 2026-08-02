@@ -32,6 +32,8 @@ from schema import composer_style_examples, tenant_composer_settings, tenant_sty
 from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
+from schema import (tender_history, vault_document_history, composer_document_history,
+                     composer_requirement_history)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -559,9 +561,28 @@ def set_status(conn, tenant_id, pub_number, status, dismissal_reason=None,
     if dismissed_at is not None:
         values["dismissed_at"] = dismissed_at
     with conn.begin() as c:
+        current = c.execute(select(tenders.c.status).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        )).fetchone()
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
         ).values(**values))
+        if current is not None and current[0] != status:
+            c.execute(insert(tender_history).values(
+                tenant_id=tenant_id, pub_number=pub_number, field="status",
+                old_value=current[0], new_value=status,
+                changed_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_tender_history(conn, tenant_id, pub_number):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_history.c.field, tender_history.c.old_value,
+            tender_history.c.new_value, tender_history.c.changed_at,
+        ).where(
+            (tender_history.c.tenant_id == tenant_id) & (tender_history.c.pub_number == pub_number)
+        ).order_by(tender_history.c.id.desc())).fetchall()
+    return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
 
 
 def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, status):
@@ -887,9 +908,29 @@ def list_vault_documents(conn, tenant_id, q=None, tag=None):
 
 def set_vault_document_tags(conn, tenant_id, document_id, tags):
     with conn.begin() as c:
+        current = c.execute(select(vault_documents.c.tags).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        )).fetchone()
         c.execute(update(vault_documents).where(
             (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
         ).values(tags=json.dumps(tags)))
+        if current is not None and json.loads(current[0]) != tags:
+            c.execute(insert(vault_document_history).values(
+                tenant_id=tenant_id, document_id=document_id, field="tags",
+                old_value=current[0], new_value=json.dumps(tags),
+                changed_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_vault_document_history(conn, tenant_id, document_id):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            vault_document_history.c.field, vault_document_history.c.old_value,
+            vault_document_history.c.new_value, vault_document_history.c.changed_at,
+        ).where(
+            (vault_document_history.c.tenant_id == tenant_id)
+            & (vault_document_history.c.document_id == document_id)
+        ).order_by(vault_document_history.c.id.desc())).fetchall()
+    return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
 
 
 def list_vault_tags(conn, tenant_id):
@@ -959,9 +1000,17 @@ def update_vault_document_metadata_fields(conn, tenant_id, document_id, metadata
     extraction's own outputs) untouched.
     """
     with conn.begin() as c:
+        current = c.execute(select(vault_documents.c.metadata_json).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        )).fetchone()
         c.execute(update(vault_documents).where(
             (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
         ).values(metadata_json=json.dumps(metadata), fields_extracted=len(metadata)))
+        if current is not None and json.loads(current[0]) != metadata:
+            c.execute(insert(vault_document_history).values(
+                tenant_id=tenant_id, document_id=document_id, field="metadata",
+                old_value=current[0], new_value=json.dumps(metadata),
+                changed_at=datetime.now(timezone.utc).isoformat()))
 
 
 def add_composer_document(conn, tenant_id, pub_number, filename, content_type, size,
@@ -1020,9 +1069,31 @@ def update_composer_document_status(conn, tenant_id, document_id, status, pages,
 
 def set_composer_document_role(conn, tenant_id, document_id, role):
     with conn.begin() as c:
+        current = c.execute(select(
+            composer_documents.c.pub_number, composer_documents.c.role_override,
+        ).where(
+            (composer_documents.c.tenant_id == tenant_id) & (composer_documents.c.id == document_id)
+        )).fetchone()
         c.execute(update(composer_documents).where(
             (composer_documents.c.tenant_id == tenant_id) & (composer_documents.c.id == document_id)
         ).values(role_override=role))
+        if current is not None and current[1] != role:
+            c.execute(insert(composer_document_history).values(
+                tenant_id=tenant_id, pub_number=current[0], document_id=document_id, field="role",
+                old_value=current[1], new_value=role,
+                changed_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_composer_document_history(conn, tenant_id, document_id):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            composer_document_history.c.field, composer_document_history.c.old_value,
+            composer_document_history.c.new_value, composer_document_history.c.changed_at,
+        ).where(
+            (composer_document_history.c.tenant_id == tenant_id)
+            & (composer_document_history.c.document_id == document_id)
+        ).order_by(composer_document_history.c.id.desc())).fetchall()
+    return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
 
 
 def set_composer_matrix(conn, tenant_id, pub_number, filename, storage_path, requirement_count):
@@ -1122,10 +1193,33 @@ def get_composer_requirement(conn, tenant_id, requirement_id):
 
 def update_composer_requirement_validation(conn, tenant_id, requirement_id, status):
     with conn.begin() as c:
+        current = c.execute(select(
+            composer_requirements.c.pub_number, composer_requirements.c.validation,
+        ).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        )).fetchone()
         c.execute(update(composer_requirements).where(
             (composer_requirements.c.tenant_id == tenant_id)
             & (composer_requirements.c.id == requirement_id)
         ).values(validation=status))
+        if current is not None and current[1] != status:
+            c.execute(insert(composer_requirement_history).values(
+                tenant_id=tenant_id, pub_number=current[0], requirement_id=requirement_id,
+                field="validation", old_value=current[1], new_value=status,
+                changed_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_composer_requirement_history(conn, tenant_id, requirement_id):
+    with conn.connect() as c:
+        rows = c.execute(select(
+            composer_requirement_history.c.field, composer_requirement_history.c.old_value,
+            composer_requirement_history.c.new_value, composer_requirement_history.c.changed_at,
+        ).where(
+            (composer_requirement_history.c.tenant_id == tenant_id)
+            & (composer_requirement_history.c.requirement_id == requirement_id)
+        ).order_by(composer_requirement_history.c.id.desc())).fetchall()
+    return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
 
 
 def update_composer_requirement_result(conn, tenant_id, requirement_id, gap_status,
@@ -1172,10 +1266,21 @@ def update_composer_requirement_refined(conn, tenant_id, requirement_id, new_tex
 
 def mark_composer_requirement_resolved(conn, tenant_id, requirement_id):
     with conn.begin() as c:
+        current = c.execute(select(
+            composer_requirements.c.pub_number, composer_requirements.c.resolved,
+        ).where(
+            (composer_requirements.c.tenant_id == tenant_id)
+            & (composer_requirements.c.id == requirement_id)
+        )).fetchone()
         c.execute(update(composer_requirements).where(
             (composer_requirements.c.tenant_id == tenant_id)
             & (composer_requirements.c.id == requirement_id)
         ).values(resolved=True))
+        if current is not None and not current[1]:
+            c.execute(insert(composer_requirement_history).values(
+                tenant_id=tenant_id, pub_number=current[0], requirement_id=requirement_id,
+                field="resolved", old_value="False", new_value="True",
+                changed_at=datetime.now(timezone.utc).isoformat()))
 
 
 def get_followup_entries(conn, tenant_id):

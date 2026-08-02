@@ -136,6 +136,67 @@ pipeline_history = Table(
 )
 Index("ix_pipeline_history_tenant_pub", pipeline_history.c.tenant_id, pipeline_history.c.pub_number)
 
+# Tenancy hardening: same append-only event-log shape as pipeline_history
+# above, extended to tenders/vault/composer. No changed_by column on any of
+# these either, for the same reason as pipeline_history (tenant_id already
+# answers "who" while it's 1 Clerk user = 1 tenant) and for shape consistency
+# across all four history tables — even though tender_history's one write
+# site (api.patch_tender) already resolves a real Identity (used for
+# dismissed_by). Adding changed_by later, to any of these, is a pure additive
+# ALTER TABLE, not a redesign. tender_history only ever logs field="status" —
+# CR-006's dismissal_reason/dismissed_by/dismissed_at stay on tenders itself
+# (see that comment above); this table fills the gap for every *other*
+# status transition, which previously had no history at all.
+tender_history = Table(
+    "tender_history", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("field", Text, nullable=False),
+    Column("old_value", Text, nullable=True),
+    Column("new_value", Text, nullable=True),
+    Column("changed_at", Text, nullable=False, server_default=""),
+)
+Index("ix_tender_history_tenant_pub", tender_history.c.tenant_id, tender_history.c.pub_number)
+
+vault_document_history = Table(
+    "vault_document_history", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("document_id", Integer, ForeignKey("vault_documents.id"), nullable=False),
+    Column("field", Text, nullable=False),
+    Column("old_value", Text, nullable=True),
+    Column("new_value", Text, nullable=True),
+    Column("changed_at", Text, nullable=False, server_default=""),
+)
+Index("ix_vault_document_history_tenant_doc", vault_document_history.c.tenant_id, vault_document_history.c.document_id)
+
+composer_document_history = Table(
+    "composer_document_history", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("document_id", Integer, ForeignKey("composer_documents.id"), nullable=False),
+    Column("field", Text, nullable=False),
+    Column("old_value", Text, nullable=True),
+    Column("new_value", Text, nullable=True),
+    Column("changed_at", Text, nullable=False, server_default=""),
+)
+Index("ix_composer_document_history_tenant_doc", composer_document_history.c.tenant_id, composer_document_history.c.document_id)
+
+composer_requirement_history = Table(
+    "composer_requirement_history", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("requirement_id", Integer, ForeignKey("composer_requirements.id"), nullable=False),
+    Column("field", Text, nullable=False),
+    Column("old_value", Text, nullable=True),
+    Column("new_value", Text, nullable=True),
+    Column("changed_at", Text, nullable=False, server_default=""),
+)
+Index("ix_composer_requirement_history_tenant_req", composer_requirement_history.c.tenant_id, composer_requirement_history.c.requirement_id)
+
 # CR-002 E (D-C decided: minimal slice now — upload + store only, no
 # requirement parsing/translation; that full pipeline is Composer's Phase 2
 # Ingest & Config, POST /api/composer/ingest, deliberately not built here).

@@ -623,3 +623,93 @@ def test_download_proposal_after_generate(tmp_path, monkeypatch):
     api._run_composer_generate(TEST_TENANT_ID, "P-1")
     response = api.download_composer_proposal("P-1", tenant_id=TEST_TENANT_ID)
     assert response.filename == "technical_proposal.docx"
+
+
+# ── Cross-tenant isolation ───────────────────────────────────────────────────
+
+def test_patch_composer_document_role_404s_for_another_tenant(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    doc_id = store.add_composer_document(conn, TEST_TENANT_ID, "P-1", "mystery.pdf",
+                                          "application/pdf", 1, "/p", "unknown")
+    try:
+        api.patch_composer_document_role("P-1", doc_id, api.ComposerRoleBody(role="tech"),
+                                          tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+
+
+def test_upload_composer_matrix_403s_on_another_tenants_tender(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    try:
+        asyncio.run(api.upload_composer_matrix(
+            "P-1", file=_file(name="compliance_matrix.xlsx", content=b"fake xlsx"),
+            tenant_id=OTHER_TENANT_ID))
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 403
+
+
+def test_get_composer_session_403s_on_another_tenants_tender(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    try:
+        api.get_composer_session("P-1", tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 403
+
+
+def test_patch_composer_requirement_404s_for_another_tenant(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    req_id = store.add_composer_requirements(conn, TEST_TENANT_ID, "P-1", [
+        {"title": "T", "extracted": "E", "source": "S", "confidence": 0.5}])[0]
+    try:
+        api.patch_composer_requirement(req_id, api.ComposerValidationBody(status="validated"),
+                                        tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+    assert store.get_composer_requirement(conn, TEST_TENANT_ID, req_id)["validation"] == "pending"
+
+
+def test_resolve_composer_requirement_404s_for_another_tenant(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    req_id = store.add_composer_requirements(conn, TEST_TENANT_ID, "P-1", [
+        {"title": "T", "extracted": "E", "source": "S", "confidence": 0.5}])[0]
+    try:
+        api.resolve_composer_requirement(req_id, tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+    assert store.get_composer_requirement(conn, TEST_TENANT_ID, req_id)["resolved"] is False
+
+
+def test_post_composer_generate_403s_on_another_tenants_tender(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    background = BackgroundTasks()
+    try:
+        api.post_composer_generate("P-1", background, api.ComposerGenerateBody(),
+                                    tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 403
+
+
+def test_download_composer_proposal_and_gaps_403_on_another_tenants_tender(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    for fn in (api.download_composer_proposal, api.download_composer_gaps):
+        try:
+            fn("P-1", tenant_id=OTHER_TENANT_ID)
+            assert False, "expected HTTPException"
+        except Exception as e:
+            assert getattr(e, "status_code", None) == 403
+
+
+def test_download_composer_matrix_404s_on_another_tenants_tender(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    store.set_composer_matrix(conn, TEST_TENANT_ID, "P-1", "matrix.xlsx", "/m", 10)
+    try:
+        api.download_composer_matrix("P-1", tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404

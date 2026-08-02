@@ -13,6 +13,8 @@ import vault
 import api
 from conftest import TEST_TENANT_ID
 
+OTHER_TENANT_ID = 999
+
 
 # ── chunk_text ────────────────────────────────────────────────────────────────
 
@@ -253,3 +255,53 @@ def test_run_vault_processing_updates_store(tmp_path, monkeypatch):
     doc = store.list_vault_documents(api._db(), TEST_TENANT_ID)[0]
     assert doc["status"] == "indexed"
     assert doc["doc_type"] == "Datasheet"
+
+
+# ── Cross-tenant isolation ───────────────────────────────────────────────────
+
+def test_get_vault_doc_detail_404s_for_another_tenant(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    doc_id = store.add_vault_document(conn, TEST_TENANT_ID, "spec.pdf", "application/pdf", 1, "/p1")
+    try:
+        api.get_vault_doc_detail(doc_id, tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+
+
+def test_delete_vault_doc_404s_for_another_tenant_and_is_a_no_op(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    doc_id = store.add_vault_document(conn, TEST_TENANT_ID, "spec.pdf", "application/pdf", 1, "/p1")
+    try:
+        api.delete_vault_doc(doc_id, tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+    docs = store.list_vault_documents(conn, TEST_TENANT_ID)
+    assert len(docs) == 1
+    assert docs[0]["id"] == doc_id
+
+
+def test_validate_vault_metadata_404s_for_another_tenant(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    doc_id = store.add_vault_document(conn, TEST_TENANT_ID, "spec.pdf", "application/pdf", 1, "/p1")
+    body = api.VaultMetadataValidationBody(document_id=doc_id, metadata={"Material": "PES"})
+    try:
+        api.validate_vault_metadata(body, tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+
+
+def test_patch_vault_doc_tags_404s_for_another_tenant_and_leaves_tags_unchanged(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    doc_id = store.add_vault_document(conn, TEST_TENANT_ID, "spec.pdf", "application/pdf", 1, "/p1")
+    store.set_vault_document_tags(conn, TEST_TENANT_ID, doc_id, ["fabric"])
+    body = api.VaultTagsBody(tags=["leaked"])
+    try:
+        api.patch_vault_doc_tags(doc_id, body, tenant_id=OTHER_TENANT_ID)
+        assert False, "expected HTTPException"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 404
+    docs = store.list_vault_documents(conn, TEST_TENANT_ID)
+    assert docs[0]["tags"] == ["fabric"]
