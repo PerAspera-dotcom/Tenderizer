@@ -33,17 +33,22 @@ from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 from schema import (tender_history, vault_document_history, composer_document_history,
-                     composer_requirement_history, tender_reviews, tender_relevance_overrides)
+                     composer_requirement_history, tender_reviews, tender_relevance_overrides,
+                     tender_duplicates, tenant_dedup_settings)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
                   "language", "tag_line_en", "description_en", "translation_status"}
-# CR-002 C2/A / CR-006: columns that must stay real SQL NULL when absent,
-# distinguishable from "" (dismissal_reason/dismissed_by/dismissed_at:
+# CR-002 C2/A / CR-006 / CR-007 C: columns that must stay real SQL NULL when
+# absent, distinguishable from "" (dismissal_reason/dismissed_by/dismissed_at:
 # schema.py comment; awarded_*: CR-002 A1's "never fabricated" rule — a null
-# award field must not look like a found-but-empty one).
+# award field must not look like a found-but-empty one; internal_identifier:
+# same rule — a source that didn't carry a buyer reference must not look
+# like an empty-string one that dedup.find_cross_portal_duplicates could
+# then treat as a spurious match against another equally-empty record).
 _NULL_DEFAULT = {"dismissal_reason", "dismissed_by", "dismissed_at",
-                 "awarded_to", "awarded_value", "awarded_currency"}
+                 "awarded_to", "awarded_value", "awarded_currency",
+                 "internal_identifier"}
 # Same "never fabricate absence" rule as _NULL_DEFAULT, but the value itself
 # is a JSON object rather than plain text when present — needs its own
 # json.dumps/loads pass, unlike _JSON's columns (which always default to an
@@ -85,6 +90,8 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE tenders ADD COLUMN dismissal_reason TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN dismissed_by TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN dismissed_at TEXT DEFAULT NULL",
+    # CR-007 Phase C
+    "ALTER TABLE tenders ADD COLUMN internal_identifier TEXT DEFAULT NULL",
 ]
 
 
@@ -472,6 +479,35 @@ def set_composer_settings(conn, tenant_id, data):
             c.execute(insert(tenant_composer_settings).values(tenant_id=tenant_id, **current))
 
 
+# CR-007 Phase C: same single-row-per-tenant, lazy-default, merge-on-set
+# shape as vault/composer settings above.
+_DEFAULT_DEDUP_SETTINGS = {"similarity_threshold": 0.75}
+
+
+def get_dedup_settings(conn, tenant_id):
+    with conn.connect() as c:
+        row = c.execute(select(tenant_dedup_settings.c.similarity_threshold).where(
+            tenant_dedup_settings.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return dict(_DEFAULT_DEDUP_SETTINGS)
+    return {"similarity_threshold": row[0]}
+
+
+def set_dedup_settings(conn, tenant_id, data):
+    current = get_dedup_settings(conn, tenant_id)
+    for key in _DEFAULT_DEDUP_SETTINGS:
+        if key in data:
+            current[key] = data[key]
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_dedup_settings.c.tenant_id).where(
+            tenant_dedup_settings.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_dedup_settings).where(
+                tenant_dedup_settings.c.tenant_id == tenant_id).values(**current))
+        else:
+            c.execute(insert(tenant_dedup_settings).values(tenant_id=tenant_id, **current))
+
+
 def get_style_guide(conn, tenant_id):
     """{style_guide, source_doc_count, generated_at} — style_guide is None
     until the first extract/save (no default text is fabricated).
@@ -580,6 +616,42 @@ def upsert(conn, tenant_id, record):
                 values[col] = record.get(col, "")
         c.execute(insert(tenders).values(**values))
     return True
+
+
+def upsert_tender_duplicate(conn, tenant_id, pub_number_a, pub_number_b, match_type, similarity=None):
+    """CR-007 Phase C: records a detected cross-portal duplicate pair.
+    `pub_number_a`/`b` are stored sorted so the same pair, detected from
+    either direction (or re-detected on a later run), lands on one row
+    rather than two — an upsert, not an append-only log, matching this
+    module's usual "current state" convention.
+    """
+    a, b = sorted((pub_number_a, pub_number_b))
+    values = {"match_type": match_type, "similarity": similarity,
+              "detected_at": datetime.now(timezone.utc).isoformat()}
+    key = ((tender_duplicates.c.tenant_id == tenant_id) &
+           (tender_duplicates.c.pub_number_a == a) &
+           (tender_duplicates.c.pub_number_b == b))
+    with conn.begin() as c:
+        existing = c.execute(select(tender_duplicates.c.tenant_id).where(key)).fetchone()
+        if existing:
+            c.execute(update(tender_duplicates).where(key).values(**values))
+        else:
+            c.execute(insert(tender_duplicates).values(
+                tenant_id=tenant_id, pub_number_a=a, pub_number_b=b, **values))
+
+
+def get_tender_duplicates_for_tenant(conn, tenant_id):
+    """Every duplicate pair for this org — api._attach_duplicates merges this
+    onto both sides of each pair (symmetric surfacing; see schema.py's
+    tender_duplicates comment for why this isn't tenders.supersedes).
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_duplicates.c.pub_number_a, tender_duplicates.c.pub_number_b,
+            tender_duplicates.c.match_type, tender_duplicates.c.similarity,
+        ).where(tender_duplicates.c.tenant_id == tenant_id)).fetchall()
+    return [{"pub_number_a": r[0], "pub_number_b": r[1], "match_type": r[2], "similarity": r[3]}
+            for r in rows]
 
 
 def all_records(conn, tenant_id):

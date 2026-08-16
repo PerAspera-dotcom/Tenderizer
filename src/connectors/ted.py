@@ -50,6 +50,15 @@ FIELDS = [
     "publication-number", "notice-title", "description-proc",
     "buyer-name", "buyer-country", "contract-nature", "procedure-type", "notice-type",
     "deadline-receipt-request", "place-of-performance", "classification-cpv", "links",
+    # CR-007 Phase C — the buyer's own procurement reference (BT-22-Procedure).
+    # Confirmed live (2026-08) against 5 real French notices, always populated
+    # (e.g. "2026-036", "26IMT007M") — the closest thing to a cross-portal join
+    # key: a TED notice's own `links` field is self-referential only (no BOAMP
+    # link exists anywhere in TED's ~1830-field catalog, confirmed via a live
+    # UNSUPPORTED_VALUE field-list probe), but a buyer reuses this same
+    # reference number in their BOAMP filing for the same procurement — see
+    # normalize._boamp_internal_identifier for the BOAMP-side counterpart.
+    "internal-identifier-proc",
     "estimated-value-proc", "estimated-value-cur-proc",
     "winner-name", "result-value-notice", "result-value-cur-notice",
     "tender-value", "tender-value-cur",

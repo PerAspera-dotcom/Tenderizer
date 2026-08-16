@@ -140,6 +140,10 @@ export default function TenderFeed() {
                       {t.status === 'needs_review' && t.dismissal_reason && (
                         <span title={`Needs further review: ${t.dismissal_reason}`} style={{ marginRight: 4 }}>🔎</span>
                       )}
+                      {/* CR-007 Phase C: cross-portal duplicate indicator. */}
+                      {t.duplicates.length > 0 && (
+                        <span title={`Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ marginRight: 4 }}>🔗</span>
+                      )}
                       {hasTranslatedTagLine(t) && (
                         <span title={`Translated — original: ${t.tag_line}`} style={{ marginRight: 4 }}>🌐</span>
                       )}

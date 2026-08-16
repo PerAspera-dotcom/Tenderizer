@@ -213,6 +213,11 @@ def normalize_ted(raw):
         "match_source": None,
         "url": _url(raw),
         "first_seen": None,
+        # CR-007 Phase C: buyer's own procurement reference (BT-22-Procedure) —
+        # see connectors/ted.py's FIELDS comment. Cross-portal dedup's signal 1
+        # (dedup.find_cross_portal_duplicates matches this against BOAMP's
+        # _boamp_internal_identifier for the same buyer reference).
+        "internal_identifier": raw.get("internal-identifier-proc") or None,
         # CR-001 F6: procedure-level estimated value (BT-27-Procedure). Absent on
         # most notices — value disclosure is optional under EU procurement rules.
         "value": raw.get("estimated-value-proc") or "",
@@ -284,6 +289,50 @@ def _boamp_cpv_codes(raw):
 
     walk(data)
     return _dedupe(codes)
+
+
+def _boamp_internal_identifier(raw):
+    """CR-007 Phase C: the buyer's own procurement reference (BT-22-Procedure),
+    the BOAMP-side counterpart to TED's internal-identifier-proc — see
+    connectors/ted.py's FIELDS comment for why this pairing exists at all
+    (no direct TED<->BOAMP link field exists on either portal; matching this
+    buyer-assigned reference is dedup.find_cross_portal_duplicates' signal 1).
+
+    Verified live (2026-08) against 5 real recent eForms notices: the
+    procedure-level `cac:ProcurementProject.cbc:ID` sitting directly under
+    `EFORMS.{ContractNotice|ContractAwardNotice}` — deliberately NOT the
+    same-named `cbc:ID` nested inside each `cac:ProcurementProjectLot` entry
+    (that one is the *lot's* own reference, e.g. a bare "01"/"02", and is
+    usually a different value from the procedure-level one). Falls back to
+    `CONDITION_ADMINISTRATIVE.REFERENCE_MARCHE` for pre-eForms legacy notices
+    (donnees isn't EFORMS-wrapped there — same vintage split as
+    _boamp_cpv_codes's docstring describes).
+    """
+    donnees = raw.get("donnees")
+    if not donnees:
+        return None
+    try:
+        data = json.loads(donnees)
+    except (TypeError, ValueError):
+        return None
+
+    root = data.get("EFORMS")
+    if isinstance(root, dict):
+        inner = root.get("ContractAwardNotice") or root.get("ContractNotice")
+        if isinstance(inner, dict):
+            project = inner.get("cac:ProcurementProject")
+            if isinstance(project, dict):
+                ref = _boamp_text(project.get("cbc:ID"))
+                if ref:
+                    return ref
+        return None
+
+    admin = data.get("CONDITION_ADMINISTRATIVE")
+    if isinstance(admin, dict):
+        ref = _boamp_text(admin.get("REFERENCE_MARCHE"))
+        if ref:
+            return ref
+    return None
 
 
 def _boamp_award_info(raw):
@@ -509,6 +558,10 @@ def normalize_boamp(raw):
         "match_source": None,
         "url": f'https://www.boamp.fr/pages/avis/?q=idweb:%22{idweb}%22' if idweb else "",
         "first_seen": None,
+        # CR-007 Phase C: buyer's own procurement reference — see
+        # _boamp_internal_identifier's docstring and normalize_ted's
+        # internal_identifier for the TED-side counterpart.
+        "internal_identifier": _boamp_internal_identifier(raw),
         # BOAMP exposes no value/amount field at all (verified against its live
         # OpenDataSoft schema) — always absent, so F6 never excludes on BOAMP alone.
         "value": "",

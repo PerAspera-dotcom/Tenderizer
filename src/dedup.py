@@ -21,6 +21,13 @@ from unidecode import unidecode
 TITLE_SIMILARITY_FLOOR = 0.9
 DEADLINE_WINDOW = timedelta(days=7)
 
+# CR-007 Phase C: fallback default for find_cross_portal_duplicates' signal-2
+# threshold when no tenant override exists (see store.get_dedup_settings /
+# tenant_dedup_settings) — kept as a module constant for the same reason
+# TITLE_SIMILARITY_FLOOR is, and for any caller (e.g. a test) that wants the
+# function's own default rather than threading a tenant setting through.
+DESCRIPTION_SIMILARITY_DEFAULT = 0.75
+
 
 def _normalize(text):
     text = unidecode(text or "").lower()
@@ -80,3 +87,79 @@ def find_duplicate_groups(records):
                 group.sort(key=lambda r: r.get("pub_date") or "", reverse=True)
                 groups.append(group)
     return groups
+
+
+def find_cross_portal_duplicates(records, similarity_threshold=DESCRIPTION_SIMILARITY_DEFAULT):
+    """CR-007 Phase C — cross-portal duplicate detection (e.g. the same
+    tender on both TED and a national portal like BOAMP). Two independent
+    signals, either one is enough:
+      1. Reference match — both records carry the same (normalized) buyer-
+         assigned `internal_identifier` (see normalize.py's normalize_ted /
+         _boamp_internal_identifier — neither portal exposes a literal link
+         to the other, confirmed via a live field-catalog probe of both
+         APIs; the buyer's own procurement reference is the real join key).
+         Exact match, no threshold.
+      2. Description similarity — translated descriptions (`description_en`,
+         only populated post-translation) above `similarity_threshold`, via
+         the same SequenceMatcher technique find_duplicate_groups above uses
+         for titles.
+    Unlike find_duplicate_groups, this never merges/hides anything — it only
+    reports pairs for the caller (store.upsert_tender_duplicate) to record
+    and surface on *both* records (api._attach_duplicates), per the CR:
+    "Don't silently delete either — surface the link and let the reviewer
+    act." Only cross-source pairs are considered (same-source republishes
+    are find_duplicate_groups' job); already-excluded records never
+    participate, same reasoning as find_duplicate_groups.
+
+    Deliberately does NOT bucket by country: TED returns ISO3 buyer-country
+    codes ("FRA") while normalize_boamp hardcodes ISO2 ("FR") — comparing
+    them directly would silently never match the exact TED-France/BOAMP
+    pairing this feature exists for. CPV-code sharing is the search-space
+    filter instead.
+
+    Returns a list of (pub_number_a, pub_number_b, match_type, similarity)
+    tuples, `pub_number_a < pub_number_b`, each pair appearing at most once
+    even if both signals would have flagged it (reference wins).
+    """
+    candidates = [r for r in records if not r.get("exclude_reason")]
+    matches = []
+    seen_pairs = set()
+
+    def _add(pub_a, pub_b, match_type, similarity=None):
+        key = tuple(sorted((pub_a, pub_b)))
+        if key in seen_pairs:
+            return
+        seen_pairs.add(key)
+        matches.append((key[0], key[1], match_type, similarity))
+
+    by_reference = defaultdict(list)
+    for r in candidates:
+        ref = (r.get("internal_identifier") or "").strip().upper()
+        if ref:
+            by_reference[ref].append(r)
+    for group in by_reference.values():
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                if a["source"] != b["source"]:
+                    _add(a["pub_number"], b["pub_number"], "reference")
+
+    by_cpv = defaultdict(list)
+    for r in candidates:
+        for cpv in r.get("cpv_codes") or []:
+            by_cpv[cpv].append(r)
+    for group in by_cpv.values():
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                if a["source"] == b["source"]:
+                    continue
+                key = tuple(sorted((a["pub_number"], b["pub_number"])))
+                if key in seen_pairs:
+                    continue  # already linked by the reference signal
+                desc_a, desc_b = a.get("description_en"), b.get("description_en")
+                if not desc_a or not desc_b:
+                    continue
+                sim = SequenceMatcher(None, _normalize(desc_a), _normalize(desc_b)).ratio()
+                if sim >= similarity_threshold:
+                    _add(a["pub_number"], b["pub_number"], "similarity", round(sim, 4))
+
+    return matches

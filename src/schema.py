@@ -101,6 +101,14 @@ tenders = Table(
     # _ted_award_detail/_boamp_award_detail for why this is only populated
     # for single-lot/single-winner notices).
     Column("award_detail", Text, nullable=True),
+    # CR-007 Phase C: the buyer's own procurement reference (TED's
+    # internal-identifier-proc / BOAMP's procedure-level eForms cbc:ID or
+    # legacy REFERENCE_MARCHE — see normalize.py's normalize_ted/
+    # _boamp_internal_identifier). Real NULL, never '', when the source
+    # didn't carry one — cross-portal dedup's signal 1 (dedup.
+    # find_cross_portal_duplicates) matches this across different `source`
+    # values for the same tenant; never compared when either side is NULL.
+    Column("internal_identifier", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 
@@ -235,6 +243,26 @@ tender_relevance_overrides = Table(
     Column("updated_at", Text, nullable=False, server_default=""),
     PrimaryKeyConstraint("tenant_id", "pub_number"),
 )
+
+# CR-007 Phase C: cross-portal duplicate links (e.g. the same tender on both
+# TED and BOAMP) — symmetric and surfaced on BOTH records (api._attach_
+# duplicates), deliberately NOT the same mechanism as tenders.supersedes/
+# exclude_reason='superseded' above, which *hides* the superseded record.
+# The CR is explicit: "Don't silently delete either — surface the link and
+# let the reviewer act." One row per detected pair; pub_number_a/b store the
+# pair in a stable (sorted) order so the same pair is never inserted twice
+# from either detection direction.
+tender_duplicates = Table(
+    "tender_duplicates", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number_a", Text, nullable=False),
+    Column("pub_number_b", Text, nullable=False),
+    Column("match_type", Text, nullable=False),  # 'reference' | 'similarity'
+    Column("similarity", Float, nullable=True),  # only set for 'similarity' matches
+    Column("detected_at", Text, nullable=False, server_default=""),
+    PrimaryKeyConstraint("tenant_id", "pub_number_a", "pub_number_b"),
+)
+Index("ix_tender_duplicates_tenant_pub_b", tender_duplicates.c.tenant_id, tender_duplicates.c.pub_number_b)
 
 vault_document_history = Table(
     "vault_document_history", metadata,
@@ -463,6 +491,17 @@ tenant_composer_settings = Table(
     Column("good_similarity", Float, nullable=False, server_default="0.35"),
     Column("partial_similarity", Float, nullable=False, server_default="0.20"),
     Column("top_k", Integer, nullable=False, server_default="5"),
+)
+
+# CR-007 Phase C: configurable threshold for cross-portal dedup's signal 2
+# (translated-description similarity) — same single-row-per-tenant,
+# lazy-default shape as tenant_vault_settings/tenant_composer_settings above.
+# Signal 1 (buyer-reference match, tenders.internal_identifier) has no
+# threshold — it's exact or it isn't.
+tenant_dedup_settings = Table(
+    "tenant_dedup_settings", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("similarity_threshold", Float, nullable=False, server_default="0.75"),
 )
 
 # One style guide per tenant (not per-tender — "house style" is meant to be

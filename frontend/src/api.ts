@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -257,6 +257,20 @@ export function getVaultSettings(): Promise<VaultSettings> {
 
 export function putVaultSettings(body: Partial<VaultSettings>): Promise<{ saved: boolean }> {
   return apiFetch('/api/vault/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// CR-007 Phase C (C1b): cross-portal dedup's configurable similarity
+// threshold — see ReviewQueue.tsx/MatchingConfig.tsx.
+export function getDedupSettings(): Promise<DedupSettings> {
+  return apiFetch('/api/scout/dedup-settings');
+}
+
+export function putDedupSettings(body: Partial<DedupSettings>): Promise<{ saved: boolean }> {
+  return apiFetch('/api/scout/dedup-settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

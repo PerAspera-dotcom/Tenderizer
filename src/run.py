@@ -127,6 +127,16 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
         status = "ok" if tag_status == "ok" and desc_status == "ok" else "unavailable"
         store.set_translation(conn, tenant_id, r["pub_number"], tag_en or "", desc_en or "", status)
 
+    # CR-007 Phase C: cross-portal duplicate detection (e.g. the same tender
+    # on TED and BOAMP) — runs after translation, unlike the same-source pass
+    # above, since signal 2 needs description_en. Never hides/supersedes
+    # anything (see dedup.find_cross_portal_duplicates' docstring) — every
+    # detected pair is just recorded for the API to surface on both records.
+    dedup_settings = store.get_dedup_settings(conn, tenant_id)
+    for pub_a, pub_b, match_type, similarity in dedup.find_cross_portal_duplicates(
+            store.all_records(conn, tenant_id), dedup_settings["similarity_threshold"]):
+        store.upsert_tender_duplicate(conn, tenant_id, pub_a, pub_b, match_type, similarity)
+
     records = store.all_records(conn, tenant_id)
     surfaced = [r for r in records if not r.get("exclude_reason")]
     build_report(surfaced, health, out_path)

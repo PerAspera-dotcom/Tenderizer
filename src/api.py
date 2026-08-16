@@ -329,6 +329,38 @@ def _attach_relevance(conn, tenant_id, records):
     return records
 
 
+def _attach_duplicates(conn, tenant_id, records):
+    """CR-007 Phase C: attaches a `duplicates` list to every tender that has
+    at least one detected cross-portal match (store.
+    get_tender_duplicates_for_tenant stores one row per pair; this expands
+    it back onto *both* pub_numbers at read time, so e.g. the TED record
+    shows "also listed on BOAMP" and the BOAMP record shows "also listed on
+    TED" — never a one-sided link). Always an empty list, never a missing
+    key, when there's no duplicate. `records` should be the tenant's full
+    set (not a filtered/paginated slice) so both sides of a pair resolve
+    even if one side would otherwise be filtered out of this particular
+    response.
+    """
+    by_pub = {r["pub_number"]: r for r in records}
+    for r in records:
+        r["duplicates"] = []
+    for d in store.get_tender_duplicates_for_tenant(conn, tenant_id):
+        rec_a, rec_b = by_pub.get(d["pub_number_a"]), by_pub.get(d["pub_number_b"])
+        if rec_a is None or rec_b is None:
+            continue
+        # `url` is the counterpart's own stored portal URL — already a direct
+        # national-portal link when the counterpart is e.g. a BOAMP record
+        # (see normalize_boamp's url field), so C2 ("instant national-portal
+        # link") needs no separate plumbing once this is included here.
+        rec_a["duplicates"].append({"pub_number": rec_b["pub_number"], "source": rec_b["source"],
+                                     "url": rec_b["url"], "match_type": d["match_type"],
+                                     "similarity": d["similarity"]})
+        rec_b["duplicates"].append({"pub_number": rec_a["pub_number"], "source": rec_a["source"],
+                                     "url": rec_a["url"], "match_type": d["match_type"],
+                                     "similarity": d["similarity"]})
+    return records
+
+
 @app.get("/api/tenders")
 def list_tenders(
     source:           Optional[str]  = None,
@@ -351,6 +383,7 @@ def list_tenders(
     reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
     _merge_personal_review_state(records, reviews, identity.account_name)
     _attach_relevance(conn, tenant_id, records)
+    _attach_duplicates(conn, tenant_id, records)
 
     # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
     # default so they don't surface here even though the report already hid
@@ -416,11 +449,13 @@ def get_tender(pub_number: str, include_excluded: bool = False,
     conn = _db()
     # The full org record set, not just the one requested, so a relevance
     # score for it (see _attach_relevance) is computed against the org's
-    # real positive/negative pools rather than an empty one.
+    # real positive/negative pools rather than an empty one, and so a
+    # duplicate's counterpart (see _attach_duplicates) is resolvable too.
     records = store.all_records(conn, tenant_id)
     reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
     _merge_personal_review_state(records, reviews, identity.account_name)
     _attach_relevance(conn, tenant_id, records)
+    _attach_duplicates(conn, tenant_id, records)
     for r in records:
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
@@ -1066,6 +1101,22 @@ def get_vault_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
 @app.put("/api/vault/settings")
 def put_vault_settings_config(body: VaultSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
     store.set_vault_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
+    return {"saved": True}
+
+
+# CR-007 Phase C (C1b): cross-portal dedup's configurable similarity
+# threshold — signal 1 (buyer-reference match) has no threshold, only
+# signal 2 (translated-description similarity) does.
+class DedupSettingsBody(BaseModel):
+    similarity_threshold: Optional[float] = None
+
+@app.get("/api/scout/dedup-settings")
+def get_dedup_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_dedup_settings(_db(), tenant_id)
+
+@app.put("/api/scout/dedup-settings")
+def put_dedup_settings_config(body: DedupSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
+    store.set_dedup_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
     return {"saved": True}
 
 

@@ -329,6 +329,26 @@ export default function ReviewQueue() {
                     <StatusBadge status={selected.status} />
                   </div>
                 </div>
+
+                {/* CR-007 Phase C: cross-portal duplicate — surfaced on both
+                    records (never hides either), with a direct link to the
+                    counterpart's own portal (C2, falls out of storing `url`
+                    on each side already — see api._attach_duplicates). */}
+                {selected.duplicates.length > 0 && (
+                  <div style={{ marginBottom: 16, padding: 10, background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <span style={{ color: '#60a5fa', fontSize: 12 }}>🔗</span>
+                    {selected.duplicates.map(d => (
+                      <span key={d.pub_number} style={{ fontSize: 12, color: '#c8d0de' }}>
+                        Also listed on <strong>{d.source}</strong>
+                        {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}
+                        {d.url && (
+                          <> · <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>View ↗</a></>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: needsTranslation(selected) ? 6 : 20, lineHeight: 1.3 }}>
                   {displayTagLine(selected, showOriginal)}
                 </h2>

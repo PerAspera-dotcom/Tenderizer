@@ -1,18 +1,22 @@
 import { useState } from 'react';
 import CpvConfig from './CpvConfig';
 import KeywordsConfig from './KeywordsConfig';
+import DedupConfig from './DedupConfig';
 
-type Tab = 'cpv' | 'keywords';
+type Tab = 'cpv' | 'keywords' | 'dedup';
 
 // CR-004/5 UX pass: CPV Config and Keywords were two separate nav items for
 // one concept — both feed the exact same match_source logic (CPV vs
 // keyword vs both). One nav item, two tabs, same underlying screens.
+// CR-007 Phase C: cross-portal dedup's similarity threshold joins them here
+// — same "detection tuning" theme, not a separate settings page.
 export default function MatchingConfig() {
   const [tab, setTab] = useState<Tab>('cpv');
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'cpv', label: 'CPV Codes' },
     { key: 'keywords', label: 'Keywords' },
+    { key: 'dedup', label: 'Cross-Portal Dedup' },
   ];
 
   return (
@@ -42,7 +46,7 @@ export default function MatchingConfig() {
         })}
       </div>
 
-      {tab === 'cpv' ? <CpvConfig /> : <KeywordsConfig />}
+      {tab === 'cpv' ? <CpvConfig /> : tab === 'keywords' ? <KeywordsConfig /> : <DedupConfig />}
     </div>
   );
 }

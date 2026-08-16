@@ -40,6 +40,22 @@ export interface Tender {
   relevance_reasoning?: string;
   relevance_corrected?: boolean;
   relevance_corrected_by?: string | null;
+  // CR-007 Phase C: cross-portal duplicates (e.g. the same tender also on
+  // BOAMP) — always present, empty when none, see api._attach_duplicates.
+  duplicates: TenderDuplicate[];
+}
+
+// CR-007 Phase C: one entry per detected cross-portal counterpart.
+export interface TenderDuplicate {
+  pub_number: string;
+  source: string;
+  url: string;
+  match_type: 'reference' | 'similarity';
+  similarity: number | null;
+}
+
+export interface DedupSettings {
+  similarity_threshold: number;
 }
 
 // Past-tenders data-coverage follow-up: richer winner/lot/contract detail,
