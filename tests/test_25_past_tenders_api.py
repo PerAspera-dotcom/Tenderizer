@@ -7,7 +7,7 @@ active tenders only.
 """
 import store
 import api
-from conftest import TEST_TENANT_ID
+from conftest import TEST_TENANT_ID, make_identity
 
 
 def _rec(pub_number, notice_type="tender", deadline="2030-01-01T00:00:00+00:00",
@@ -64,14 +64,14 @@ def test_upsert_award_fields_null_when_absent(tmp_path, monkeypatch):
 
 def test_list_tenders_hides_past_tender_by_default(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    result = api.list_tenders(limit=100, offset=0, tenant_id=TEST_TENANT_ID)
+    result = api.list_tenders(limit=100, offset=0, identity=make_identity())
     pub_numbers = {r["pub_number"] for r in result["results"]}
     assert pub_numbers == {"ACTIVE-1"}
 
 
 def test_list_tenders_notice_type_past_tender_returns_only_those(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    result = api.list_tenders(notice_type="past_tender", limit=100, offset=0, tenant_id=TEST_TENANT_ID)
+    result = api.list_tenders(notice_type="past_tender", limit=100, offset=0, identity=make_identity())
     pub_numbers = {r["pub_number"] for r in result["results"]}
     assert pub_numbers == {"PAST-1"}
     assert result["results"][0]["awarded_to"] == "Acme Shelters Ltd"

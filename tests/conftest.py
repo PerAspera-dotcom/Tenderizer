@@ -13,9 +13,17 @@ TEST_TENANT_ID = 1
 # already bypasses get_current_tenant_id.
 TEST_ACCOUNT_NAME = "tester@example.com"
 
+# CR-007 Phase A: the Clerk user id behind TEST_ACCOUNT_NAME — the key for
+# personal tender_reviews rows. A second constant (below) stands in for a
+# colleague sharing the same TEST_TENANT_ID org.
+TEST_CLERK_USER_ID = "user_test_1"
+TEST_ACCOUNT_NAME_B = "colleague@example.com"
+TEST_CLERK_USER_ID_B = "user_test_2"
 
-def make_identity(tenant_id=TEST_TENANT_ID, account_name=TEST_ACCOUNT_NAME):
-    return api.Identity(tenant_id=tenant_id, account_name=account_name)
+
+def make_identity(tenant_id=TEST_TENANT_ID, account_name=TEST_ACCOUNT_NAME,
+                   clerk_user_id=TEST_CLERK_USER_ID):
+    return api.Identity(tenant_id=tenant_id, account_name=account_name, clerk_user_id=clerk_user_id)
 
 
 @pytest.fixture(autouse=True)

@@ -67,7 +67,7 @@ def test_api_patch_dismissed_with_reason(tmp_path, monkeypatch):
     result = api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Out of scope"),
                                identity=make_identity())
     assert result["status"] == "dismissed"
-    rec = api.get_tender("PUB-1", include_excluded=True, tenant_id=TEST_TENANT_ID)
+    rec = api.get_tender("PUB-1", include_excluded=True, identity=make_identity())
     assert rec["dismissal_reason"] == "Out of scope"
 
 
@@ -75,5 +75,5 @@ def test_api_patch_note_ignored_on_non_dismiss_status(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     api.patch_tender("PUB-1", api.StatusBody(status="reviewed", note="should not be stored"),
                       identity=make_identity())
-    rec = api.get_tender("PUB-1", include_excluded=True, tenant_id=TEST_TENANT_ID)
+    rec = api.get_tender("PUB-1", include_excluded=True, identity=make_identity())
     assert rec["dismissal_reason"] is None

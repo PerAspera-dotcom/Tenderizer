@@ -7,13 +7,20 @@ reason (400), dismissed_by/dismissed_at being stamped server-side from the
 authenticated identity (never client-suppliable), the Dismissed tab's list
 query not losing past-deadline tenders, and reinstate leaving the dismissal
 metadata in place as history.
+
+CR-007 Phase A update: dismiss/reviewed are now personal per-account state
+(store.tender_reviews), not the shared `tenders` row — see api.py's
+_merge_personal_review_state. Assertions below read through the API's
+merged view (api.get_tender/list_tenders) rather than raw store.all_records,
+since that's now the only place personal dismissal metadata surfaces.
 """
 import pytest
 from fastapi import HTTPException
 
 import store
 import api
-from conftest import TEST_TENANT_ID, TEST_ACCOUNT_NAME, make_identity
+from conftest import (TEST_TENANT_ID, TEST_ACCOUNT_NAME, TEST_ACCOUNT_NAME_B,
+                       TEST_CLERK_USER_ID_B, make_identity)
 
 
 def _rec(pub_number, deadline="2030-01-01T00:00:00+00:00"):
@@ -33,8 +40,12 @@ def _seed(tmp_path, monkeypatch, pub_number="PUB-1", deadline="2030-01-01T00:00:
     return conn
 
 
-def _get(conn, pub_number):
-    return next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == pub_number)
+def _get(conn, pub_number, identity=None):
+    """Reads through the API's merged view (personal review state overlaid
+    on the shared tenders row) rather than raw store.all_records — see the
+    module docstring's CR-007 Phase A note.
+    """
+    return api.get_tender(pub_number, include_excluded=True, identity=identity or make_identity())
 
 
 # ── D2: mandatory reason, server-side ────────────────────────────────────────
@@ -75,7 +86,7 @@ def test_dismiss_stamps_dismissed_by_from_identity_not_the_client(tmp_path, monk
     conn = _seed(tmp_path, monkeypatch)
     identity = make_identity(account_name="reviewer@example.com")
     api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong CPV"), identity=identity)
-    rec = _get(conn, "PUB-1")
+    rec = _get(conn, "PUB-1", identity=identity)
     assert rec["dismissed_by"] == "reviewer@example.com"
 
 
@@ -94,13 +105,39 @@ def test_non_dismiss_transition_does_not_stamp_attribution(tmp_path, monkeypatch
     assert rec["dismissed_at"] is None
 
 
+# ── CR-007 Phase A: dismissal is personal, doesn't leak to a colleague ──────
+
+def test_dismiss_is_personal_a_colleague_still_sees_it_as_new(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Not for us"),
+                      identity=make_identity())
+
+    colleague = make_identity(account_name=TEST_ACCOUNT_NAME_B, clerk_user_id=TEST_CLERK_USER_ID_B)
+    rec = _get(conn, "PUB-1", identity=colleague)
+    assert rec["status"] == "new"
+    assert rec["dismissed_by"] is None
+    assert rec["dismissed_at"] is None
+
+    # The dismisser's own view is unaffected by the colleague's read.
+    assert _get(conn, "PUB-1")["status"] == "dismissed"
+
+
+def test_shortlist_by_one_account_is_visible_to_a_colleague(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    api.patch_tender("PUB-1", api.StatusBody(status="shortlisted"), identity=make_identity())
+
+    colleague = make_identity(account_name=TEST_ACCOUNT_NAME_B, clerk_user_id=TEST_CLERK_USER_ID_B)
+    assert _get(conn, "PUB-1", identity=colleague)["status"] == "shortlisted"
+
+
 # ── D1: Dismissed-tab listing ────────────────────────────────────────────────
 
 def test_dismissed_filter_returns_the_dismissal_metadata(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong sector"),
                       identity=make_identity())
-    results = api.list_tenders(status="dismissed", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]
+    results = api.list_tenders(status="dismissed", limit=100, offset=0,
+                                identity=make_identity())["results"]
     assert len(results) == 1
     assert results[0]["dismissal_reason"] == "Wrong sector"
     assert results[0]["dismissed_by"] == TEST_ACCOUNT_NAME
@@ -116,16 +153,18 @@ def test_dismissed_filter_still_includes_a_since_expired_deadline(tmp_path, monk
     conn = _seed(tmp_path, monkeypatch, deadline="2020-01-01T00:00:00+00:00")
     api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Missed it"),
                       identity=make_identity())
-    dismissed = api.list_tenders(status="dismissed", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]
+    dismissed = api.list_tenders(status="dismissed", limit=100, offset=0,
+                                  identity=make_identity())["results"]
     assert {r["pub_number"] for r in dismissed} == {"PUB-1"}
 
     # Sanity: the same expired-deadline tender is correctly hidden from a
     # non-dismissed-status view (the filter is status-gated, not removed).
-    active = api.list_tenders(status="new", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]
+    active = api.list_tenders(status="new", limit=100, offset=0, identity=make_identity())["results"]
     assert active == []
 
 
-# ── D4: reinstate reuses set_status and keeps dismissal metadata as history ──
+# ── D4: reinstate reuses set_status; CR-007 Phase A: shortlisting supersedes
+# the shared view's dismissal metadata (dismissal was always personal) ──────
 
 def test_reinstate_leaves_the_dismissed_tab_and_reappears_elsewhere(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
@@ -133,13 +172,24 @@ def test_reinstate_leaves_the_dismissed_tab_and_reappears_elsewhere(tmp_path, mo
                       identity=make_identity())
     api.patch_tender("PUB-1", api.StatusBody(status="shortlisted"), identity=make_identity())
 
-    dismissed = api.list_tenders(status="dismissed", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]
+    dismissed = api.list_tenders(status="dismissed", limit=100, offset=0,
+                                  identity=make_identity())["results"]
     assert dismissed == []
-    shortlisted = api.list_tenders(status="shortlisted", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]
+    shortlisted = api.list_tenders(status="shortlisted", limit=100, offset=0,
+                                    identity=make_identity())["results"]
     assert {r["pub_number"] for r in shortlisted} == {"PUB-1"}
 
 
-def test_reinstate_keeps_the_prior_dismissal_metadata_as_history(tmp_path, monkeypatch):
+def test_shortlisting_a_dismissed_tender_supersedes_the_shared_view(tmp_path, monkeypatch):
+    """CR-007 Phase A change from CR-006's original behavior: dismissal is
+    now personal (tender_reviews), so once shortlisted (the org's shared
+    decision), the shared view no longer carries the dismisser's prior
+    personal reason — nothing was ever written to the shared `tenders` row
+    for a dismiss. This is a deliberate scope choice (see CR-007 Phase A
+    plan's "Explicitly out of scope" note), not a regression: the personal
+    record itself isn't deleted, just not surfaced once the org has decided
+    (see the next test).
+    """
     conn = _seed(tmp_path, monkeypatch)
     api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed"),
                       identity=make_identity())
@@ -147,6 +197,18 @@ def test_reinstate_keeps_the_prior_dismissal_metadata_as_history(tmp_path, monke
 
     rec = _get(conn, "PUB-1")
     assert rec["status"] == "shortlisted"
-    assert rec["dismissal_reason"] == "Second look needed"
-    assert rec["dismissed_by"] == TEST_ACCOUNT_NAME
-    assert rec["dismissed_at"]
+    assert rec["dismissal_reason"] is None
+    assert rec["dismissed_by"] is None
+    assert rec["dismissed_at"] is None
+
+
+def test_the_prior_personal_dismissal_is_still_queryable_after_shortlisting(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    identity = make_identity()
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed"),
+                      identity=identity)
+    api.patch_tender("PUB-1", api.StatusBody(status="shortlisted"), identity=identity)
+
+    reviews = store.get_tender_reviews_for_account(conn, TEST_TENANT_ID, identity.clerk_user_id)
+    assert reviews["PUB-1"]["status"] == "dismissed"
+    assert reviews["PUB-1"]["reason"] == "Second look needed"

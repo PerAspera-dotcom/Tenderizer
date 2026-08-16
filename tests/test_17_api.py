@@ -35,30 +35,31 @@ def _seed(tmp_path, monkeypatch):
     return conn
 
 
-# route handlers depend on tenant_id via Depends(get_current_tenant_id); calling
-# them directly (not through FastAPI's DI) means that default isn't resolved, so
-# every call below passes tenant_id explicitly (same reason limit/offset need
+# route handlers depend on tenant_id (or, for list_tenders/get_tender since
+# CR-007 Phase A, a full Identity) via FastAPI's Depends; calling them
+# directly (not through FastAPI's DI) means that default isn't resolved, so
+# every call below passes it explicitly (same reason limit/offset need
 # explicit values — see the Query(...) note in the R2 commit).
 
 def test_list_tenders_hides_excluded_by_default(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    result = api.list_tenders(limit=100, offset=0, tenant_id=TEST_TENANT_ID)
+    result = api.list_tenders(limit=100, offset=0, identity=make_identity())
     pub_numbers = {r["pub_number"] for r in result["results"]}
     assert pub_numbers == {"KEPT-1"}
 
 
 def test_list_tenders_include_excluded_shows_everything(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    result = api.list_tenders(include_excluded=True, limit=100, offset=0, tenant_id=TEST_TENANT_ID)
+    result = api.list_tenders(include_excluded=True, limit=100, offset=0, identity=make_identity())
     pub_numbers = {r["pub_number"] for r in result["results"]}
     assert pub_numbers == {"KEPT-1", "EXCLUDED-1"}
 
 
 def test_get_tender_404s_on_excluded_by_default(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    assert api.get_tender("KEPT-1", tenant_id=TEST_TENANT_ID)["pub_number"] == "KEPT-1"
+    assert api.get_tender("KEPT-1", identity=make_identity())["pub_number"] == "KEPT-1"
     try:
-        api.get_tender("EXCLUDED-1", tenant_id=TEST_TENANT_ID)
+        api.get_tender("EXCLUDED-1", identity=make_identity())
         assert False, "expected HTTPException"
     except Exception as e:
         assert getattr(e, "status_code", None) == 404
@@ -66,7 +67,7 @@ def test_get_tender_404s_on_excluded_by_default(tmp_path, monkeypatch):
 
 def test_get_tender_include_excluded_returns_the_record(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    r = api.get_tender("EXCLUDED-1", include_excluded=True, tenant_id=TEST_TENANT_ID)
+    r = api.get_tender("EXCLUDED-1", include_excluded=True, identity=make_identity())
     assert r["pub_number"] == "EXCLUDED-1"
     assert r["exclude_reason"] == "rental"
 
@@ -76,7 +77,7 @@ def test_tenant_isolation_at_the_api_layer(tmp_path, monkeypatch):
     other_conn = store.init_db(str(tmp_path / "t.db"))
     store.upsert(other_conn, 999, _rec("OTHER-TENANT-1"))
 
-    result = api.list_tenders(limit=100, offset=0, tenant_id=TEST_TENANT_ID)
+    result = api.list_tenders(limit=100, offset=0, identity=make_identity())
     pub_numbers = {r["pub_number"] for r in result["results"]}
     assert "OTHER-TENANT-1" not in pub_numbers
 
@@ -89,7 +90,7 @@ def test_get_tender_belonging_to_another_tenant_is_403(tmp_path, monkeypatch):
     store.upsert(other_conn, 999, _rec("OTHER-TENANT-1"))
 
     try:
-        api.get_tender("OTHER-TENANT-1", tenant_id=TEST_TENANT_ID)
+        api.get_tender("OTHER-TENANT-1", identity=make_identity())
         assert False, "expected HTTPException"
     except Exception as e:
         assert getattr(e, "status_code", None) == 403
@@ -98,7 +99,7 @@ def test_get_tender_belonging_to_another_tenant_is_403(tmp_path, monkeypatch):
 def test_get_tender_that_truly_does_not_exist_is_still_404(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     try:
-        api.get_tender("NEVER-EXISTED", tenant_id=TEST_TENANT_ID)
+        api.get_tender("NEVER-EXISTED", identity=make_identity())
         assert False, "expected HTTPException"
     except Exception as e:
         assert getattr(e, "status_code", None) == 404

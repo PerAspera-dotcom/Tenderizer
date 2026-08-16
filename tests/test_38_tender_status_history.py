@@ -4,6 +4,12 @@ Every status transition previously had zero history unless it happened to be
 a dismiss (which only ever populated dismissed_by/dismissed_at/dismissal_
 reason — see test_36_dismissal_attribution.py). This file confirms the new
 event log is additive to that CR-006 behaviour, not a replacement of it.
+
+CR-007 Phase A update: tender_history (like `tenders.status` itself) now
+only ever logs the org-shared new<->shortlisted transition — "reviewed" and
+"dismissed" moved to personal per-account state (store.tender_reviews) that
+never touches the shared row, so they no longer appear here. See
+test_36_dismissal_attribution.py for that layer's own coverage.
 """
 import store
 import api
@@ -79,24 +85,27 @@ def test_tender_history_is_tenant_scoped(tmp_path):
     assert [h["new_value"] for h in store.get_tender_history(conn, OTHER_TENANT_ID, "P-1")] == ["shortlisted"]
 
 
-def test_dismiss_transition_is_logged_in_both_tender_history_and_the_denormalized_columns(tmp_path, monkeypatch):
+def test_dismiss_via_api_is_personal_and_not_logged_in_the_shared_tender_history(tmp_path, monkeypatch):
+    """CR-007 Phase A: dismiss no longer touches the shared `tenders` row at
+    all (see test_36_dismissal_attribution.py for where its metadata now
+    lives — the caller's own tender_reviews row / the API's merged view).
+    """
     conn = _seed(tmp_path, monkeypatch)
 
     api.patch_tender("P-1", api.StatusBody(status="dismissed", note="Second look needed"),
                       identity=make_identity())
 
-    history = store.get_tender_history(conn, TEST_TENANT_ID, "P-1")
-    assert len(history) == 1
-    assert history[0] == {"field": "status", "old_value": "new", "new_value": "dismissed",
-                           "changed_at": history[0]["changed_at"]}
-
+    assert store.get_tender_history(conn, TEST_TENANT_ID, "P-1") == []
     rec = next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == "P-1")
-    assert rec["dismissal_reason"] == "Second look needed"
-    assert rec["dismissed_by"] == TEST_ACCOUNT_NAME
-    assert rec["dismissed_at"]
+    assert rec["status"] == "new"
+    assert rec["dismissal_reason"] is None
+    assert rec["dismissed_by"] is None
 
 
 def test_get_tender_history_endpoint_round_trips(tmp_path, monkeypatch):
+    """CR-007 Phase A: "reviewed" is personal (no shared-row change, so no
+    history entry); only the "new" -> "shortlisted" transition is logged.
+    """
     _seed(tmp_path, monkeypatch)
 
     api.patch_tender("P-1", api.StatusBody(status="reviewed"), identity=make_identity())
@@ -104,5 +113,6 @@ def test_get_tender_history_endpoint_round_trips(tmp_path, monkeypatch):
 
     result = api.get_tender_history("P-1", tenant_id=TEST_TENANT_ID)
     assert result["pub_number"] == "P-1"
-    assert len(result["history"]) == 2
-    assert result["history"][0]["new_value"] == "shortlisted"  # newest first
+    assert len(result["history"]) == 1
+    assert result["history"][0]["old_value"] == "new"
+    assert result["history"][0]["new_value"] == "shortlisted"

@@ -304,7 +304,7 @@ def test_shortlist_round_trip_end_to_end(tmp_path, monkeypatch):
 
     # Before: counted as `new`, not yet in the pipeline.
     assert "ROUNDTRIP-1" in {r["pub_number"] for r in api.list_tenders(
-        status="new", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]}
+        status="new", limit=100, offset=0, identity=make_identity())["results"]}
     assert api.get_pipeline(tenant_id=TEST_TENANT_ID) == []
 
     # The Review Queue's Shortlist action.
@@ -312,7 +312,7 @@ def test_shortlist_round_trip_end_to_end(tmp_path, monkeypatch):
 
     # After: gone from the `new` list/badge count...
     assert "ROUNDTRIP-1" not in {r["pub_number"] for r in api.list_tenders(
-        status="new", limit=100, offset=0, tenant_id=TEST_TENANT_ID)["results"]}
+        status="new", limit=100, offset=0, identity=make_identity())["results"]}
     # ...and present in the pipeline (Portal Home's Accepted Tenders / Pipeline & Deadlines).
     pipeline = api.get_pipeline(tenant_id=TEST_TENANT_ID)
     assert {r["pub_number"] for r in pipeline} == {"ROUNDTRIP-1"}

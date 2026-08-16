@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { UserButton } from '@clerk/clerk-react';
+import { UserButton, OrganizationSwitcher, useOrganization, CreateOrganization } from '@clerk/clerk-react';
 import { useNavigate, useLocation, Link } from '../router';
 import { getStats, getHealth, postRun, listTenders } from '../api';
 import type { Stats, PortalHealth } from '../types';
@@ -81,6 +81,10 @@ interface Props {
 export default function Layout({ children }: Props) {
   const location = useLocation();
   const navigate = useNavigate();
+  // CR-007 Phase A: the tenant is the caller's active Clerk org once one
+  // exists — isLoaded guards against a flash of the "create an org" prompt
+  // before Clerk has resolved the membership it already has.
+  const { organization, isLoaded: orgIsLoaded } = useOrganization();
   const app = currentApp(location.pathname);
   const appInfo = APP_INFO[app];
 
@@ -294,9 +298,36 @@ export default function Layout({ children }: Props) {
                 {running ? '⟳' : '↺'} {running ? 'Running…' : 'Run now'}
               </button>
             )}
+            {/* CR-007 Phase A: switches the active org, which is what the
+                backend resolves the shared tenant from (api._resolve_tenant_id).
+                hidePersonal — Tenderizer is org-scoped data (tenders, pipeline,
+                vault, composer), there's no meaningful "personal workspace" to
+                switch back to. */}
+            <OrganizationSwitcher
+              hidePersonal
+              appearance={{ elements: { organizationSwitcherTrigger: { padding: '5px 10px' } } }}
+            />
             <UserButton appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }} />
           </div>
         </header>
+
+        {/* CR-007 Phase A: nudge to create/select an org — doesn't hard-block
+            the rest of the app, so a user mid-transition (Organizations just
+            enabled, hasn't created one yet) isn't locked out; the backend's
+            _resolve_tenant_id falls back to their existing per-user tenant
+            until they do. */}
+        {orgIsLoaded && !organization && (
+          <div style={{ background: '#151d2c', borderBottom: '1px solid #1a2334', padding: '16px 24px' }}>
+            <div style={{ color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>
+              Create an organization to share your pipeline, shortlist and results with colleagues.
+              You can keep working solo until then.
+            </div>
+            <CreateOrganization
+              afterCreateOrganizationUrl={location.pathname}
+              appearance={{ elements: { rootBox: { maxWidth: 420 } } }}
+            />
+          </div>
+        )}
 
         {/* Page content */}
         <main style={{ flex: 1, overflowY: 'auto', padding: 24 }}>

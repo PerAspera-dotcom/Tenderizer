@@ -122,9 +122,39 @@ def _verify_claims(creds: Optional[HTTPAuthorizationCredentials]) -> dict:
     # not a bad token, and every token would fail identically until fixed.
 
 
+def _org_id_from_claims(claims: dict) -> Optional[str]:
+    """CR-007 Phase A: Clerk includes org-membership claims automatically
+    whenever the caller has an active organization selected. Confirmed
+    against a real prod session token (Organizations enabled, active org
+    set): the default compact claim `o: {id, rol, slg}`, not a top-level
+    `org_id` — this instance doesn't customise the token to add an
+    `org_id` shortcode (only `email` is added; see get_current_identity
+    below). The `org_id` check is kept as a defensive fallback in case that
+    ever changes, but `o.id` is the one that's actually live.
+    """
+    org_id = claims.get("org_id")
+    if org_id:
+        return org_id
+    org = claims.get("o")
+    if isinstance(org, dict):
+        return org.get("id")
+    return None
+
+
 def _resolve_tenant_id(claims: dict) -> int:
     clerk_user_id = claims["sub"]
     conn = _db()
+    org_id = _org_id_from_claims(claims)
+    if org_id:
+        # CR-007 Phase A: an active org makes the *org* the tenant, shared by
+        # every member — link_or_create_tenant_for_clerk_org self-heals a
+        # pre-Phase-A user's existing solo tenant onto their first org rather
+        # than needing a bulk data migration (see its docstring).
+        return store.link_or_create_tenant_for_clerk_org(
+            conn, org_id, clerk_user_id, claims.get("email"))
+    # No active org selected (not yet created/joined one, or Organizations
+    # isn't enabled on this instance) — fall back to the pre-Phase-A
+    # per-Clerk-user tenant so nothing breaks mid-rollout.
     tenant_id = store.get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
     if tenant_id is None:
         tenant_id = store.create_tenant_for_clerk_user(conn, clerk_user_id, claims.get("email"))
@@ -138,25 +168,29 @@ def get_current_tenant_id(
     below depends on this function rather than a hardcoded value, so this is
     the only place that changed when the step 3 stub became real auth.
 
-    401 on a missing or invalid/expired token. A Clerk user seen for the
-    first time is auto-provisioned a new tenant (1 Clerk user = 1 tenant,
-    confirmed choice — see schema.py) rather than rejected.
+    401 on a missing or invalid/expired token. CR-007 Phase A: the tenant is
+    now the caller's active Clerk *organization* when one is selected
+    (shared by every org member), falling back to the legacy 1-Clerk-user =
+    1-tenant resolution otherwise — see _resolve_tenant_id.
     """
     claims = _verify_claims(creds)
     return _resolve_tenant_id(claims)
 
 
 class Identity:
-    """tenant_id + a human-readable account name, both taken from a verified
-    Clerk token — never client-supplied. CR-006 D3: dismissal attribution
-    needs "who", not just "which tenant", which get_current_tenant_id alone
-    doesn't expose (its 54 other call sites only ever needed the tenant).
-    Kept as its own dependency rather than changing get_current_tenant_id's
-    return type, to avoid touching every existing route.
+    """tenant_id + a human-readable account name + the raw Clerk user id,
+    all taken from a verified Clerk token — never client-supplied. CR-006
+    D3: dismissal attribution needs "who", not just "which tenant", which
+    get_current_tenant_id alone doesn't expose. CR-007 Phase A: clerk_user_id
+    is the key for personal, per-account tender_reviews rows now that
+    tenant_id can be shared by a whole org (see api.patch_tender). Kept as
+    its own dependency rather than changing get_current_tenant_id's return
+    type, to avoid touching every existing route.
     """
-    def __init__(self, tenant_id: int, account_name: str):
+    def __init__(self, tenant_id: int, account_name: str, clerk_user_id: str):
         self.tenant_id = tenant_id
         self.account_name = account_name
+        self.clerk_user_id = clerk_user_id
 
 
 def get_current_identity(
@@ -169,7 +203,7 @@ def get_current_identity(
     # create_tenant_for_clerk_user's claims.get("email") above). Fall back to
     # the Clerk user id so attribution never silently ends up empty.
     account_name = claims.get("email") or claims["sub"]
-    return Identity(tenant_id=tenant_id, account_name=account_name)
+    return Identity(tenant_id=tenant_id, account_name=account_name, clerk_user_id=claims["sub"])
 
 
 def require_ops_access(
@@ -228,6 +262,33 @@ def health_check():
 
 # ── Tenders ───────────────────────────────────────────────────────────────────
 
+def _merge_personal_review_state(records, reviews, account_name):
+    """CR-007 Phase A: `tenders.status` (+ dismissal_reason/dismissed_by/
+    dismissed_at) is the org-shared decision now — "shortlisted" only.
+    Every other status is this caller's own tender_reviews row, defaulting
+    to "new" if they haven't personally acted on it yet. `reviews` is
+    store.get_tender_reviews_for_account's pub_number-keyed map. Mutates and
+    returns `records` in place — the response shape is unchanged (same
+    field names/values as pre-Phase-A), so existing frontend reads need no
+    changes.
+    """
+    for r in records:
+        if r.get("status") == "shortlisted":
+            continue
+        personal = reviews.get(r["pub_number"])
+        if personal:
+            r["status"] = personal["status"]
+            r["dismissal_reason"] = personal["reason"]
+            r["dismissed_by"] = account_name if personal["status"] == "dismissed" else None
+            r["dismissed_at"] = personal["dismissed_at"]
+        else:
+            r["status"] = "new"
+            r["dismissal_reason"] = None
+            r["dismissed_by"] = None
+            r["dismissed_at"] = None
+    return records
+
+
 @app.get("/api/tenders")
 def list_tenders(
     source:           Optional[str]  = None,
@@ -242,9 +303,13 @@ def list_tenders(
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
     sort:   str = "deadline",
-    tenant_id: int = Depends(get_current_tenant_id),
+    identity: Identity = Depends(get_current_identity),
 ):
-    records = store.all_records(_db(), tenant_id)
+    tenant_id = identity.tenant_id
+    conn = _db()
+    records = store.all_records(conn, tenant_id)
+    reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
+    _merge_personal_review_state(records, reviews, identity.account_name)
 
     # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
     # default so they don't surface here even though the report already hid
@@ -301,12 +366,15 @@ def list_tenders(
 
 @app.get("/api/tenders/{pub_number}")
 def get_tender(pub_number: str, include_excluded: bool = False,
-               tenant_id: int = Depends(get_current_tenant_id)):
+               identity: Identity = Depends(get_current_identity)):
+    tenant_id = identity.tenant_id
     conn = _db()
     for r in store.all_records(conn, tenant_id):
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
                 raise HTTPException(404, "Tender not found")
+            reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
+            _merge_personal_review_state([r], reviews, identity.account_name)
             return r
     # Own tenant has no such record: 403 if it belongs to another tenant
     # (exists, just not yours) vs 404 if it doesn't exist anywhere.
@@ -320,6 +388,14 @@ class StatusBody(BaseModel):
     note: Optional[str] = None  # CR-006: dismissal reason — required when status="dismissed"
 
 _VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed"}
+# CR-007 Phase A: "shortlisted" is the org's collective decision — the only
+# status that still writes the shared `tenders` row via store.set_status.
+# Everything else is personal triage, written to tender_reviews instead (see
+# _merge_personal_review_state above for how the read side puts it back
+# together). Un-shortlisting (status="new" on a currently-shortlisted
+# tender) is treated the same way, since it's reverting that same shared
+# decision, not starting a fresh personal one.
+_SHARED_STATUSES = {"shortlisted"}
 
 @app.patch("/api/tenders/{pub_number}")
 def patch_tender(pub_number: str, body: StatusBody,
@@ -328,22 +404,25 @@ def patch_tender(pub_number: str, body: StatusBody,
     if body.status not in _VALID_STATUSES:
         raise HTTPException(422, f"status must be one of {_VALID_STATUSES}")
     conn = _db()
-    if not any(r["pub_number"] == pub_number for r in store.all_records(conn, tenant_id)):
+    records = store.all_records(conn, tenant_id)
+    current = next((r for r in records if r["pub_number"] == pub_number), None)
+    if current is None:
         if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
             raise HTTPException(403, "Forbidden")
         raise HTTPException(404, "Tender not found")
     # CR-006 D2: a reason is only relevant, and now required, on the dismiss
     # action itself — a note sent with any other status is silently ignored
     # rather than 422ing, same as CR-002 C2's original optional-note behavior.
-    if body.status == "dismissed":
-        if not (body.note or "").strip():
-            raise HTTPException(400, "A reason is required to dismiss a tender")
-        store.set_status(conn, tenant_id, pub_number, body.status,
-                          dismissal_reason=body.note.strip(),
-                          dismissed_by=identity.account_name,
-                          dismissed_at=datetime.now(timezone.utc).isoformat())
-    else:
+    if body.status == "dismissed" and not (body.note or "").strip():
+        raise HTTPException(400, "A reason is required to dismiss a tender")
+
+    reverting_shortlist = current["status"] == "shortlisted" and body.status == "new"
+    if body.status in _SHARED_STATUSES or reverting_shortlist:
         store.set_status(conn, tenant_id, pub_number, body.status)
+    else:
+        store.upsert_tender_review(
+            conn, tenant_id, pub_number, identity.clerk_user_id, identity.account_name,
+            body.status, reason=body.note.strip() if body.status == "dismissed" else None)
     return {"pub_number": pub_number, "status": body.status}
 
 

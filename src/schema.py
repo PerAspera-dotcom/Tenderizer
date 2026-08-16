@@ -30,6 +30,14 @@ tenants = Table(
     Column("clerk_user_id", String, nullable=True, unique=True),
     Column("email", Text, nullable=True),
     Column("created_at", Text, nullable=False, server_default=""),
+    # CR-007 Phase A: the org-concept the module docstring above anticipated.
+    # A tenant now represents a Clerk *organization* going forward, not a
+    # single Clerk user — clerk_user_id/email above become the "who
+    # originally owned this tenant before it had an org" legacy fields,
+    # kept so a pre-Phase-A tenant can self-link the first time its owner
+    # creates/selects a Clerk org (see api._resolve_tenant_id). Nullable
+    # because a tenant can exist before any org is linked to it.
+    Column("clerk_org_id", String, nullable=True, unique=True),
 )
 
 tenders = Table(
@@ -147,6 +155,13 @@ Index("ix_pipeline_history_tenant_pub", pipeline_history.c.tenant_id, pipeline_h
 # CR-006's dismissal_reason/dismissed_by/dismissed_at stay on tenders itself
 # (see that comment above); this table fills the gap for every *other*
 # status transition, which previously had no history at all.
+#
+# CR-007 Phase A note: "tenant_id already answers who" is no longer true once
+# a tenant can be a multi-member org (see tenants.clerk_org_id) — this table
+# only ever logs the org-shared field="status" transition (new->shortlisted),
+# so it's still fine without changed_by for now, but that's the reason it'll
+# eventually need one. See tender_reviews below for the new per-account state
+# that CR-007 Phase A actually needed a person-level column for.
 tender_history = Table(
     "tender_history", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -158,6 +173,31 @@ tender_history = Table(
     Column("changed_at", Text, nullable=False, server_default=""),
 )
 Index("ix_tender_history_tenant_pub", tender_history.c.tenant_id, tender_history.c.pub_number)
+
+# CR-007 Phase A: per-account triage state. Org-shared `tenders.status` now
+# only ever holds "new" or "shortlisted" — the org's collective decision.
+# Every other triage action (reviewed / dismissed, + CR-006's mandatory
+# dismiss reason) is personal: each org member gets their own row per tender,
+# so one analyst dismissing something doesn't remove it from a colleague's
+# queue. `pub_number`, not `hash`, matches tender_history/pipeline's existing
+# addressing convention. No separate history table for this one (matches
+# tenders' own "not a black box, but not a full audit log either" choice —
+# see dismissed_by's comment above); `reason`/`dismissed_at` are simply
+# overwritten on each new personal action, same as tenders.dismissal_reason.
+tender_reviews = Table(
+    "tender_reviews", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("clerk_user_id", Text, nullable=False),
+    Column("account_name", Text, nullable=False, server_default=""),
+    Column("status", Text, nullable=False, server_default="new"),
+    Column("reason", Text, nullable=True),
+    Column("dismissed_at", Text, nullable=True),
+    Column("updated_at", Text, nullable=False, server_default=""),
+    PrimaryKeyConstraint("tenant_id", "pub_number", "clerk_user_id"),
+)
+Index("ix_tender_reviews_tenant_pub", tender_reviews.c.tenant_id, tender_reviews.c.pub_number)
+Index("ix_tender_reviews_tenant_user", tender_reviews.c.tenant_id, tender_reviews.c.clerk_user_id)
 
 vault_document_history = Table(
     "vault_document_history", metadata,

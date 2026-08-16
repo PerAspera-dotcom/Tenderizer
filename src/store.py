@@ -33,7 +33,7 @@ from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 from schema import (tender_history, vault_document_history, composer_document_history,
-                     composer_requirement_history)
+                     composer_requirement_history, tender_reviews)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -160,6 +160,73 @@ def create_tenant_for_clerk_user(conn, clerk_user_id, email=None):
         new_id = get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
     _seed_tenant_config(conn, new_id)
     return new_id
+
+
+def get_tenant_id_by_clerk_org_id(conn, clerk_org_id):
+    """CR-007 Phase A counterpart to get_tenant_id_by_clerk_user_id — the
+    tenant id for a Clerk organization already linked/provisioned, or None.
+    """
+    with conn.connect() as c:
+        row = c.execute(select(tenants.c.id).where(
+            tenants.c.clerk_org_id == clerk_org_id)).fetchone()
+    return row[0] if row else None
+
+
+def link_or_create_tenant_for_clerk_org(conn, clerk_org_id, clerk_user_id, email=None):
+    """CR-007 Phase A: resolve a tenant for an active Clerk organization,
+    self-healing the pre-org -> org transition rather than requiring a bulk
+    data migration.
+
+    Order:
+      1. Already linked -> return that tenant id (the common case after the
+         first member of an org has logged in once).
+      2. Not linked yet, but `clerk_user_id` already owns a legacy,
+         not-yet-linked tenant (real pre-Phase-A data, from back when it was
+         1 Clerk user = 1 tenant) -> link this org onto that *existing* row.
+         All of that user's tenders/pipeline/vault/composer data becomes the
+         org's data in place; nothing is copied or re-keyed. Guarded on
+         `clerk_org_id IS NULL` so a user who has already linked one org
+         elsewhere (and creates a second, brand-new org later) doesn't have
+         their first org's tenant silently reassigned to the second.
+      3. Neither -> provision a brand-new tenant for this org (mirrors
+         create_tenant_for_clerk_user, but keyed by org id; clerk_user_id is
+         deliberately left unset here — it's a unique column reserved for
+         the one legacy owner in case 2, not a general "creator" field, so a
+         person who creates multiple orgs doesn't collide on it).
+
+    Same concurrent-first-request IntegrityError-retry pattern as
+    create_tenant_for_clerk_user (see its docstring) for both the linking
+    UPDATE and the fresh-insert path.
+    """
+    tenant_id = get_tenant_id_by_clerk_org_id(conn, clerk_org_id)
+    if tenant_id is not None:
+        return tenant_id
+
+    with conn.connect() as c:
+        legacy = c.execute(select(tenants.c.id).where(
+            (tenants.c.clerk_user_id == clerk_user_id) & (tenants.c.clerk_org_id.is_(None))
+        )).fetchone()
+    if legacy is not None:
+        try:
+            with conn.begin() as c:
+                c.execute(update(tenants).where(
+                    (tenants.c.id == legacy[0]) & (tenants.c.clerk_org_id.is_(None))
+                ).values(clerk_org_id=clerk_org_id))
+        except IntegrityError:
+            pass
+        tenant_id = get_tenant_id_by_clerk_org_id(conn, clerk_org_id)
+        if tenant_id is not None:
+            return tenant_id
+
+    try:
+        with conn.begin() as c:
+            result = c.execute(insert(tenants).values(
+                clerk_org_id=clerk_org_id, email=email, created_at=date.today().isoformat()))
+            tenant_id = result.inserted_primary_key[0]
+    except IntegrityError:
+        tenant_id = get_tenant_id_by_clerk_org_id(conn, clerk_org_id)
+    _seed_tenant_config(conn, tenant_id)
+    return tenant_id
 
 
 def ensure_tenant(conn, tenant_id, clerk_user_id=None, email=None):
@@ -583,6 +650,49 @@ def get_tender_history(conn, tenant_id, pub_number):
             (tender_history.c.tenant_id == tenant_id) & (tender_history.c.pub_number == pub_number)
         ).order_by(tender_history.c.id.desc())).fetchall()
     return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
+
+
+def upsert_tender_review(conn, tenant_id, pub_number, clerk_user_id, account_name, status, reason=None):
+    """CR-007 Phase A: the personal counterpart to set_status above — every
+    triage action other than shortlisting (see api.patch_tender) lands here
+    instead of on the shared `tenders` row, keyed by the acting account, so
+    one member's dismiss/reviewed action never affects a colleague's queue.
+    `reason` carries CR-006's mandatory dismiss note (validated by the
+    caller); `dismissed_at` is stamped whenever status is "dismissed".
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    values = {"account_name": account_name, "status": status, "updated_at": now}
+    if reason is not None:
+        values["reason"] = reason
+    if status == "dismissed":
+        values["dismissed_at"] = now
+    key = ((tender_reviews.c.tenant_id == tenant_id) &
+           (tender_reviews.c.pub_number == pub_number) &
+           (tender_reviews.c.clerk_user_id == clerk_user_id))
+    with conn.begin() as c:
+        existing = c.execute(select(tender_reviews.c.tenant_id).where(key)).fetchone()
+        if existing:
+            c.execute(update(tender_reviews).where(key).values(**values))
+        else:
+            c.execute(insert(tender_reviews).values(
+                tenant_id=tenant_id, pub_number=pub_number, clerk_user_id=clerk_user_id, **values))
+
+
+def get_tender_reviews_for_account(conn, tenant_id, clerk_user_id):
+    """This account's personal triage state for every tender they've acted
+    on in this tenant, keyed by pub_number — merged onto the org-shared
+    `tenders.status` at the API layer (see api.list_tenders/get_tender). A
+    tender absent here simply defaults to "new" for this account.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_reviews.c.pub_number, tender_reviews.c.status,
+            tender_reviews.c.reason, tender_reviews.c.dismissed_at,
+        ).where(
+            (tender_reviews.c.tenant_id == tenant_id) &
+            (tender_reviews.c.clerk_user_id == clerk_user_id)
+        )).fetchall()
+    return {r[0]: {"status": r[1], "reason": r[2], "dismissed_at": r[3]} for r in rows}
 
 
 def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, status):
