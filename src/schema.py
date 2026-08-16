@@ -184,6 +184,17 @@ Index("ix_tender_history_tenant_pub", tender_history.c.tenant_id, tender_history
 # tenders' own "not a black box, but not a full audit log either" choice —
 # see dismissed_by's comment above); `reason`/`dismissed_at` are simply
 # overwritten on each new personal action, same as tenders.dismissal_reason.
+#
+# CR-007 Phase B: `status` gains two more values on top of Phase A's
+# new/reviewed/dismissed — `dismissed_final` (B1's second dismiss stage;
+# plain `dismissed` is now implicitly "stage 1 / soft", its existing
+# greyed-out-but-still-queued meaning already matches that) and
+# `needs_review` (B2, reusing `reason` as its mandatory parking comment,
+# same required-field pattern as a dismiss). `reason_category` (B3) is a
+# small fixed-vocabulary tag alongside the free-text `reason`, populated
+# only for a dismiss action, purely so relevance scoring can aggregate on
+# "similar tenders were dismissed for reason X" without doing NLP over
+# free text — see relevance.py and RELEVANCE_REASON_CATEGORIES below.
 tender_reviews = Table(
     "tender_reviews", metadata,
     Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
@@ -192,12 +203,38 @@ tender_reviews = Table(
     Column("account_name", Text, nullable=False, server_default=""),
     Column("status", Text, nullable=False, server_default="new"),
     Column("reason", Text, nullable=True),
+    Column("reason_category", Text, nullable=True),
     Column("dismissed_at", Text, nullable=True),
     Column("updated_at", Text, nullable=False, server_default=""),
     PrimaryKeyConstraint("tenant_id", "pub_number", "clerk_user_id"),
 )
 Index("ix_tender_reviews_tenant_pub", tender_reviews.c.tenant_id, tender_reviews.c.pub_number)
 Index("ix_tender_reviews_tenant_user", tender_reviews.c.tenant_id, tender_reviews.c.clerk_user_id)
+
+# CR-007 Phase B (B3): fixed, small vocabulary for `tender_reviews.
+# reason_category` — a dismiss reason is still freeform text first and
+# foremost (shown verbatim everywhere), this is purely an aggregation tag so
+# "similar tenders were dismissed for reason X" is computable without NLP.
+RELEVANCE_REASON_CATEGORIES = [
+    "wrong_sector", "value_too_low", "wrong_region", "excluded_type",
+    "duplicate", "deadline_missed", "other",
+]
+
+# CR-007 Phase B (B3): the latest reviewer correction to a computed relevance
+# score — org-shared (a judgment about the tender itself, not a personal
+# opinion, unlike tender_reviews above), so PK is (tenant_id, pub_number),
+# no clerk_user_id. Same "current state, overwritten on each new action, not
+# an audit log" convention as everything else on this table's neighbors.
+tender_relevance_overrides = Table(
+    "tender_relevance_overrides", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("score", Integer, nullable=False),
+    Column("note", Text, nullable=True),
+    Column("account_name", Text, nullable=False, server_default=""),
+    Column("updated_at", Text, nullable=False, server_default=""),
+    PrimaryKeyConstraint("tenant_id", "pub_number"),
+)
 
 vault_document_history = Table(
     "vault_document_history", metadata,

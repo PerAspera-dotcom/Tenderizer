@@ -21,8 +21,10 @@ export default function DismissedTenders() {
 
   function load() {
     // CR-006 D1: newest-dismissed first — the API's own sort is deadline-based
-    // and doesn't cover dismissed_at, so this sorts client-side.
-    listTenders({ status: 'dismissed', limit: 1000 }).then(r => {
+    // and doesn't cover dismissed_at, so this sorts client-side. CR-007 B1:
+    // this tab is the *final* dismiss stage now — a soft-dismissed tender is
+    // still an active Review Queue item (see ReviewQueue.tsx).
+    listTenders({ status: 'dismissed_final', limit: 1000 }).then(r => {
       const sorted = [...r.results].sort((a, b) => (b.dismissed_at || '').localeCompare(a.dismissed_at || ''));
       setTenders(sorted);
       setSelected(prev => {
@@ -160,6 +162,11 @@ export default function DismissedTenders() {
                     Dismissal reason
                   </div>
                   <div style={{ fontSize: 13, color: '#c8d0de', marginBottom: 8 }}>{selected.dismissal_reason || '—'}</div>
+                  {selected.dismissal_reason_category && (
+                    <div style={{ fontSize: 11, color: '#8892a4', marginBottom: 8 }}>
+                      Category: {selected.dismissal_reason_category.replace(/_/g, ' ')}
+                    </div>
+                  )}
                   <div style={{ fontSize: 11, color: '#8892a4' }}>
                     {selected.dismissed_by && <>Dismissed by {selected.dismissed_by}</>}
                     {selected.dismissed_by && selected.dismissed_at && ' · '}

@@ -132,9 +132,13 @@ export default function TenderFeed() {
                 <tr key={t.hash}>
                   <td>
                     <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360, fontSize: 13 }}>
-                      {/* CR-002 C2: dismissal reason stays visible here after a tender drops out of the Review Queue */}
-                      {t.status === 'dismissed' && t.dismissal_reason && (
+                      {/* CR-002 C2: dismissal reason stays visible here after a tender drops out of the Review Queue.
+                          CR-007 B1: covers both dismiss stages now. */}
+                      {(t.status === 'dismissed' || t.status === 'dismissed_final') && t.dismissal_reason && (
                         <span title={`Dismissed: ${t.dismissal_reason}`} style={{ marginRight: 4 }}>📝</span>
+                      )}
+                      {t.status === 'needs_review' && t.dismissal_reason && (
+                        <span title={`Needs further review: ${t.dismissal_reason}`} style={{ marginRight: 4 }}>🔎</span>
                       )}
                       {hasTranslatedTagLine(t) && (
                         <span title={`Translated — original: ${t.tag_line}`} style={{ marginRight: 4 }}>🌐</span>

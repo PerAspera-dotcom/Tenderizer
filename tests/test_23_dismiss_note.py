@@ -64,8 +64,9 @@ def test_set_status_none_reason_does_not_clear_an_existing_reason(tmp_path, monk
 
 def test_api_patch_dismissed_with_reason(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    result = api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Out of scope"),
-                               identity=make_identity())
+    result = api.patch_tender(
+        "PUB-1", api.StatusBody(status="dismissed", note="Out of scope", reason_category="other"),
+        identity=make_identity())
     assert result["status"] == "dismissed"
     rec = api.get_tender("PUB-1", include_excluded=True, identity=make_identity())
     assert rec["dismissal_reason"] == "Out of scope"

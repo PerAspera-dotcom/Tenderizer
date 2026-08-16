@@ -47,11 +47,28 @@ export function getTender(pub_number: string): Promise<Tender> {
   return apiFetch<Tender>(`/api/tenders/${encodeURIComponent(pub_number)}`);
 }
 
-export function patchTender(pub_number: string, status: string, note?: string): Promise<unknown> {
+export function patchTender(
+  pub_number: string, status: string, note?: string, reason_category?: string,
+): Promise<unknown> {
+  const body: Record<string, string> = { status };
+  if (note) body.note = note;
+  // CR-007 Phase B (B3): required alongside `note` for a dismiss stage —
+  // see ReviewQueue.tsx's REASON_CATEGORIES.
+  if (reason_category) body.reason_category = reason_category;
   return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(note ? { status, note } : { status }),
+    body: JSON.stringify(body),
+  });
+}
+
+// CR-007 Phase B (B3): a reviewer's correction to a computed relevance score
+// — see ReviewQueue.tsx's relevance block.
+export function patchTenderRelevance(pub_number: string, score: number, note?: string): Promise<unknown> {
+  return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}/relevance`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ score, note }),
   });
 }
 

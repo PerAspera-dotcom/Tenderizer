@@ -21,7 +21,11 @@ export default function Dashboard() {
     ]).then(([s, h, t]) => {
       setStats(s);
       setHealth(h);
-      setTopTenders(t.results.filter(r => r.status !== 'dismissed'));
+      // CR-007 Phase B (B1): exclude both dismiss stages from this
+      // highlight widget — a soft-dismissed tender is still technically
+      // "in the queue" (ReviewQueue.tsx), but doesn't belong in a top-5
+      // summary any more than a fully dismissed one does.
+      setTopTenders(t.results.filter(r => r.status !== 'dismissed' && r.status !== 'dismissed_final'));
     }).catch(() => {}).finally(() => setLoading(false));
   }
 

@@ -24,6 +24,9 @@ export interface Tender {
   value: string;
   value_currency: string;
   dismissal_reason: string | null;
+  // CR-007 Phase B (B3): fixed category tag alongside dismissal_reason —
+  // see schema.RELEVANCE_REASON_CATEGORIES on the backend.
+  dismissal_reason_category: string | null;
   dismissed_by: string | null;
   dismissed_at: string | null;
   notice_type: string;
@@ -31,6 +34,12 @@ export interface Tender {
   awarded_value: string | null;
   awarded_currency: string | null;
   award_detail: AwardDetail | null;
+  // CR-007 Phase B (B3): only present for a tender still awaiting a decision
+  // (status "new"/"needs_review") — see api._attach_relevance.
+  relevance_score?: number;
+  relevance_reasoning?: string;
+  relevance_corrected?: boolean;
+  relevance_corrected_by?: string | null;
 }
 
 // Past-tenders data-coverage follow-up: richer winner/lot/contract detail,

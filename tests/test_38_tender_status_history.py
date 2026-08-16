@@ -92,7 +92,8 @@ def test_dismiss_via_api_is_personal_and_not_logged_in_the_shared_tender_history
     """
     conn = _seed(tmp_path, monkeypatch)
 
-    api.patch_tender("P-1", api.StatusBody(status="dismissed", note="Second look needed"),
+    api.patch_tender("P-1", api.StatusBody(status="dismissed", note="Second look needed",
+                                            reason_category="other"),
                       identity=make_identity())
 
     assert store.get_tender_history(conn, TEST_TENANT_ID, "P-1") == []

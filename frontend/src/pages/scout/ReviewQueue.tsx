@@ -1,16 +1,32 @@
 import { useEffect, useState } from 'react';
-import { listTenders, patchTender } from '../../api';
+import { listTenders, patchTender, patchTenderRelevance } from '../../api';
 import type { Tender } from '../../types';
 import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
 type SortBy = 'pub_date' | 'deadline';
+// CR-007 Phase B (B1/B2): 'dismissed' is now stage 1/soft (still queued,
+// greyed out); 'dismissed_final' is stage 2 (the Dismissed tab).
+type StatusFilter = 'all' | 'new' | 'shortlisted' | 'reviewed' | 'needs_review';
+
+// CR-007 Phase B (B3): mirrors schema.RELEVANCE_REASON_CATEGORIES — required
+// alongside a dismiss reason so relevance scoring can aggregate on it.
+const REASON_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'wrong_sector', label: 'Wrong sector/CPV mismatch' },
+  { value: 'value_too_low', label: 'Value too low' },
+  { value: 'wrong_region', label: 'Wrong region/country' },
+  { value: 'excluded_type', label: 'Excluded type (e.g. rental)' },
+  { value: 'duplicate', label: 'Duplicate/republished' },
+  { value: 'deadline_missed', label: 'Deadline missed' },
+  { value: 'other', label: 'Other' },
+];
 
 function statusDotColor(status: string): string {
   if (status === 'shortlisted') return '#34d399';
   if (status === 'reviewed') return '#e3b341';
-  if (status === 'dismissed') return '#f87171';
+  if (status === 'needs_review') return '#c084fc';
+  if (status === 'dismissed' || status === 'dismissed_final') return '#f87171';
   return '#4c5a70';
 }
 
@@ -18,11 +34,14 @@ function StatusBadge({ status }: { status: string }) {
   const label =
     status === 'shortlisted' ? '● Shortlisted' :
     status === 'reviewed' ? '● Reviewed' :
-    status === 'dismissed' ? '● Dismissed' : '○ New — awaiting decision';
+    status === 'needs_review' ? '● Needs further review' :
+    status === 'dismissed' ? '● Dismissed — pending final' :
+    status === 'dismissed_final' ? '● Dismissed' : '○ New — awaiting decision';
   const color =
     status === 'shortlisted' ? '#34d399' :
     status === 'reviewed' ? '#e3b341' :
-    status === 'dismissed' ? '#f87171' : '#8892a4';
+    status === 'needs_review' ? '#c084fc' :
+    status === 'dismissed' || status === 'dismissed_final' ? '#f87171' : '#8892a4';
   return (
     <span style={{ background: `rgba(0,0,0,0.2)`, border: `1px solid ${color}`, color, borderRadius: 9999, padding: '3px 10px', fontSize: 12, fontWeight: 500 }}>
       {label}
@@ -60,7 +79,10 @@ export default function ReviewQueue() {
 
   function load() {
     listTenders({ limit: 500 }).then(r => {
-      const filtered = r.results.filter(t => t.status !== 'dismissed');
+      // CR-007 Phase B (B1): only the final dismiss stage leaves the queue —
+      // a soft-dismissed ("dismissed") tender stays, greyed out (see the row
+      // rendering below).
+      const filtered = r.results.filter(t => t.status !== 'dismissed_final');
       setTenders(sortTenders(filtered, sortBy));
       setSelected(prev => {
         if (!prev) return filtered[0] ?? null;
@@ -74,42 +96,103 @@ export default function ReviewQueue() {
       .finally(() => setLoading(false));
   }
 
-  // CR-006 D2: dismissal reason — inline panel, required to dismiss.
-  const [dismissOpen, setDismissOpen] = useState(false);
-  const [dismissNote, setDismissNote] = useState('');
+  // CR-006 D2 / CR-007 B1-B2: a required-note action in progress — dismiss
+  // (either stage) or "needs further review". Generalizes what used to be a
+  // dismiss-only inline panel (dismissOpen/dismissNote) into one shared
+  // shape so all three actions reuse the same UI and required-field guard.
+  const [noteAction, setNoteAction] = useState<
+    null | { status: string; label: string; requireCategory: boolean }
+  >(null);
+  const [noteText, setNoteText] = useState('');
+  const [reasonCategory, setReasonCategory] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+  function closeNoteAction() {
+    setNoteAction(null);
+    setNoteText('');
+    setReasonCategory('');
+  }
 
   function selectTender(t: Tender) {
     setSelected(t);
     setShowOriginal(false);   // CR-001 R3: default to the translation on a new selection
-    setDismissOpen(false);
-    setDismissNote('');
+    closeNoteAction();
+    setRelevanceEditing(false);
   }
 
   useEffect(() => { load(); }, []);
   useEffect(() => { setTenders(prev => sortTenders(prev, sortBy)); }, [sortBy]);
 
-  async function applyStatus(status: string, note?: string) {
+  async function applyStatus(status: string, note?: string, category?: string) {
     if (!selected || patching) return;
     setPatching(true);
     try {
-      await patchTender(selected.pub_number, status, note);
+      await patchTender(selected.pub_number, status, note, category);
       load();
     } finally {
       setPatching(false);
     }
   }
 
-  function confirmDismiss() {
-    const note = dismissNote.trim();
-    if (!note) return;  // CR-006 D2: client-side guard — mirrors the API's 400
-    applyStatus('dismissed', note);
-    setDismissOpen(false);
-    setDismissNote('');
+  function startDismiss() {
+    // CR-007 B1: the second stage pre-fills the first stage's note/category
+    // as a starting point (editable), rather than making the reviewer
+    // re-type a reason they already gave.
+    const isFinal = selected?.status === 'dismissed';
+    setNoteAction({
+      status: isFinal ? 'dismissed_final' : 'dismissed',
+      label: isFinal ? 'Confirm final dismiss' : 'Dismiss',
+      requireCategory: true,
+    });
+    setNoteText(isFinal ? (selected?.dismissal_reason ?? '') : '');
+    setReasonCategory(isFinal ? (selected?.dismissal_reason_category ?? '') : '');
+  }
+
+  function startNeedsReview() {
+    setNoteAction({ status: 'needs_review', label: 'Needs further review', requireCategory: false });
+    setNoteText('');
+    setReasonCategory('');
+  }
+
+  function confirmNoteAction() {
+    if (!noteAction) return;
+    const note = noteText.trim();
+    if (!note) return;  // mirrors the API's 400
+    if (noteAction.requireCategory && !reasonCategory) return;
+    applyStatus(noteAction.status, note, noteAction.requireCategory ? reasonCategory : undefined);
+    closeNoteAction();
+  }
+
+  // CR-007 Phase B (B3): reviewer correction to a computed relevance score.
+  const [relevanceEditing, setRelevanceEditing] = useState(false);
+  const [relevanceScoreInput, setRelevanceScoreInput] = useState('');
+  const [relevanceNoteInput, setRelevanceNoteInput] = useState('');
+
+  function startRelevanceCorrection() {
+    setRelevanceEditing(true);
+    setRelevanceScoreInput(String(selected?.relevance_score ?? 50));
+    setRelevanceNoteInput('');
+  }
+
+  async function submitRelevanceCorrection() {
+    if (!selected || patching) return;
+    const score = Number(relevanceScoreInput);
+    if (!Number.isFinite(score) || score < 0 || score > 100) return;
+    setPatching(true);
+    try {
+      await patchTenderRelevance(selected.pub_number, score, relevanceNoteInput.trim() || undefined);
+      setRelevanceEditing(false);
+      load();
+    } finally {
+      setPatching(false);
+    }
   }
 
   const newCount = tenders.filter(t => t.status === 'new').length;
   const shortlistedCount = tenders.filter(t => t.status === 'shortlisted').length;
   const reviewedCount = tenders.filter(t => t.status === 'reviewed').length;
+  const needsReviewCount = tenders.filter(t => t.status === 'needs_review').length;
+  const visibleTenders = statusFilter === 'all' ? tenders : tenders.filter(t => t.status === statusFilter);
 
   if (loading) return <div className="loading">Loading…</div>;
   if (error) return <div className="error">{error}</div>;
@@ -119,10 +202,40 @@ export default function ReviewQueue() {
       <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Review Queue</h1>
       <p style={{ color: '#8892a4', marginBottom: 16 }}>Triage scored matches — confirm relevance before they reach the analyst's shortlist</p>
 
+      {/* CR-007 Phase B (B2): pills are now clickable filters, so "needs
+          further review" has the CR's own "filter/section so parked tenders
+          don't get lost" without new UI chrome. */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 20, alignItems: 'center' }}>
-        <span className="pill pill-grey">○ {newCount} new</span>
-        <span className="pill pill-green">● {shortlistedCount} shortlisted</span>
-        <span className="pill pill-amber">● {reviewedCount} reviewed</span>
+        <button
+          className="pill pill-grey" style={{ cursor: 'pointer', border: statusFilter === 'all' ? '1px solid #4c5a70' : undefined }}
+          onClick={() => setStatusFilter('all')}
+        >
+          All ({tenders.length})
+        </button>
+        <button
+          className="pill pill-grey" style={{ cursor: 'pointer', border: statusFilter === 'new' ? '1px solid #8892a4' : undefined }}
+          onClick={() => setStatusFilter(f => f === 'new' ? 'all' : 'new')}
+        >
+          ○ {newCount} new
+        </button>
+        <button
+          className="pill pill-green" style={{ cursor: 'pointer', border: statusFilter === 'shortlisted' ? '1px solid #34d399' : undefined }}
+          onClick={() => setStatusFilter(f => f === 'shortlisted' ? 'all' : 'shortlisted')}
+        >
+          ● {shortlistedCount} shortlisted
+        </button>
+        <button
+          className="pill pill-amber" style={{ cursor: 'pointer', border: statusFilter === 'reviewed' ? '1px solid #e3b341' : undefined }}
+          onClick={() => setStatusFilter(f => f === 'reviewed' ? 'all' : 'reviewed')}
+        >
+          ● {reviewedCount} reviewed
+        </button>
+        <button
+          className="pill pill-purple" style={{ cursor: 'pointer', border: statusFilter === 'needs_review' ? '1px solid #c084fc' : undefined }}
+          onClick={() => setStatusFilter(f => f === 'needs_review' ? 'all' : 'needs_review')}
+        >
+          ● {needsReviewCount} needs review
+        </button>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#8892a4', fontSize: 12 }}>Sort by</span>
           <select
@@ -138,19 +251,26 @@ export default function ReviewQueue() {
 
       {tenders.length === 0 ? (
         <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>No tenders to review.</div>
+      ) : visibleTenders.length === 0 ? (
+        <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>
+          No tenders match this filter. <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setStatusFilter('all')}>Clear filter</button>
+        </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'flex-start' }}>
           {/* Left list */}
           <div className="card" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a2334', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#8892a4', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#151d2c', zIndex: 1 }}>
-              Queue · {tenders.length} matches
+              Queue · {visibleTenders.length} matches
             </div>
-            {tenders.map(t => {
+            {visibleTenders.map(t => {
               const conf = confidenceFromMatchSource(t.match_source);
               const isActive = selected?.pub_number === t.pub_number;
               const dotColor = statusDotColor(t.status);
               const barColor = conf >= 80 ? '#2EE6D4' : '#e3b341';
               const translated = hasTranslatedTagLine(t);
+              // CR-007 Phase B (B1): a soft-dismissed row greys out in place
+              // rather than disappearing (see load()'s filter above).
+              const softDismissed = t.status === 'dismissed';
               return (
                 <div
                   key={t.pub_number}
@@ -159,6 +279,7 @@ export default function ReviewQueue() {
                     padding: '12px 14px', cursor: 'pointer', borderBottom: '1px solid #1a2334',
                     background: isActive ? 'rgba(46,230,212,0.05)' : 'transparent',
                     borderLeft: `3px solid ${isActive ? '#2EE6D4' : 'transparent'}`,
+                    opacity: softDismissed ? 0.5 : 1,
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
@@ -331,6 +452,61 @@ export default function ReviewQueue() {
                   </div>
                 </div>
 
+                {/* CR-007 Phase B (B3): relevance — only present while the
+                    tender is still undecided (new/needs_review), see
+                    api._attach_relevance. Explainable by construction: the
+                    reasoning text names the actual similar-tender counts
+                    behind the score, not a black-box model. */}
+                {selected.relevance_score !== undefined && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 10 }}>
+                      Relevance {selected.relevance_corrected && <span style={{ color: '#c084fc', textTransform: 'none', fontWeight: 500 }}>· corrected{selected.relevance_corrected_by ? ` by ${selected.relevance_corrected_by}` : ''}</span>}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <div style={{ flex: 1, height: 4, background: '#1a2334', borderRadius: 9999, overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${selected.relevance_score}%`, height: '100%',
+                          background: selected.relevance_score >= 60 ? '#34d399' : selected.relevance_score >= 40 ? '#e3b341' : '#f87171',
+                          borderRadius: 9999,
+                        }} />
+                      </div>
+                      <span style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, minWidth: 36 }}>
+                        {selected.relevance_score}%
+                      </span>
+                    </div>
+                    <div style={{ color: '#8892a4', fontSize: 12, marginBottom: 8 }}>{selected.relevance_reasoning}</div>
+                    {!relevanceEditing ? (
+                      <button className="btn btn-ghost" disabled={patching} onClick={startRelevanceCorrection} style={{ fontSize: 11, padding: '3px 8px' }}>
+                        Correct this
+                      </button>
+                    ) : (
+                      <div style={{ padding: 10, background: 'rgba(192,132,252,0.05)', border: '1px solid rgba(192,132,252,0.2)', borderRadius: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <input
+                            type="number" min={0} max={100} className="input-field" style={{ width: 70 }}
+                            value={relevanceScoreInput} onChange={e => setRelevanceScoreInput(e.target.value)}
+                          />
+                          <span style={{ color: '#8892a4', fontSize: 12 }}>%</span>
+                        </div>
+                        <textarea
+                          className="input-field" style={{ minHeight: 44, resize: 'vertical', width: '100%' }}
+                          placeholder="Why? (optional)" value={relevanceNoteInput}
+                          onChange={e => setRelevanceNoteInput(e.target.value)}
+                        />
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <button className="btn" disabled={patching} onClick={submitRelevanceCorrection}
+                                  style={{ background: '#c084fc', color: '#0f1623', fontWeight: 600, fontSize: 12 }}>
+                            Save correction
+                          </button>
+                          <button className="btn btn-ghost" disabled={patching} onClick={() => setRelevanceEditing(false)} style={{ fontSize: 12 }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Triage buttons */}
                 <div style={{ borderTop: '1px solid #1a2334', paddingTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
@@ -361,17 +537,44 @@ export default function ReviewQueue() {
                   </button>
                   <button
                     className="btn"
-                    disabled={patching || selected.status === 'dismissed'}
-                    onClick={() => setDismissOpen(o => !o)}
+                    disabled={patching || selected.status === 'needs_review'}
+                    onClick={startNeedsReview}
                     style={{
-                      background: selected.status === 'dismissed' ? '#f87171' : 'rgba(248,113,113,0.1)',
-                      color: selected.status === 'dismissed' ? '#0f1623' : '#f87171',
+                      background: selected.status === 'needs_review' ? '#c084fc' : 'rgba(192,132,252,0.1)',
+                      color: selected.status === 'needs_review' ? '#0f1623' : '#c084fc',
+                      border: '1px solid rgba(192,132,252,0.3)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Needs further review
+                  </button>
+                  {/* CR-007 B1: "Dismiss" starts stage 1 (or is disabled once
+                      already at either dismiss stage); "Dismiss permanently"
+                      only appears once stage 1 is reached, to progress to
+                      stage 2 rather than restarting the note. */}
+                  <button
+                    className="btn"
+                    disabled={patching || selected.status === 'dismissed' || selected.status === 'dismissed_final'}
+                    onClick={startDismiss}
+                    style={{
+                      background: selected.status === 'dismissed_final' ? '#f87171' : 'rgba(248,113,113,0.1)',
+                      color: selected.status === 'dismissed_final' ? '#0f1623' : '#f87171',
                       border: '1px solid rgba(248,113,113,0.3)',
                       fontWeight: 600,
                     }}
                   >
                     Dismiss
                   </button>
+                  {selected.status === 'dismissed' && (
+                    <button
+                      className="btn"
+                      disabled={patching}
+                      onClick={startDismiss}
+                      style={{ background: '#f87171', color: '#0f1623', border: '1px solid rgba(248,113,113,0.3)', fontWeight: 600 }}
+                    >
+                      Dismiss permanently
+                    </button>
+                  )}
                   {selected.status !== 'new' && (
                     <button
                       className="btn btn-ghost"
@@ -384,26 +587,40 @@ export default function ReviewQueue() {
                   )}
                 </div>
 
-                {/* CR-006 D2: reason required to dismiss — Confirm stays disabled until non-empty */}
-                {dismissOpen && selected.status !== 'dismissed' && (
+                {/* CR-006 D2 / CR-007 B1-B2: reason required — Confirm stays
+                    disabled until the note (and, for a dismiss, category) is set. */}
+                {noteAction && (
                   <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 8 }}>
-                      Reason (required)
+                      {noteAction.label} — reason (required)
                     </div>
                     <textarea
                       className="input-field"
                       style={{ minHeight: 60, resize: 'vertical', width: '100%' }}
-                      placeholder="Why is this being dismissed?"
-                      value={dismissNote}
-                      onChange={e => setDismissNote(e.target.value)}
+                      placeholder={noteAction.requireCategory ? 'Why is this being dismissed?' : 'Why is this parked for further review?'}
+                      value={noteText}
+                      onChange={e => setNoteText(e.target.value)}
                     />
+                    {noteAction.requireCategory && (
+                      <select
+                        className="input-field"
+                        style={{ marginTop: 8, width: '100%' }}
+                        value={reasonCategory}
+                        onChange={e => setReasonCategory(e.target.value)}
+                      >
+                        <option value="">Category (required)…</option>
+                        {REASON_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                      </select>
+                    )}
                     <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                      <button className="btn" disabled={patching || !dismissNote.trim()} onClick={confirmDismiss}
+                      <button className="btn"
+                              disabled={patching || !noteText.trim() || (noteAction.requireCategory && !reasonCategory)}
+                              onClick={confirmNoteAction}
                               style={{ background: '#f87171', color: '#0f1623', fontWeight: 600, fontSize: 12 }}>
-                        Confirm dismiss
+                        {noteAction.label}
                       </button>
                       <button className="btn btn-ghost" disabled={patching}
-                              onClick={() => { setDismissOpen(false); setDismissNote(''); }}
+                              onClick={closeNoteAction}
                               style={{ fontSize: 12 }}>
                         Cancel
                       </button>
@@ -411,12 +628,18 @@ export default function ReviewQueue() {
                   </div>
                 )}
 
-                {selected.status === 'dismissed' && selected.dismissal_reason && (
+                {(selected.status === 'dismissed' || selected.status === 'dismissed_final' || selected.status === 'needs_review')
+                  && selected.dismissal_reason && (
                   <div style={{ marginTop: 12, padding: 12, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 6 }}>
-                      Dismissal reason
+                      {selected.status === 'needs_review' ? 'Review comment' : 'Dismissal reason'}
                     </div>
                     <div style={{ fontSize: 13, color: '#c8d0de' }}>{selected.dismissal_reason}</div>
+                    {selected.dismissal_reason_category && (
+                      <div style={{ fontSize: 11, color: '#8892a4', marginTop: 4 }}>
+                        Category: {REASON_CATEGORIES.find(c => c.value === selected.dismissal_reason_category)?.label ?? selected.dismissal_reason_category}
+                      </div>
+                    )}
                     {(selected.dismissed_by || selected.dismissed_at) && (
                       <div style={{ fontSize: 11, color: '#8892a4', marginTop: 6 }}>
                         {selected.dismissed_by && <>by {selected.dismissed_by}</>}

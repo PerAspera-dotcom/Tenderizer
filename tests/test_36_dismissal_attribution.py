@@ -75,9 +75,18 @@ def test_dismiss_with_blank_note_does_not_change_status(tmp_path, monkeypatch):
 
 def test_dismiss_with_a_real_reason_succeeds(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    result = api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Out of scope"),
-                               identity=make_identity())
+    result = api.patch_tender(
+        "PUB-1", api.StatusBody(status="dismissed", note="Out of scope", reason_category="other"),
+        identity=make_identity())
     assert result["status"] == "dismissed"
+
+
+def test_dismiss_without_a_reason_category_is_400(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Out of scope"),
+                          identity=make_identity())
+    assert exc.value.status_code == 400
 
 
 # ── D3: attribution — server-stamped, not client-suppliable ─────────────────
@@ -85,14 +94,16 @@ def test_dismiss_with_a_real_reason_succeeds(tmp_path, monkeypatch):
 def test_dismiss_stamps_dismissed_by_from_identity_not_the_client(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
     identity = make_identity(account_name="reviewer@example.com")
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong CPV"), identity=identity)
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong CPV",
+                                              reason_category="wrong_sector"), identity=identity)
     rec = _get(conn, "PUB-1", identity=identity)
     assert rec["dismissed_by"] == "reviewer@example.com"
 
 
 def test_dismiss_stamps_dismissed_at(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong CPV"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong CPV",
+                                              reason_category="wrong_sector"),
                       identity=make_identity())
     assert _get(conn, "PUB-1")["dismissed_at"]
 
@@ -109,7 +120,8 @@ def test_non_dismiss_transition_does_not_stamp_attribution(tmp_path, monkeypatch
 
 def test_dismiss_is_personal_a_colleague_still_sees_it_as_new(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Not for us"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Not for us",
+                                              reason_category="other"),
                       identity=make_identity())
 
     colleague = make_identity(account_name=TEST_ACCOUNT_NAME_B, clerk_user_id=TEST_CLERK_USER_ID_B)
@@ -134,33 +146,54 @@ def test_shortlist_by_one_account_is_visible_to_a_colleague(tmp_path, monkeypatc
 
 def test_dismissed_filter_returns_the_dismissal_metadata(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong sector"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Wrong sector",
+                                              reason_category="wrong_sector"),
                       identity=make_identity())
     results = api.list_tenders(status="dismissed", limit=100, offset=0,
                                 identity=make_identity())["results"]
     assert len(results) == 1
     assert results[0]["dismissal_reason"] == "Wrong sector"
+    assert results[0]["dismissal_reason_category"] == "wrong_sector"
     assert results[0]["dismissed_by"] == TEST_ACCOUNT_NAME
     assert results[0]["dismissed_at"]
 
 
-def test_dismissed_filter_still_includes_a_since_expired_deadline(tmp_path, monkeypatch):
+def test_finally_dismissed_filter_still_includes_a_since_expired_deadline(tmp_path, monkeypatch):
     """A tender dismissed while still open, whose deadline has since passed,
     must not silently vanish from its own Dismissed tab — unlike every other
     view, which does hide expired deadlines by default (api.py's
-    `if status != "dismissed"` guard around the expiry filter).
+    `if status != "dismissed_final"` guard around the expiry filter). CR-007
+    B1: this exemption is now stage-2 ("dismissed_final") only.
     """
     conn = _seed(tmp_path, monkeypatch, deadline="2020-01-01T00:00:00+00:00")
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Missed it"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Missed it",
+                                              reason_category="deadline_missed"),
                       identity=make_identity())
-    dismissed = api.list_tenders(status="dismissed", limit=100, offset=0,
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed_final", note="Missed it",
+                                              reason_category="deadline_missed"),
+                      identity=make_identity())
+    dismissed = api.list_tenders(status="dismissed_final", limit=100, offset=0,
                                   identity=make_identity())["results"]
     assert {r["pub_number"] for r in dismissed} == {"PUB-1"}
 
     # Sanity: the same expired-deadline tender is correctly hidden from a
-    # non-dismissed-status view (the filter is status-gated, not removed).
+    # non-dismissed_final-status view (the filter is status-gated, not removed).
     active = api.list_tenders(status="new", limit=100, offset=0, identity=make_identity())["results"]
     assert active == []
+
+
+def test_soft_dismissed_stays_subject_to_the_expiry_filter(tmp_path, monkeypatch):
+    """CR-007 B1: unlike the final Dismissed tab, a stage-1 ("dismissed")
+    tender is still an active Review Queue item, so an expired deadline
+    hides it same as any other undecided tender.
+    """
+    _seed(tmp_path, monkeypatch, deadline="2020-01-01T00:00:00+00:00")
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Missed it",
+                                              reason_category="deadline_missed"),
+                      identity=make_identity())
+    soft_dismissed = api.list_tenders(status="dismissed", limit=100, offset=0,
+                                       identity=make_identity())["results"]
+    assert soft_dismissed == []
 
 
 # ── D4: reinstate reuses set_status; CR-007 Phase A: shortlisting supersedes
@@ -168,7 +201,8 @@ def test_dismissed_filter_still_includes_a_since_expired_deadline(tmp_path, monk
 
 def test_reinstate_leaves_the_dismissed_tab_and_reappears_elsewhere(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed",
+                                              reason_category="other"),
                       identity=make_identity())
     api.patch_tender("PUB-1", api.StatusBody(status="shortlisted"), identity=make_identity())
 
@@ -191,7 +225,8 @@ def test_shortlisting_a_dismissed_tender_supersedes_the_shared_view(tmp_path, mo
     (see the next test).
     """
     conn = _seed(tmp_path, monkeypatch)
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed",
+                                              reason_category="other"),
                       identity=make_identity())
     api.patch_tender("PUB-1", api.StatusBody(status="shortlisted"), identity=make_identity())
 
@@ -205,10 +240,56 @@ def test_shortlisting_a_dismissed_tender_supersedes_the_shared_view(tmp_path, mo
 def test_the_prior_personal_dismissal_is_still_queryable_after_shortlisting(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
     identity = make_identity()
-    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed"),
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed",
+                                              reason_category="other"),
                       identity=identity)
     api.patch_tender("PUB-1", api.StatusBody(status="shortlisted"), identity=identity)
 
     reviews = store.get_tender_reviews_for_account(conn, TEST_TENANT_ID, identity.clerk_user_id)
     assert reviews["PUB-1"]["status"] == "dismissed"
     assert reviews["PUB-1"]["reason"] == "Second look needed"
+
+
+# ── CR-007 Phase B (B1): two-stage dismissal ─────────────────────────────────
+
+def test_first_dismiss_greys_out_but_stays_in_the_queue(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="Second look needed",
+                                              reason_category="other"),
+                      identity=make_identity())
+
+    rec = _get(conn, "PUB-1")
+    assert rec["status"] == "dismissed"
+    # Not yet on the final Dismissed tab...
+    assert api.list_tenders(status="dismissed_final", limit=100, offset=0,
+                             identity=make_identity())["results"] == []
+    # ...but still returned by an unfiltered/soft-dismissed query, i.e. still
+    # "in the queue" rather than removed.
+    assert api.list_tenders(status="dismissed", limit=100, offset=0,
+                             identity=make_identity())["results"][0]["pub_number"] == "PUB-1"
+
+
+def test_second_dismiss_moves_it_to_the_dismissed_tab(tmp_path, monkeypatch):
+    conn = _seed(tmp_path, monkeypatch)
+    identity = make_identity()
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="First pass",
+                                              reason_category="other"), identity=identity)
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed_final", note="Confirmed",
+                                              reason_category="other"), identity=identity)
+
+    rec = _get(conn, "PUB-1")
+    assert rec["status"] == "dismissed_final"
+    assert api.list_tenders(status="dismissed", limit=100, offset=0,
+                             identity=identity)["results"] == []
+    final = api.list_tenders(status="dismissed_final", limit=100, offset=0, identity=identity)["results"]
+    assert {r["pub_number"] for r in final} == {"PUB-1"}
+
+
+def test_dismissed_final_without_a_note_is_400(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    identity = make_identity()
+    api.patch_tender("PUB-1", api.StatusBody(status="dismissed", note="First pass",
+                                              reason_category="other"), identity=identity)
+    with pytest.raises(HTTPException) as exc:
+        api.patch_tender("PUB-1", api.StatusBody(status="dismissed_final"), identity=identity)
+    assert exc.value.status_code == 400

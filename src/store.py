@@ -33,7 +33,7 @@ from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 from schema import (tender_history, vault_document_history, composer_document_history,
-                     composer_requirement_history, tender_reviews)
+                     composer_requirement_history, tender_reviews, tender_relevance_overrides)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -652,19 +652,27 @@ def get_tender_history(conn, tenant_id, pub_number):
     return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
 
 
-def upsert_tender_review(conn, tenant_id, pub_number, clerk_user_id, account_name, status, reason=None):
+_DISMISS_STATUSES = {"dismissed", "dismissed_final"}
+
+
+def upsert_tender_review(conn, tenant_id, pub_number, clerk_user_id, account_name, status,
+                          reason=None, reason_category=None):
     """CR-007 Phase A: the personal counterpart to set_status above — every
     triage action other than shortlisting (see api.patch_tender) lands here
     instead of on the shared `tenders` row, keyed by the acting account, so
     one member's dismiss/reviewed action never affects a colleague's queue.
     `reason` carries CR-006's mandatory dismiss note (validated by the
-    caller); `dismissed_at` is stamped whenever status is "dismissed".
+    caller) — also reused for B2's mandatory "needs further review" comment.
+    `dismissed_at` is stamped on either dismiss stage (B1). `reason_category`
+    (B3) is only meaningful alongside a dismiss; left untouched otherwise.
     """
     now = datetime.now(timezone.utc).isoformat()
     values = {"account_name": account_name, "status": status, "updated_at": now}
     if reason is not None:
         values["reason"] = reason
-    if status == "dismissed":
+    if reason_category is not None:
+        values["reason_category"] = reason_category
+    if status in _DISMISS_STATUSES:
         values["dismissed_at"] = now
     key = ((tender_reviews.c.tenant_id == tenant_id) &
            (tender_reviews.c.pub_number == pub_number) &
@@ -687,12 +695,66 @@ def get_tender_reviews_for_account(conn, tenant_id, clerk_user_id):
     with conn.connect() as c:
         rows = c.execute(select(
             tender_reviews.c.pub_number, tender_reviews.c.status,
-            tender_reviews.c.reason, tender_reviews.c.dismissed_at,
+            tender_reviews.c.reason, tender_reviews.c.reason_category, tender_reviews.c.dismissed_at,
         ).where(
             (tender_reviews.c.tenant_id == tenant_id) &
             (tender_reviews.c.clerk_user_id == clerk_user_id)
         )).fetchall()
-    return {r[0]: {"status": r[1], "reason": r[2], "dismissed_at": r[3]} for r in rows}
+    return {r[0]: {"status": r[1], "reason": r[2], "reason_category": r[3], "dismissed_at": r[4]}
+            for r in rows}
+
+
+def get_org_dismissed_final_reviews(conn, tenant_id):
+    """CR-007 Phase B (B3): every org member's finally-dismissed tenders,
+    pooled — the negative training signal for relevance scoring is an org
+    property (the team's collective taste), not a personal one, unlike the
+    per-account view get_tender_reviews_for_account returns. One row per
+    (pub_number, clerk_user_id) that reached `dismissed_final`; a tender
+    dismissed by two different members yields two rows, each still a real
+    independent data point for the aggregate. `reason_category` is included
+    for relevance.py's reasoning text; joined against `tenders` by the
+    caller (see api.py) since this table alone has no CPV/category data.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_reviews.c.pub_number, tender_reviews.c.reason_category,
+        ).where(
+            (tender_reviews.c.tenant_id == tenant_id) &
+            (tender_reviews.c.status == "dismissed_final")
+        )).fetchall()
+    return [{"pub_number": r[0], "reason_category": r[1]} for r in rows]
+
+
+def upsert_relevance_override(conn, tenant_id, pub_number, score, note, account_name):
+    """CR-007 Phase B (B3): a reviewer's correction to a computed relevance
+    score — org-shared (see schema.py's tender_relevance_overrides comment),
+    overwritten wholesale on each new correction like every other "current
+    state, not a log" field in this module.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    values = {"score": score, "note": note, "account_name": account_name, "updated_at": now}
+    key = ((tender_relevance_overrides.c.tenant_id == tenant_id) &
+           (tender_relevance_overrides.c.pub_number == pub_number))
+    with conn.begin() as c:
+        existing = c.execute(select(tender_relevance_overrides.c.tenant_id).where(key)).fetchone()
+        if existing:
+            c.execute(update(tender_relevance_overrides).where(key).values(**values))
+        else:
+            c.execute(insert(tender_relevance_overrides).values(
+                tenant_id=tenant_id, pub_number=pub_number, **values))
+
+
+def get_relevance_overrides(conn, tenant_id):
+    """All stored corrections for this org, keyed by pub_number — merged
+    onto the computed score at the API layer (see api._attach_relevance).
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_relevance_overrides.c.pub_number, tender_relevance_overrides.c.score,
+            tender_relevance_overrides.c.note, tender_relevance_overrides.c.account_name,
+            tender_relevance_overrides.c.updated_at,
+        ).where(tender_relevance_overrides.c.tenant_id == tenant_id)).fetchall()
+    return {r[0]: {"score": r[1], "note": r[2], "account_name": r[3], "updated_at": r[4]} for r in rows}
 
 
 def set_translation(conn, tenant_id, pub_number, tag_line_en, description_en, status):

@@ -21,8 +21,9 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer
+import store, config, auth, vault, composer, relevance
 import run as engine
+from schema import RELEVANCE_REASON_CATEGORIES
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -279,13 +280,52 @@ def _merge_personal_review_state(records, reviews, account_name):
         if personal:
             r["status"] = personal["status"]
             r["dismissal_reason"] = personal["reason"]
-            r["dismissed_by"] = account_name if personal["status"] == "dismissed" else None
+            r["dismissal_reason_category"] = personal["reason_category"]
+            r["dismissed_by"] = account_name if personal["status"] in ("dismissed", "dismissed_final") else None
             r["dismissed_at"] = personal["dismissed_at"]
         else:
             r["status"] = "new"
             r["dismissal_reason"] = None
+            r["dismissal_reason_category"] = None
             r["dismissed_by"] = None
             r["dismissed_at"] = None
+    return records
+
+
+def _attach_relevance(conn, tenant_id, records):
+    """CR-007 Phase B (B3): computes relevance_score/relevance_reasoning for
+    every tender still awaiting a decision (status "new" or "needs_review")
+    — a decided tender (shortlisted/dismissed_final) doesn't need one.
+    `records` must already have personal review state merged
+    (_merge_personal_review_state) so `status` reflects what the caller
+    actually sees. The positive/negative training pools are pulled from
+    this same `records` list (must be the tenant's *full* record set, not
+    an already-filtered/paginated slice) plus every org member's dismissals
+    (store.get_org_dismissed_final_reviews) — an org-wide aggregate, not
+    just the caller's own history. Mutates `records` in place and returns it.
+    """
+    positive = [r for r in records if r.get("status") == "shortlisted"]
+    by_pub = {r["pub_number"]: r for r in records}
+    dismissed = store.get_org_dismissed_final_reviews(conn, tenant_id)
+    negative = [{**by_pub[d["pub_number"]], "reason_category": d["reason_category"]}
+                for d in dismissed if d["pub_number"] in by_pub]
+    overrides = store.get_relevance_overrides(conn, tenant_id)
+
+    for r in records:
+        if r.get("status") not in ("new", "needs_review"):
+            continue
+        override = overrides.get(r["pub_number"])
+        if override:
+            r["relevance_score"] = override["score"]
+            r["relevance_reasoning"] = override["note"] or "Corrected by a reviewer."
+            r["relevance_corrected"] = True
+            r["relevance_corrected_by"] = override["account_name"]
+        else:
+            result = relevance.score_relevance(r, positive, negative)
+            r["relevance_score"] = result["score"]
+            r["relevance_reasoning"] = result["reasoning"]
+            r["relevance_corrected"] = False
+            r["relevance_corrected_by"] = None
     return records
 
 
@@ -310,6 +350,7 @@ def list_tenders(
     records = store.all_records(conn, tenant_id)
     reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
     _merge_personal_review_state(records, reviews, identity.account_name)
+    _attach_relevance(conn, tenant_id, records)
 
     # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
     # default so they don't surface here even though the report already hid
@@ -355,7 +396,11 @@ def list_tenders(
     # rows. CR-006: a dismissed tender is being reviewed for its dismissal, not
     # its live deadline — an old dismissal with a since-passed deadline must
     # still show up on the Dismissed tab, so this filter doesn't apply there.
-    if status != "dismissed":
+    # CR-007 Phase B (B1): only the *final* dismissed tab gets that exemption
+    # now — a soft-dismissed ("dismissed") tender is still an active Review
+    # Queue item and stays subject to the normal expiry filter like anything
+    # else still awaiting a decision.
+    if status != "dismissed_final":
         today = date.today().isoformat()
         records = [r for r in records
                    if not r.get("deadline") or r["deadline"][:10] >= today]
@@ -369,12 +414,17 @@ def get_tender(pub_number: str, include_excluded: bool = False,
                identity: Identity = Depends(get_current_identity)):
     tenant_id = identity.tenant_id
     conn = _db()
-    for r in store.all_records(conn, tenant_id):
+    # The full org record set, not just the one requested, so a relevance
+    # score for it (see _attach_relevance) is computed against the org's
+    # real positive/negative pools rather than an empty one.
+    records = store.all_records(conn, tenant_id)
+    reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
+    _merge_personal_review_state(records, reviews, identity.account_name)
+    _attach_relevance(conn, tenant_id, records)
+    for r in records:
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
                 raise HTTPException(404, "Tender not found")
-            reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
-            _merge_personal_review_state([r], reviews, identity.account_name)
             return r
     # Own tenant has no such record: 403 if it belongs to another tenant
     # (exists, just not yours) vs 404 if it doesn't exist anywhere.
@@ -385,9 +435,20 @@ def get_tender(pub_number: str, include_excluded: bool = False,
 
 class StatusBody(BaseModel):
     status: str
-    note: Optional[str] = None  # CR-006: dismissal reason — required when status="dismissed"
+    note: Optional[str] = None  # CR-006: dismissal reason — required when status is a dismiss stage
+    # CR-007 Phase B (B3): fixed dismiss-reason tag, required alongside `note`
+    # on either dismiss stage — see schema.RELEVANCE_REASON_CATEGORIES.
+    reason_category: Optional[str] = None
 
-_VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed"}
+_VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed", "dismissed_final", "needs_review"}
+# CR-007 Phase B (B1): both dismiss stages require their own mandatory note
+# (plain "dismissed" is stage 1/soft — still visible, greyed out, in the
+# Review Queue; "dismissed_final" is stage 2, moves it to the Dismissed tab)
+# and, per B3, a fixed reason_category alongside it. B2's "needs_review"
+# reuses the same mandatory-note requirement for its parking comment, but
+# has no category (that's a dismiss-only aggregation signal).
+_DISMISS_STATUSES = {"dismissed", "dismissed_final"}
+_NOTE_REQUIRED_STATUSES = _DISMISS_STATUSES | {"needs_review"}
 # CR-007 Phase A: "shortlisted" is the org's collective decision — the only
 # status that still writes the shared `tenders` row via store.set_status.
 # Everything else is personal triage, written to tender_reviews instead (see
@@ -410,11 +471,15 @@ def patch_tender(pub_number: str, body: StatusBody,
         if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
             raise HTTPException(403, "Forbidden")
         raise HTTPException(404, "Tender not found")
-    # CR-006 D2: a reason is only relevant, and now required, on the dismiss
-    # action itself — a note sent with any other status is silently ignored
-    # rather than 422ing, same as CR-002 C2's original optional-note behavior.
-    if body.status == "dismissed" and not (body.note or "").strip():
-        raise HTTPException(400, "A reason is required to dismiss a tender")
+    # CR-006 D2 / CR-007 B1-B2: a note is only relevant, and now required, on
+    # a dismiss stage or a "needs further review" — a note sent with any
+    # other status is silently ignored rather than 422ing, same as CR-002
+    # C2's original optional-note behavior.
+    if body.status in _NOTE_REQUIRED_STATUSES and not (body.note or "").strip():
+        verb = "dismiss" if body.status in _DISMISS_STATUSES else "park for further review"
+        raise HTTPException(400, f"A reason is required to {verb} a tender")
+    if body.status in _DISMISS_STATUSES and body.reason_category not in RELEVANCE_REASON_CATEGORIES:
+        raise HTTPException(400, f"reason_category must be one of {RELEVANCE_REASON_CATEGORIES}")
 
     reverting_shortlist = current["status"] == "shortlisted" and body.status == "new"
     if body.status in _SHARED_STATUSES or reverting_shortlist:
@@ -422,8 +487,36 @@ def patch_tender(pub_number: str, body: StatusBody,
     else:
         store.upsert_tender_review(
             conn, tenant_id, pub_number, identity.clerk_user_id, identity.account_name,
-            body.status, reason=body.note.strip() if body.status == "dismissed" else None)
+            body.status,
+            reason=body.note.strip() if body.status in _NOTE_REQUIRED_STATUSES else None,
+            reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None)
     return {"pub_number": pub_number, "status": body.status}
+
+
+class RelevanceBody(BaseModel):
+    score: int
+    note: Optional[str] = None
+
+
+@app.patch("/api/tenders/{pub_number}/relevance")
+def patch_tender_relevance(pub_number: str, body: RelevanceBody,
+                            identity: Identity = Depends(get_current_identity)):
+    """CR-007 Phase B (B3): a reviewer's correction to a computed relevance
+    score — org-shared (see schema.tender_relevance_overrides), and fed back
+    as-is on the next read via _attach_relevance rather than the computed
+    value. Doesn't change the tender's triage status; purely a scoring note.
+    """
+    tenant_id = identity.tenant_id
+    if not 0 <= body.score <= 100:
+        raise HTTPException(422, "score must be between 0 and 100")
+    conn = _db()
+    if not any(r["pub_number"] == pub_number for r in store.all_records(conn, tenant_id)):
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    store.upsert_relevance_override(
+        conn, tenant_id, pub_number, body.score, body.note, identity.account_name)
+    return {"pub_number": pub_number, "relevance_score": body.score, "relevance_corrected": True}
 
 
 @app.get("/api/tenders/{pub_number}/history")
