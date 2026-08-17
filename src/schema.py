@@ -372,6 +372,14 @@ vault_documents = Table(
     # rather than a full collections entity — see CLAUDE_CODE_NEXT.md). Same
     # JSON-array-of-strings encoding as cpv_codes.
     Column("tags", Text, nullable=False, server_default="[]"),
+    # CR-007 Phase E (E1): a certificate/datasheet's own validity/expiry date
+    # — the extraction prompt already asked Claude for a freeform "valid
+    # until" metadata field, but nothing stored it as a real, comparable
+    # date; this is that, first-class and ISO (YYYY-MM-DD), so "is this
+    # expired" is a plain string/date comparison rather than a metadata_json
+    # tree-walk. NULL (not extracted, or the doc type has no such date —
+    # most Vault documents never will) is the common case, not an error.
+    Column("valid_until", Text, nullable=True),
 )
 VAULT_DOCUMENTS_COLUMNS = [c.name for c in vault_documents.columns]
 

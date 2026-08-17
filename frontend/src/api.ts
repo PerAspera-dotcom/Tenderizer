@@ -252,6 +252,15 @@ export function setVaultDocTags(id: number, tags: string[]): Promise<{ id: numbe
   });
 }
 
+// CR-007 Phase E (E2): accept (or edit) the suggested filename.
+export function renameVaultDoc(id: number, filename: string): Promise<{ id: number; filename: string }> {
+  return apiFetch(`/api/vault/docs/${id}/filename`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename }),
+  });
+}
+
 export function listVaultTags(): Promise<{ tags: string[] }> {
   return apiFetch('/api/vault/tags');
 }

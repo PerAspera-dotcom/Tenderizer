@@ -16,6 +16,8 @@ skipped (chunk/embed still happens) rather than crashing.
 import base64
 import json
 import os
+import re
+from datetime import date
 
 import chromadb
 import pdfplumber
@@ -111,7 +113,8 @@ Return ONLY a JSON object (no markdown fences, no other text) with this exact sh
   "doc_type": "Datasheet" | "Drawing" | "Certificate" | "Other",
   "metadata": { "<field name>": "<value, with units where applicable>", ... },
   "cpv_codes": ["<8-digit CPV code>", ...],
-  "confidence": <your own confidence in this extraction, 0.0 to 1.0>
+  "confidence": <your own confidence in this extraction, 0.0 to 1.0>,
+  "valid_until": "<YYYY-MM-DD, or null>"
 }
 
 Extract whatever technical specs are actually present (e.g. material, water column, fire rating, \
@@ -120,6 +123,12 @@ shown. cpv_codes should only include codes explicitly present in the document or
 implied by its stated scope; leave the list empty if none apply. If the document contains no \
 extractable technical content, still return the JSON shape with an empty "metadata" object and a \
 low confidence.
+
+"valid_until" is separate from "metadata": if the document states an expiry/validity date for \
+itself (a certificate's expiry, a standard's re-certification date, "valid until", "expires on") \
+convert it to strict YYYY-MM-DD and put it here — this is the one field that drives an automatic \
+"needs replacement" flag, so it must be a real calendar date, not a duration or approximate year. \
+If no such date is stated, or it can't be resolved to an exact date, return null — never guess.
 """
 
 
@@ -153,12 +162,31 @@ def _parse_metadata_response(text):
     return data
 
 
+def _valid_iso_date_or_none(value):
+    """CR-007 Phase E (E1): the model is asked for a strict YYYY-MM-DD or
+    null — this is the "never fabricate/guess" backstop, same spirit as
+    normalize.py's award-field handling elsewhere in this codebase. Anything
+    that isn't a real, exactly-formatted calendar date becomes None rather
+    than being stored as a half-trusted string a later comparison could
+    misread (e.g. "expires 2027" or "5 years" would silently sort as
+    "already expired" if stored as-is and compared lexicographically).
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value
+
+
 def extract_metadata(path, content_type, extra_hints=None):
-    """(doc_type, metadata_dict, cpv_codes, confidence) via Claude Vision —
-    PDF only (no visual content to extract from a DOCX the same way).
-    Returns None if ANTHROPIC_API_KEY isn't configured, the file isn't a PDF,
-    or the response couldn't be parsed — caller leaves the doc `processing`
-    rather than treating any of these as a crash.
+    """(doc_type, metadata_dict, cpv_codes, confidence, valid_until) via
+    Claude Vision — PDF only (no visual content to extract from a DOCX the
+    same way). Returns None if ANTHROPIC_API_KEY isn't configured, the file
+    isn't a PDF, or the response couldn't be parsed — caller leaves the doc
+    `processing` rather than treating any of these as a crash.
 
     `extra_hints` — optional list of tenant-supplied extraction hints
     (Vault Rules page), appended to the prompt verbatim so an analyst can
@@ -194,7 +222,45 @@ def extract_metadata(path, content_type, extra_hints=None):
     cpv_codes = parsed.get("cpv_codes") or []
     confidence = parsed.get("confidence")
     confidence = confidence if isinstance(confidence, (int, float)) else None
-    return doc_type, metadata, cpv_codes, confidence
+    valid_until = _valid_iso_date_or_none(parsed.get("valid_until"))
+    return doc_type, metadata, cpv_codes, confidence, valid_until
+
+
+def _slugify(value):
+    slug = re.sub(r"[^\w\-]+", "_", str(value).strip())
+    return re.sub(r"_+", "_", slug).strip("_")
+
+
+# CR-007 Phase E (E2): the extraction prompt's field names are freeform
+# (Claude names them per document, not a fixed schema — see _METADATA_PROMPT),
+# so this is a best-effort match against the handful of names it tends to
+# use for the most identifying spec, not a guaranteed hit. A miss just means
+# a shorter (or unchanged) suggestion, never an error.
+_NAMING_METADATA_KEYS = ("material", "standard", "rating", "fire rating", "issuer")
+
+
+def suggest_filename(doc_type, metadata, cpv_codes, original_filename):
+    """CR-007 Phase E (E2): a suggested filename built from what extraction
+    already found — master-data-governance assist, not enforcement (the CR:
+    "Tenderizer assists rather than owns it"). Purely a suggestion returned
+    alongside the real filename (see api._attach_suggested_filename); never
+    applied automatically. Falls back to the original filename untouched
+    when nothing usable was extracted.
+    """
+    parts = []
+    if doc_type and doc_type != "Other":
+        parts.append(doc_type)
+    for key in _NAMING_METADATA_KEYS:
+        value = next((v for k, v in (metadata or {}).items() if k.lower() == key and v), None)
+        if value:
+            parts.append(value)
+    if cpv_codes:
+        parts.append(cpv_codes[0])
+    if not parts:
+        return original_filename
+    ext = os.path.splitext(original_filename)[1]
+    slug = "_".join(s for s in (_slugify(p) for p in parts) if s)
+    return f"{slug}{ext}" if slug else original_filename
 
 
 def search_vault(tenant_id, doc_ids, query, top_k=8):
@@ -245,10 +311,11 @@ def process_upload(tenant_id, doc_id, path, content_type, extra_hints=None, conf
     extracted = extract_metadata(path, content_type, extra_hints=extra_hints)
     if extracted is None:
         return {"doc_type": None, "metadata": {}, "cpv_codes": [], "confidence": None,
-                "fields_extracted": 0, "status": "indexed"}
-    doc_type, metadata, cpv_codes, confidence = extracted
+                "fields_extracted": 0, "status": "indexed", "valid_until": None}
+    doc_type, metadata, cpv_codes, confidence, valid_until = extracted
     status = "indexed"
     if confidence_threshold is not None and confidence is not None and confidence < confidence_threshold:
         status = "needs_review"
     return {"doc_type": doc_type, "metadata": metadata, "cpv_codes": cpv_codes,
-            "confidence": confidence, "fields_extracted": len(metadata), "status": status}
+            "confidence": confidence, "fields_extracted": len(metadata), "status": status,
+            "valid_until": valid_until}

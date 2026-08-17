@@ -999,7 +999,8 @@ def _run_vault_processing(tenant_id, doc_id, path, content_type):
     store.update_vault_document_metadata(
         _db(), tenant_id, doc_id, doc_type=result["doc_type"], metadata=result["metadata"],
         cpv_codes=result["cpv_codes"], confidence=result["confidence"],
-        fields_extracted=result["fields_extracted"], status=result["status"])
+        fields_extracted=result["fields_extracted"], status=result["status"],
+        valid_until=result["valid_until"])
 
 
 @app.post("/api/vault/ingest")
@@ -1025,10 +1026,56 @@ async def ingest_vault_document(background: BackgroundTasks, file: UploadFile = 
     return created
 
 
+# CR-007 Phase E (E1): the "aging" window before outright expiry — a doc
+# whose valid_until falls within this many days gets flagged expiring_soon,
+# not just expired. Not tenant-configurable (unlike Phase D's deadline
+# window) — the CR doesn't ask for that here, and a document's own stated
+# validity is a fixed fact, not a business-tunable urgency threshold.
+EXPIRY_WARNING_DAYS = 30
+
+
+def _attach_expiry(docs):
+    """CR-007 Phase E (E1): computed, not stored — `expired` (valid_until
+    has passed) / `expiring_soon` (within EXPIRY_WARNING_DAYS) flags purely
+    from valid_until vs today. A doc with no valid_until (most of them, per
+    vault.py's "never guess" extraction rule) gets both False, never a
+    fabricated urgency. Mutates `docs` in place and returns it.
+    """
+    today = date.today()
+    for d in docs:
+        expired = expiring_soon = False
+        vu = d.get("valid_until")
+        if vu:
+            try:
+                vu_date = date.fromisoformat(vu)
+                expired = vu_date < today
+                expiring_soon = not expired and (vu_date - today).days <= EXPIRY_WARNING_DAYS
+            except ValueError:
+                pass
+        d["expired"] = expired
+        d["expiring_soon"] = expiring_soon
+    return docs
+
+
+def _attach_suggested_filename(docs):
+    """CR-007 Phase E (E2): a `suggested_filename` computed from what
+    extraction already found (vault.suggest_filename) — omitted entirely
+    when it wouldn't actually change anything, so the frontend only shows
+    an "Accept" affordance when there's a real suggestion to accept.
+    """
+    for d in docs:
+        suggestion = vault.suggest_filename(d.get("doc_type"), d.get("metadata"),
+                                             d.get("cpv_codes"), d["filename"])
+        d["suggested_filename"] = suggestion if suggestion != d["filename"] else None
+    return docs
+
+
 @app.get("/api/vault/docs")
 def get_vault_docs(q: Optional[str] = None, tag: Optional[str] = None,
                     tenant_id: int = Depends(get_current_tenant_id)):
     results = store.list_vault_documents(_db(), tenant_id, q=q, tag=tag)
+    _attach_expiry(results)
+    _attach_suggested_filename(results)
     processing = sum(1 for d in results if d["status"] == "processing")
     return {"total": len(results), "processing": processing, "results": results}
 
@@ -1038,6 +1085,8 @@ def get_vault_doc_detail(document_id: int, tenant_id: int = Depends(get_current_
     doc = next((d for d in store.list_vault_documents(_db(), tenant_id) if d["id"] == document_id), None)
     if doc is None:
         raise HTTPException(404, "Document not found")
+    _attach_expiry([doc])
+    _attach_suggested_filename([doc])
     return doc
 
 
@@ -1086,11 +1135,17 @@ def search_vault_endpoint(query: Optional[str] = None, cpv: Optional[str] = None
     candidates = store.find_vault_documents(conn, tenant_id, cpv=cpv, material=material)
     if not candidates:
         return {"results": []}
+    # CR-007 Phase E (E1): down-rank, never exclude — an expired doc can
+    # still surface (the CR's own "don't silently delete either" theme,
+    # same as Phase C's duplicate handling), just sorted after every
+    # non-expired candidate rather than purely by confidence/similarity.
+    _attach_expiry(candidates)
     if not query:
-        ranked = sorted(candidates, key=lambda d: -(d["confidence"] or 0))[:top_k]
+        ranked = sorted(candidates, key=lambda d: (d["expired"], -(d["confidence"] or 0)))[:top_k]
         return {"results": [
             {"doc_id": d["id"], "filename": d["filename"], "metadata": d["metadata"],
-             "cpv_codes": d["cpv_codes"], "confidence": d["confidence"], "text": None, "similarity": None}
+             "cpv_codes": d["cpv_codes"], "confidence": d["confidence"], "text": None, "similarity": None,
+             "expired": d["expired"], "expiring_soon": d["expiring_soon"]}
             for d in ranked
         ]}
     by_id = {d["id"]: d for d in candidates}
@@ -1102,7 +1157,13 @@ def search_vault_endpoint(query: Optional[str] = None, cpv: Optional[str] = None
             continue
         results.append({"doc_id": d["id"], "filename": d["filename"], "metadata": d["metadata"],
                          "cpv_codes": d["cpv_codes"], "confidence": d["confidence"],
-                         "text": c["text"], "similarity": c["similarity"]})
+                         "text": c["text"], "similarity": c["similarity"],
+                         "expired": d["expired"], "expiring_soon": d["expiring_soon"]})
+    # Re-sort within what Chroma already returned: non-expired first, then
+    # by similarity — search_vault itself has no doc metadata to do this
+    # sort with, so it happens here instead (see vault.search_vault's
+    # docstring for the over-fetch that keeps this from starving evidence).
+    results.sort(key=lambda r: (r["expired"], -(r["similarity"] or 0)))
     return {"results": results}
 
 
@@ -1117,6 +1178,24 @@ def patch_vault_doc_tags(document_id: int, body: VaultTagsBody,
         raise HTTPException(404, "Document not found")
     store.set_vault_document_tags(conn, tenant_id, document_id, body.tags)
     return {"id": document_id, "tags": body.tags}
+
+
+class VaultFilenameBody(BaseModel):
+    filename: str
+
+@app.patch("/api/vault/docs/{document_id}/filename")
+def patch_vault_doc_filename(document_id: int, body: VaultFilenameBody,
+                              tenant_id: int = Depends(get_current_tenant_id)):
+    """CR-007 Phase E (E2): accept (or edit) the suggested filename — never
+    applied automatically, always an explicit user action.
+    """
+    if not body.filename.strip():
+        raise HTTPException(400, "filename cannot be empty")
+    conn = _db()
+    if store.get_vault_document(conn, tenant_id, document_id) is None:
+        raise HTTPException(404, "Document not found")
+    store.rename_vault_document(conn, tenant_id, document_id, body.filename.strip())
+    return {"id": document_id, "filename": body.filename.strip()}
 
 
 @app.get("/api/vault/tags")

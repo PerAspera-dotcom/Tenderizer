@@ -193,6 +193,14 @@ export interface VaultDoc {
   confidence: number | null;
   fields_extracted: number | null;
   tags: string[];
+  // CR-007 Phase E (E1): the document's own stated validity date, if
+  // extraction found one — see api._attach_expiry for expired/expiring_soon.
+  valid_until: string | null;
+  expired: boolean;
+  expiring_soon: boolean;
+  // CR-007 Phase E (E2): null when there's no suggestion (nothing extracted,
+  // or it already matches the current filename) — see api._attach_suggested_filename.
+  suggested_filename: string | null;
 }
 
 export interface VaultRules {

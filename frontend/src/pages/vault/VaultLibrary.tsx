@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from '../../router';
-import { listVaultDocs, uploadVaultDoc, setVaultDocTags } from '../../api';
+import { listVaultDocs, uploadVaultDoc, setVaultDocTags, renameVaultDoc } from '../../api';
 import type { VaultDoc } from '../../types';
 
 function TypePill({ type }: { type: string }) {
@@ -74,6 +74,22 @@ export default function VaultLibrary() {
   }, [processing, search, tagFilter]);
 
   const selected = docs.find(d => d.id === selectedId) ?? null;
+
+  // CR-007 Phase E (E2): accept/edit the suggested filename — never applied
+  // automatically, always this explicit action.
+  const [filenameEditing, setFilenameEditing] = useState(false);
+  const [filenameDraft, setFilenameDraft] = useState('');
+
+  async function applyRename(filename: string) {
+    if (!selected || !filename.trim() || filename.trim() === selected.filename) {
+      setFilenameEditing(false);
+      return;
+    }
+    const next = filename.trim();
+    await renameVaultDoc(selected.id, next);
+    setDocs(ds => ds.map(d => d.id === selected.id ? { ...d, filename: next, suggested_filename: null } : d));
+    setFilenameEditing(false);
+  }
 
   async function addTag() {
     const tag = tagDraft.trim();
@@ -226,6 +242,14 @@ export default function VaultLibrary() {
                   ) : (
                     <><span style={{ fontSize: 11 }}>⏳</span><span style={{ fontSize: 11, color: '#e3b341' }}>Processing</span></>
                   )}
+                  {/* CR-007 Phase E (E1): a document lifecycle flag, independent
+                      of the extraction-pipeline status above — never hides the
+                      document, just calls out that it may be stale. */}
+                  {doc.expired ? (
+                    <span style={{ fontSize: 11, color: '#f87171' }}>· ⟲ Needs replacement</span>
+                  ) : doc.expiring_soon ? (
+                    <span style={{ fontSize: 11, color: '#e3b341' }}>· ⏱ Expiring soon</span>
+                  ) : null}
                 </div>
               </div>
             );
@@ -241,9 +265,48 @@ export default function VaultLibrary() {
           ) : (
             <>
               <div style={{ padding: '14px 16px', borderBottom: '1px solid #1f2b40' }}>
-                <span className="mono" style={{ fontSize: 12, color: '#cdd6e3', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {selected.filename}
-                </span>
+                {filenameEditing ? (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      className="input-field mono" style={{ flex: 1, fontSize: 12 }}
+                      value={filenameDraft} onChange={e => setFilenameDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') applyRename(filenameDraft); if (e.key === 'Escape') setFilenameEditing(false); }}
+                      autoFocus
+                    />
+                    <button className="btn btn-blue" style={{ fontSize: 11 }} onClick={() => applyRename(filenameDraft)}>Save</button>
+                    <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => setFilenameEditing(false)}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="mono" style={{ fontSize: 12, color: '#cdd6e3', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {selected.filename}
+                    </span>
+                    <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }}
+                            onClick={() => { setFilenameDraft(selected.filename); setFilenameEditing(true); }}>
+                      Rename
+                    </button>
+                  </div>
+                )}
+                {/* CR-007 Phase E (E2): a suggestion, never forced — accept or
+                    edit it, or ignore it and leave the current filename alone. */}
+                {selected.suggested_filename && !filenameEditing && (
+                  <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, color: '#8a97ac' }}>Suggested:</span>
+                    <span className="mono" style={{ fontSize: 11, color: '#9cc1fb' }}>{selected.suggested_filename}</span>
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '1px 6px' }}
+                            onClick={() => applyRename(selected.suggested_filename!)}>
+                      Accept
+                    </button>
+                  </div>
+                )}
+                {/* CR-007 Phase E (E1): validity date + lifecycle flag, when known. */}
+                {selected.valid_until && (
+                  <div style={{ marginTop: 6, fontSize: 11 }}>
+                    <span style={{ color: '#8a97ac' }}>Valid until {selected.valid_until}</span>
+                    {selected.expired && <span style={{ color: '#f87171', marginLeft: 6 }}>· ⟲ Needs replacement</span>}
+                    {selected.expiring_soon && <span style={{ color: '#e3b341', marginLeft: 6 }}>· ⏱ Expiring soon</span>}
+                  </div>
+                )}
               </div>
               {selected.status === 'processing' ? (
                 <div style={{ padding: 24, color: '#e3b341', fontSize: 13 }}>

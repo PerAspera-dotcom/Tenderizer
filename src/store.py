@@ -1189,13 +1189,15 @@ def add_vault_document(conn, tenant_id, filename, content_type, size, storage_pa
 def _vault_doc_row(r):
     return {"id": r[0], "filename": r[1], "doc_type": r[2], "status": r[3],
             "metadata": json.loads(r[4]), "cpv_codes": json.loads(r[5]),
-            "confidence": r[6], "fields_extracted": r[7], "tags": json.loads(r[8])}
+            "confidence": r[6], "fields_extracted": r[7], "tags": json.loads(r[8]),
+            "valid_until": r[9]}
 
 
 _VAULT_LIST_COLS = (vault_documents.c.id, vault_documents.c.filename, vault_documents.c.doc_type,
                      vault_documents.c.status, vault_documents.c.metadata_json,
                      vault_documents.c.cpv_codes, vault_documents.c.confidence,
-                     vault_documents.c.fields_extracted, vault_documents.c.tags)
+                     vault_documents.c.fields_extracted, vault_documents.c.tags,
+                     vault_documents.c.valid_until)
 
 
 def list_vault_documents(conn, tenant_id, q=None, tag=None):
@@ -1217,6 +1219,29 @@ def list_vault_documents(conn, tenant_id, q=None, tag=None):
     if tag:
         docs = [d for d in docs if tag in d["tags"]]
     return docs
+
+
+def rename_vault_document(conn, tenant_id, document_id, filename):
+    """CR-007 Phase E (E2): accept/edit the suggested filename (vault.
+    suggest_filename) or any manual rename — logged the same way tag
+    changes are, since a display filename is master-data, not extraction
+    output. Storage path is untouched; this only ever changes the display
+    name (see api.py's rename route — never re-derives storage_path from it,
+    same path-traversal-safety reasoning as documents/vault_documents'
+    original uuid-based storage_path design).
+    """
+    with conn.begin() as c:
+        current = c.execute(select(vault_documents.c.filename).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        )).fetchone()
+        c.execute(update(vault_documents).where(
+            (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
+        ).values(filename=filename))
+        if current is not None and current[0] != filename:
+            c.execute(insert(vault_document_history).values(
+                tenant_id=tenant_id, document_id=document_id, field="filename",
+                old_value=current[0], new_value=filename,
+                changed_at=datetime.now(timezone.utc).isoformat()))
 
 
 def set_vault_document_tags(conn, tenant_id, document_id, tags):
@@ -1272,13 +1297,14 @@ def get_vault_document(conn, tenant_id, document_id):
 
 
 def update_vault_document_metadata(conn, tenant_id, document_id, doc_type, metadata,
-                                    cpv_codes, confidence, fields_extracted, status):
+                                    cpv_codes, confidence, fields_extracted, status,
+                                    valid_until=None):
     with conn.begin() as c:
         c.execute(update(vault_documents).where(
             (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
         ).values(doc_type=doc_type, metadata_json=json.dumps(metadata),
                   cpv_codes=json.dumps(cpv_codes), confidence=confidence,
-                  fields_extracted=fields_extracted, status=status))
+                  fields_extracted=fields_extracted, status=status, valid_until=valid_until))
 
 
 def find_vault_documents(conn, tenant_id, cpv=None, material=None, tag=None):

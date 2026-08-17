@@ -130,11 +130,12 @@ def test_extract_metadata_parses_claude_json_response(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", lambda: _FakeClient())
 
     result = vault.extract_metadata("doc.pdf", "application/pdf")
-    doc_type, metadata, cpv_codes, confidence = result
+    doc_type, metadata, cpv_codes, confidence, valid_until = result
     assert doc_type == "Datasheet"
     assert metadata == {"Material": "600D PES"}
     assert cpv_codes == ["39522530"]
     assert confidence == 0.9
+    assert valid_until is None  # not present in this fake response
 
 
 def test_parse_metadata_response_handles_code_fence():
@@ -248,7 +249,7 @@ def test_run_vault_processing_updates_store(tmp_path, monkeypatch):
     monkeypatch.setattr(vault, "process_upload", lambda tenant_id, doc_id, path, content_type,
                          extra_hints=None, confidence_threshold=None: {
         "doc_type": "Datasheet", "metadata": {"Material": "PES"}, "cpv_codes": ["39522530"],
-        "confidence": 0.9, "fields_extracted": 1, "status": "indexed"})
+        "confidence": 0.9, "fields_extracted": 1, "status": "indexed", "valid_until": None})
 
     api._run_vault_processing(TEST_TENANT_ID, doc_id, "/p1", "application/pdf")
 
