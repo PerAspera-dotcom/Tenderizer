@@ -70,6 +70,16 @@ export function daysLeft(dateStr: string | null | undefined): number | null {
   return Math.ceil((d.getTime() - Date.now()) / 86400000);
 }
 
+// CR-007 Phase D (D2): the deadline window setting is hours-granular (e.g.
+// 72), so the day-rounded daysLeft above is too coarse to compare it
+// against fairly near a boundary.
+export function hoursLeft(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return (d.getTime() - Date.now()) / 3600000;
+}
+
 const ISO3_FLAGS: Record<string, string> = {
   SWE: '🇸🇪', POL: '🇵🇱', FRA: '🇫🇷', FR: '🇫🇷',
   DEU: '🇩🇪', BEL: '🇧🇪', DNK: '🇩🇰', NLD: '🇳🇱',

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { listTenders, patchTender, patchTenderRelevance } from '../../api';
+import { useEffect, useRef, useState } from 'react';
+import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription } from '../../utils';
+import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
@@ -66,6 +66,10 @@ export default function ReviewQueue() {
   const [showOriginal, setShowOriginal] = useState(false);
   // CR-002 C3: publication_date (newest first) is the Review Queue's default order.
   const [sortBy, setSortBy] = useState<SortBy>('pub_date');
+  // CR-007 Phase D (D2): fetched once — the tenant's "closing soon" window,
+  // formerly a hard 72h exclude, now purely a display threshold.
+  const [deadlineFloorHours, setDeadlineFloorHours] = useState(72);
+  useEffect(() => { getScoutSettings().then(s => setDeadlineFloorHours(s.deadline_floor_hours)).catch(() => {}); }, []);
 
   function sortTenders(list: Tender[], by: SortBy): Tender[] {
     const sorted = [...list];
@@ -122,6 +126,22 @@ export default function ReviewQueue() {
 
   useEffect(() => { load(); }, []);
   useEffect(() => { setTenders(prev => sortTenders(prev, sortBy)); }, [sortBy]);
+
+  // CR-007 Phase D (D1): presence heartbeat — pings immediately on selecting
+  // a tender, then every 20s while it stays selected, so a colleague opening
+  // the same tender sees "currently working" within ~20s. Same bounded-
+  // setInterval-in-a-ref pattern Layout.tsx's run-progress poller uses, just
+  // always-on (while a tender is open) rather than triggered by one action.
+  const presenceRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (presenceRef.current) clearInterval(presenceRef.current);
+    if (!selected) return;
+    postTenderPresence(selected.pub_number).catch(() => {});
+    presenceRef.current = setInterval(() => {
+      postTenderPresence(selected.pub_number).catch(() => {});
+    }, 20000);
+    return () => { if (presenceRef.current) clearInterval(presenceRef.current); };
+  }, [selected?.pub_number]);
 
   async function applyStatus(status: string, note?: string, category?: string) {
     if (!selected || patching) return;
@@ -271,6 +291,9 @@ export default function ReviewQueue() {
               // CR-007 Phase B (B1): a soft-dismissed row greys out in place
               // rather than disappearing (see load()'s filter above).
               const softDismissed = t.status === 'dismissed';
+              // CR-007 Phase D (D2): advisory only — never filters the row out.
+              const hrsLeft = hoursLeft(t.deadline);
+              const closingSoon = hrsLeft !== null && hrsLeft >= 0 && hrsLeft <= deadlineFloorHours;
               return (
                 <div
                   key={t.pub_number}
@@ -295,6 +318,17 @@ export default function ReviewQueue() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
                         <span style={{ color: '#8892a4', fontSize: 11 }}>{t.source} · {t.country}</span>
                         <NoticeTypeBadge noticeType={t.notice_type} />
+                        {closingSoon && (
+                          <span title={`Due within ${deadlineFloorHours}h`} style={{ color: '#f87171', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                            ⏱ Closing soon
+                          </span>
+                        )}
+                        {t.viewers.length > 0 && (
+                          <span title={`${t.viewers.map(v => v.account_name).join(', ')} currently working this`} style={{ fontSize: 11 }}>👀</span>
+                        )}
+                        {t.duplicates.length > 0 && (
+                          <span title={`Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
+                        )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
                         <div style={{ flex: 1, height: 3, background: '#1a2334', borderRadius: 9999, overflow: 'hidden' }}>
@@ -329,6 +363,18 @@ export default function ReviewQueue() {
                     <StatusBadge status={selected.status} />
                   </div>
                 </div>
+
+                {/* CR-007 Phase D (D1): collaboration warning — presence only,
+                    never blocks the triage actions below (see api._attach_presence). */}
+                {selected.viewers.length > 0 && (
+                  <div style={{ marginBottom: 16, padding: 10, background: 'rgba(227,179,65,0.08)', border: '1px solid rgba(227,179,65,0.25)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12 }}>👀</span>
+                    <span style={{ fontSize: 12, color: '#e3b341' }}>
+                      {selected.viewers.map(v => v.account_name).join(', ')}
+                      {selected.viewers.length === 1 ? ' is' : ' are'} currently working this tender
+                    </span>
+                  </div>
+                )}
 
                 {/* CR-007 Phase C: cross-portal duplicate — surfaced on both
                     records (never hides either), with a direct link to the

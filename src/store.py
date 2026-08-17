@@ -34,7 +34,7 @@ from schema import documents, metadata, pipeline, pipeline_history, source_healt
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 from schema import (tender_history, vault_document_history, composer_document_history,
                      composer_requirement_history, tender_reviews, tender_relevance_overrides,
-                     tender_duplicates, tenant_dedup_settings)
+                     tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -508,6 +508,36 @@ def set_dedup_settings(conn, tenant_id, data):
             c.execute(insert(tenant_dedup_settings).values(tenant_id=tenant_id, **current))
 
 
+# CR-007 Phase D (D2): same single-row-per-tenant, lazy-default, merge-on-set
+# shape as the settings tables above. Default 72 matches the pre-Phase-D
+# hard-coded DEADLINE_FLOOR exactly (see filters.py's module docstring).
+_DEFAULT_SCOUT_SETTINGS = {"deadline_floor_hours": 72}
+
+
+def get_scout_settings(conn, tenant_id):
+    with conn.connect() as c:
+        row = c.execute(select(tenant_scout_settings.c.deadline_floor_hours).where(
+            tenant_scout_settings.c.tenant_id == tenant_id)).fetchone()
+    if not row:
+        return dict(_DEFAULT_SCOUT_SETTINGS)
+    return {"deadline_floor_hours": row[0]}
+
+
+def set_scout_settings(conn, tenant_id, data):
+    current = get_scout_settings(conn, tenant_id)
+    for key in _DEFAULT_SCOUT_SETTINGS:
+        if key in data:
+            current[key] = data[key]
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_scout_settings.c.tenant_id).where(
+            tenant_scout_settings.c.tenant_id == tenant_id)).fetchone()
+        if exists:
+            c.execute(update(tenant_scout_settings).where(
+                tenant_scout_settings.c.tenant_id == tenant_id).values(**current))
+        else:
+            c.execute(insert(tenant_scout_settings).values(tenant_id=tenant_id, **current))
+
+
 def get_style_guide(conn, tenant_id):
     """{style_guide, source_doc_count, generated_at} — style_guide is None
     until the first extract/save (no default text is fabricated).
@@ -651,6 +681,45 @@ def get_tender_duplicates_for_tenant(conn, tenant_id):
             tender_duplicates.c.match_type, tender_duplicates.c.similarity,
         ).where(tender_duplicates.c.tenant_id == tenant_id)).fetchall()
     return [{"pub_number_a": r[0], "pub_number_b": r[1], "match_type": r[2], "similarity": r[3]}
+            for r in rows]
+
+
+def upsert_tender_presence(conn, tenant_id, pub_number, clerk_user_id, account_name):
+    """CR-007 Phase D (D1): a heartbeat, upserted on open and refreshed
+    periodically by the frontend (see api.py's POST .../presence). Read side
+    (get_tender_viewers) filters by recency, not by an explicit expiry/clear
+    — a stale row just silently stops counting as "currently viewing".
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((tender_presence.c.tenant_id == tenant_id) &
+           (tender_presence.c.pub_number == pub_number) &
+           (tender_presence.c.clerk_user_id == clerk_user_id))
+    values = {"account_name": account_name, "last_seen_at": now}
+    with conn.begin() as c:
+        existing = c.execute(select(tender_presence.c.tenant_id).where(key)).fetchone()
+        if existing:
+            c.execute(update(tender_presence).where(key).values(**values))
+        else:
+            c.execute(insert(tender_presence).values(
+                tenant_id=tenant_id, pub_number=pub_number, clerk_user_id=clerk_user_id, **values))
+
+
+def get_tender_viewers(conn, tenant_id, since_iso):
+    """Every presence row for this org with `last_seen_at >= since_iso` (the
+    recency cutoff — now minus api.PRESENCE_WINDOW) — api._attach_presence
+    excludes the caller's own row and groups the rest by pub_number.
+    ISO-8601 timestamps sort lexicographically, so a plain string comparison
+    is enough (same convention tender_history's changed_at ordering relies on).
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_presence.c.pub_number, tender_presence.c.clerk_user_id,
+            tender_presence.c.account_name, tender_presence.c.last_seen_at,
+        ).where(
+            (tender_presence.c.tenant_id == tenant_id) &
+            (tender_presence.c.last_seen_at >= since_iso)
+        )).fetchall()
+    return [{"pub_number": r[0], "clerk_user_id": r[1], "account_name": r[2], "last_seen_at": r[3]}
             for r in rows]
 
 

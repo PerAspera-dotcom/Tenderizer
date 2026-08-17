@@ -43,6 +43,10 @@ export interface Tender {
   // CR-007 Phase C: cross-portal duplicates (e.g. the same tender also on
   // BOAMP) — always present, empty when none, see api._attach_duplicates.
   duplicates: TenderDuplicate[];
+  // CR-007 Phase D (D1): other accounts currently viewing this tender —
+  // always present, empty when none, never includes yourself. See
+  // api._attach_presence.
+  viewers: TenderViewer[];
 }
 
 // CR-007 Phase C: one entry per detected cross-portal counterpart.
@@ -56,6 +60,16 @@ export interface TenderDuplicate {
 
 export interface DedupSettings {
   similarity_threshold: number;
+}
+
+// CR-007 Phase D (D1): one entry per other account currently viewing.
+export interface TenderViewer {
+  account_name: string;
+  last_seen_at: string;
+}
+
+export interface ScoutSettings {
+  deadline_floor_hours: number;
 }
 
 // Past-tenders data-coverage follow-up: richer winner/lot/contract detail,

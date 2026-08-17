@@ -264,6 +264,24 @@ tender_duplicates = Table(
 )
 Index("ix_tender_duplicates_tenant_pub_b", tender_duplicates.c.tenant_id, tender_duplicates.c.pub_number_b)
 
+# CR-007 Phase D (D1): lightweight presence, not locking — "X is currently
+# working this tender" (api._attach_presence), never blocks/disables an
+# action. One heartbeat row per (tender, account), upserted on open and
+# refreshed periodically by the frontend; a row older than api.
+# PRESENCE_WINDOW simply stops counting as "currently viewing" (read-side
+# filter, no cleanup job needed — same "current state" shape as
+# tender_reviews above, just with staleness instead of an explicit clear).
+tender_presence = Table(
+    "tender_presence", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("clerk_user_id", Text, nullable=False),
+    Column("account_name", Text, nullable=False, server_default=""),
+    Column("last_seen_at", Text, nullable=False, server_default=""),
+    PrimaryKeyConstraint("tenant_id", "pub_number", "clerk_user_id"),
+)
+Index("ix_tender_presence_tenant_pub", tender_presence.c.tenant_id, tender_presence.c.pub_number)
+
 vault_document_history = Table(
     "vault_document_history", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -502,6 +520,19 @@ tenant_dedup_settings = Table(
     "tenant_dedup_settings", metadata,
     Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
     Column("similarity_threshold", Float, nullable=False, server_default="0.75"),
+)
+
+# CR-007 Phase D (D2): the "too close to deadline to bother" window,
+# formerly filters.py's hard-coded DEADLINE_FLOOR = 72h — now tenant-
+# editable and, per the CR, no longer a hard exclude at all (see filters.py's
+# module docstring); a tender past this window still surfaces, just flagged
+# "closing soon" client-side. Same single-row-per-tenant, lazy-default shape
+# as the settings tables above. Default 72 preserves today's exact behavior
+# for any tenant that hasn't touched the setting.
+tenant_scout_settings = Table(
+    "tenant_scout_settings", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), primary_key=True),
+    Column("deadline_floor_hours", Integer, nullable=False, server_default="72"),
 )
 
 # One style guide per tenant (not per-tender — "house style" is meant to be

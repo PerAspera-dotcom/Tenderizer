@@ -3,7 +3,11 @@
   F3: container / modular / prefabricated structures are hard-excluded, even
   alongside a tent/shelter signal. Reason: 'container_modular_prefab'.
   F2: rental tenders are hard-excluded, all languages. Reason: 'rental'.
-  F1: notices due in under 72h are hard-excluded. Reason: 'deadline_too_soon'.
+  CR-007 Phase D (D2): F1 ("notices due in under 72h are hard-excluded") is
+  gone — deadline urgency is no longer a hard filter at all; it's now a
+  tenant-configurable soft "closing soon" flag applied client-side (see
+  store.get_scout_settings / ReviewQueue.tsx), not something apply_filters
+  can return. The section below confirms that removal, not the old behavior.
   F6: notices with a (pre-converted) EUR value under the floor are hard-
   excluded. Reason: 'below_value_floor'. Currency conversion itself lives in
   currency.py (network); this module only reads rec['value_eur'].
@@ -136,7 +140,7 @@ def test_elision_folding_applies_to_other_exclusion_categories_too():
     assert filters.apply_filters(rec, synthetic) == "container_modular_prefab"
 
 
-# ── F1: deadline lead-time floor ─────────────────────────────────────────────
+# ── CR-007 Phase D (D2): deadline urgency is no longer a hard filter ────────
 
 NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -146,30 +150,22 @@ def _rec_due_in(hours):
     return _rec("Army field tent, qty 200", cpv_codes=["39522530"], deadline=deadline)
 
 
-def test_due_in_48h_is_excluded():
-    assert filters.apply_filters(_rec_due_in(48), EXCLUSIONS, NOW) == "deadline_too_soon"
-
-
-def test_due_in_exactly_72h_is_kept():
-    # CR wording is "less than 72 hours" — exactly 72h is the boundary, not excluded.
-    assert filters.apply_filters(_rec_due_in(72), EXCLUSIONS, NOW) is None
+def test_due_in_1h_is_no_longer_excluded():
+    # Pre-Phase-D this was 'deadline_too_soon' — now a tender due imminently
+    # still surfaces; urgency is a client-side "closing soon" flag instead
+    # (see ReviewQueue.tsx / store.get_scout_settings), not a hard exclude.
+    assert filters.apply_filters(_rec_due_in(1), EXCLUSIONS, NOW) is None
 
 
 def test_due_in_96h_is_kept():
     assert filters.apply_filters(_rec_due_in(96), EXCLUSIONS, NOW) is None
 
 
-def test_deadline_in_different_timezone_compares_correctly():
-    # 2026-07-04T08:00+02:00 == 2026-07-04T06:00 UTC == 66h after NOW — under the floor.
-    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"],
-                deadline="2026-07-04T08:00:00+02:00")
-    assert filters.apply_filters(rec, EXCLUSIONS, NOW) == "deadline_too_soon"
-
-
-def test_naive_deadline_treated_as_utc():
-    deadline = (NOW + timedelta(hours=48)).replace(tzinfo=None).isoformat()
-    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], deadline=deadline)
-    assert filters.apply_filters(rec, EXCLUSIONS, NOW) == "deadline_too_soon"
+def test_already_past_deadline_is_still_not_excluded_by_apply_filters():
+    # apply_filters itself never excludes on deadline at all now — expired-
+    # deadline handling lives elsewhere (run.py skips ingest before this is
+    # even called, and api.list_tenders' own expiry filter is separate).
+    assert filters.apply_filters(_rec_due_in(-24), EXCLUSIONS, NOW) is None
 
 
 def test_missing_deadline_is_kept():
@@ -180,6 +176,16 @@ def test_missing_deadline_is_kept():
 def test_unparseable_deadline_is_kept():
     rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], deadline="not-a-date")
     assert filters.apply_filters(rec, EXCLUSIONS, NOW) is None
+
+
+def test_check_deadline_too_soon_no_longer_exists():
+    assert not hasattr(filters, "check_deadline_too_soon")
+    assert not hasattr(filters, "DEADLINE_FLOOR")
+
+
+def test_deadline_too_soon_never_returned_as_a_reason():
+    for hours in (-48, 0, 1, 24, 71, 72, 73, 200):
+        assert filters.apply_filters(_rec_due_in(hours), EXCLUSIONS, NOW) != "deadline_too_soon"
 
 
 # ── F6: value floor ───────────────────────────────────────────────────────────

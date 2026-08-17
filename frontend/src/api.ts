@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -69,6 +69,25 @@ export function patchTenderRelevance(pub_number: string, score: number, note?: s
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ score, note }),
+  });
+}
+
+// CR-007 Phase D (D1): a presence heartbeat — see ReviewQueue.tsx's
+// selectTender/heartbeat interval.
+export function postTenderPresence(pub_number: string): Promise<unknown> {
+  return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}/presence`, { method: 'POST' });
+}
+
+// CR-007 Phase D (D2): the deadline-urgency window — see DeadlineConfig.tsx.
+export function getScoutSettings(): Promise<ScoutSettings> {
+  return apiFetch('/api/scout/settings');
+}
+
+export function putScoutSettings(body: Partial<ScoutSettings>): Promise<{ saved: boolean }> {
+  return apiFetch('/api/scout/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 }
 

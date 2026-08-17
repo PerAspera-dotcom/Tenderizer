@@ -6,13 +6,19 @@ dropped: the caller still stores the record (see store.COLUMNS) but omits it
 from what's surfaced (the report).
 
 Every check shares the signature (rec, exclusions, now) so they can share one
-loop in apply_filters, even though most ignore `now` and F1 ignores `exclusions`.
+loop in apply_filters, even though most ignore both `now` and `exclusions`.
+
+CR-007 Phase D (D2): the old F1 "exclude notices due in under 72 hours" hard
+filter (check_deadline_too_soon) lived here — removed, not just disabled.
+Deadline urgency is no longer a hard exclude at all: a tender past a
+tenant's configured window (store.get_scout_settings's deadline_floor_hours,
+default 72 — same number, now tenant-editable) still surfaces normally and
+is flagged as "closing soon" client-side (see ReviewQueue.tsx/TenderFeed.tsx),
+same soft-urgency convention PortalPipeline.tsx/Dashboard.tsx already used
+for their own hardcoded 7-day tiers.
 """
-from datetime import datetime, timedelta, timezone
 import config
 import match
-
-DEADLINE_FLOOR = timedelta(hours=72)
 
 
 def _text(rec):
@@ -44,26 +50,6 @@ def check_rental(rec, exclusions, now=None):
     terms = [w for lang in cfg["terms"].values() for w in lang]
     if match.match_keywords(_text(rec), terms):
         return "rental"
-    return None
-
-
-def check_deadline_too_soon(rec, exclusions, now=None):
-    """F1 — exclude notices due in under 72 hours (proposal lead-time floor).
-
-    Uses the deadline's own UTC offset if it carries one (ISO 8601, as normalize.py
-    already produces), else treats it as UTC. A missing/unparseable deadline is
-    kept, not excluded — consistent with F6's "keep on missing data" rule.
-    """
-    deadline = rec.get("deadline") or ""
-    try:
-        dl = datetime.fromisoformat(deadline)
-    except ValueError:
-        return None
-    if dl.tzinfo is None:
-        dl = dl.replace(tzinfo=timezone.utc)
-    now = now or datetime.now(timezone.utc)
-    if dl - now < DEADLINE_FLOOR:
-        return "deadline_too_soon"
     return None
 
 
@@ -141,7 +127,7 @@ def check_no_core_signal(rec, exclusions, now=None):
     return "no_core_signal"
 
 
-CHECKS = [check_container_modular_prefab, check_rental, check_deadline_too_soon,
+CHECKS = [check_container_modular_prefab, check_rental,
           check_value_floor, check_construction_works, check_no_core_signal]
 
 

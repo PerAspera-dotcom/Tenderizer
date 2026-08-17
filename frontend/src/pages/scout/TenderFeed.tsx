@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from '../../router';
-import { listTenders } from '../../api';
+import { listTenders, getScoutSettings } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine } from '../../utils';
+import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine, hoursLeft } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 
 const PORTAL_OPTS = [
@@ -32,6 +32,9 @@ export default function TenderFeed() {
   const [country, setCountry] = useState('');
   const [countries, setCountries] = useState<string[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // CR-007 Phase D (D2): the tenant's "closing soon" display threshold.
+  const [deadlineFloorHours, setDeadlineFloorHours] = useState(72);
+  useEffect(() => { getScoutSettings().then(s => setDeadlineFloorHours(s.deadline_floor_hours)).catch(() => {}); }, []);
 
   function load(params: { q?: string; source?: string; match_source?: string; country?: string }) {
     setLoading(true);
@@ -157,7 +160,16 @@ export default function TenderFeed() {
                     <span style={{ fontSize: 14, marginRight: 4 }}>{countryFlag(t.country)}</span>
                     <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t.source}</span>
                   </td>
-                  <td><span className="mono" style={{ fontSize: 13 }}>{formatDate(t.deadline)}</span></td>
+                  <td>
+                    <span className="mono" style={{ fontSize: 13 }}>{formatDate(t.deadline)}</span>
+                    {/* CR-007 Phase D (D2): advisory only, never filters the row out. */}
+                    {(() => {
+                      const hrs = hoursLeft(t.deadline);
+                      return hrs !== null && hrs >= 0 && hrs <= deadlineFloorHours && (
+                        <span title={`Due within ${deadlineFloorHours}h`} style={{ marginLeft: 6, color: '#f87171', fontSize: 10, fontWeight: 700 }}>⏱</span>
+                      );
+                    })()}
+                  </td>
                   <td><MatchChip matchSource={t.match_source} /></td>
                   <td>
                     {t.url ? (

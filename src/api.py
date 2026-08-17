@@ -361,6 +361,34 @@ def _attach_duplicates(conn, tenant_id, records):
     return records
 
 
+# CR-007 Phase D (D1): how long a presence heartbeat counts as "currently
+# viewing" — long enough to survive one missed heartbeat (the frontend pings
+# every 20s), short enough that the warning disappears promptly once someone
+# actually navigates away. A constant, not a tenant setting — this is an
+# implementation detail of the heartbeat cadence, not a business rule.
+PRESENCE_WINDOW = timedelta(minutes=2)
+
+
+def _attach_presence(conn, tenant_id, records, identity):
+    """CR-007 Phase D (D1): attaches a `viewers` list — every *other* account
+    (never the caller themselves) with a presence heartbeat inside
+    PRESENCE_WINDOW, grouped by pub_number. Lightweight awareness only
+    ("X is currently working this tender") — never blocks or disables any
+    action, no locking (see schema.py's tender_presence comment).
+    """
+    since_iso = (datetime.now(timezone.utc) - PRESENCE_WINDOW).isoformat()
+    by_pub = {r["pub_number"]: r for r in records}
+    for r in records:
+        r["viewers"] = []
+    for v in store.get_tender_viewers(conn, tenant_id, since_iso):
+        if v["clerk_user_id"] == identity.clerk_user_id:
+            continue
+        rec = by_pub.get(v["pub_number"])
+        if rec is not None:
+            rec["viewers"].append({"account_name": v["account_name"], "last_seen_at": v["last_seen_at"]})
+    return records
+
+
 @app.get("/api/tenders")
 def list_tenders(
     source:           Optional[str]  = None,
@@ -384,6 +412,7 @@ def list_tenders(
     _merge_personal_review_state(records, reviews, identity.account_name)
     _attach_relevance(conn, tenant_id, records)
     _attach_duplicates(conn, tenant_id, records)
+    _attach_presence(conn, tenant_id, records, identity)
 
     # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
     # default so they don't surface here even though the report already hid
@@ -456,6 +485,7 @@ def get_tender(pub_number: str, include_excluded: bool = False,
     _merge_personal_review_state(records, reviews, identity.account_name)
     _attach_relevance(conn, tenant_id, records)
     _attach_duplicates(conn, tenant_id, records)
+    _attach_presence(conn, tenant_id, records, identity)
     for r in records:
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
@@ -552,6 +582,23 @@ def patch_tender_relevance(pub_number: str, body: RelevanceBody,
     store.upsert_relevance_override(
         conn, tenant_id, pub_number, body.score, body.note, identity.account_name)
     return {"pub_number": pub_number, "relevance_score": body.score, "relevance_corrected": True}
+
+
+@app.post("/api/tenders/{pub_number}/presence")
+def post_tender_presence(pub_number: str, identity: Identity = Depends(get_current_identity)):
+    """CR-007 Phase D (D1): a heartbeat — the frontend calls this on opening
+    a tender and every ~20s while it stays open (ReviewQueue.tsx). No lock,
+    no rejection — anyone can always still act on the tender; this only
+    powers the informational "X is currently working this tender" banner
+    (see _attach_presence). Doesn't require the tender to exist in this
+    tenant beyond the usual identity/tenant scoping — a stray presence ping
+    for a pub_number that later turns out invalid is harmless and self-heals
+    (it simply never surfaces, since _attach_presence only expands onto
+    records that exist in the tenant's own record set).
+    """
+    store.upsert_tender_presence(
+        _db(), identity.tenant_id, pub_number, identity.clerk_user_id, identity.account_name)
+    return {"ok": True}
 
 
 @app.get("/api/tenders/{pub_number}/history")
@@ -1117,6 +1164,23 @@ def get_dedup_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
 @app.put("/api/scout/dedup-settings")
 def put_dedup_settings_config(body: DedupSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
     store.set_dedup_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
+    return {"saved": True}
+
+
+# CR-007 Phase D (D2): the deadline-urgency window — formerly a hard exclude
+# (filters.py's removed check_deadline_too_soon), now purely advisory. See
+# _attach_relevance/_attach_duplicates above for the same settings-endpoint
+# shape; "closing soon" itself is computed client-side from this value.
+class ScoutSettingsBody(BaseModel):
+    deadline_floor_hours: Optional[int] = None
+
+@app.get("/api/scout/settings")
+def get_scout_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_scout_settings(_db(), tenant_id)
+
+@app.put("/api/scout/settings")
+def put_scout_settings_config(body: ScoutSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
+    store.set_scout_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
     return {"saved": True}
 
 
