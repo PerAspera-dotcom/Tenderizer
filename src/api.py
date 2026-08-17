@@ -1121,6 +1121,29 @@ def validate_vault_metadata(body: VaultMetadataValidationBody,
     return {"id": body.document_id, "metadata": body.metadata}
 
 
+def _valid_until_by_doc_id(conn, tenant_id):
+    """{doc_id: valid_until} for this tenant's whole Vault library — the
+    input vault.rank_chunks_by_expiry needs; cheap (no join, one already-
+    indexed query) and small enough to compute per-request rather than cache.
+    """
+    return {d["id"]: d["valid_until"] for d in store.list_vault_documents(conn, tenant_id)}
+
+
+def _expiry_rank_vault_chunks(conn, tenant_id, chunks):
+    """CR-007 Phase F: the same expired-doc down-ranking search_vault_endpoint
+    applies inline, factored out so vault.search_vault's *other* callers
+    (the refine merge, run_generate's Vault blending — see _run_composer_
+    refine/_run_composer_generate) apply it too. Previously only the manual
+    search panel did, which meant a refine could cite an expired Vault
+    document with no down-ranking at all — a real gap against the CR's own
+    E1 acceptance line ("down-rank expired documents in Composer evidence
+    search"), since refine *is* Composer's evidence search.
+    """
+    if not chunks:
+        return chunks
+    return vault.rank_chunks_by_expiry(chunks, _valid_until_by_doc_id(conn, tenant_id))
+
+
 @app.get("/api/vault/search")
 def search_vault_endpoint(query: Optional[str] = None, cpv: Optional[str] = None,
                            material: Optional[str] = None, top_k: int = Query(8, ge=1, le=50),
@@ -1506,14 +1529,40 @@ def resolve_composer_requirement(requirement_id: int, tenant_id: int = Depends(g
     return {"id": requirement_id, "resolved": True}
 
 
+def _cpv_scoped_vault_doc_ids(conn, tenant_id, pub_number):
+    """CR-007 Phase F: the tender's own CPV codes are the same relevance
+    boundary the manual Vault search panel uses (search_vault_endpoint's
+    `cpv` param) — reused here so the automated generate pass only pulls in
+    Vault documents plausibly relevant to *this* tender, not the whole
+    library. [] (not an error) when the tender can't be found or has no
+    CPV codes — composer.run_generate treats that as "no Vault blending".
+    """
+    tender = next((r for r in store.all_records(conn, tenant_id) if r["pub_number"] == pub_number), None)
+    if not tender:
+        return []
+    seen = {}
+    for cpv in tender.get("cpv_codes") or []:
+        for d in store.find_vault_documents(conn, tenant_id, cpv=cpv):
+            seen[d["id"]] = True
+    return list(seen.keys())
+
+
 def _run_composer_generate(tenant_id, pub_number):
     conn = _db()
     requirements = store.list_composer_requirements(conn, tenant_id, pub_number)
     style_guide = store.get_style_guide(conn, tenant_id)["style_guide"]
     settings = store.get_composer_settings(conn, tenant_id)
+    # CR-007 Phase F: blend the tenant's own Vault library into the
+    # automated pass too (previously Vault only reached Composer through a
+    # manual refine with explicitly attached documents) — CPV-scoped to
+    # this tender, expiry down-ranked like every other Vault evidence path.
+    vault_doc_ids = _cpv_scoped_vault_doc_ids(conn, tenant_id, pub_number)
+    valid_until_by_doc_id = _valid_until_by_doc_id(conn, tenant_id) if vault_doc_ids else {}
     for r in composer.run_generate(tenant_id, pub_number, requirements, style_guide=style_guide,
                                     top_k=settings["top_k"], good_similarity=settings["good_similarity"],
-                                    partial_similarity=settings["partial_similarity"]):
+                                    partial_similarity=settings["partial_similarity"],
+                                    vault_doc_ids=vault_doc_ids,
+                                    valid_until_by_doc_id=valid_until_by_doc_id):
         store.update_composer_requirement_result(conn, tenant_id, r["id"], r["gap_status"],
                                                   r["similarity"], r["response_text"], r["citations"])
 
@@ -1544,6 +1593,10 @@ def _run_composer_refine(tenant_id, pub_number, requirement_id, feedback, vault_
     vault_chunks, extra_citations = [], []
     if vault_document_ids:
         vault_chunks = vault.search_vault(tenant_id, vault_document_ids, query, top_k=5)
+        # CR-007 Phase E/F: down-rank an expired doc's chunks rather than
+        # citing them with no lifecycle awareness at all (see
+        # _expiry_rank_vault_chunks's docstring for why this was missing).
+        _expiry_rank_vault_chunks(conn, tenant_id, vault_chunks)
         extra_citations = [{"doc": f"Vault: {c['source']}", "score": c["similarity"]} for c in vault_chunks]
     new_text = composer.refine_section(req["extracted"], req["response"] or "", feedback,
                                         vault_chunks + tech_chunks)

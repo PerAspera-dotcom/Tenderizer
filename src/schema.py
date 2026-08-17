@@ -439,6 +439,13 @@ composer_requirements = Table(
     Column("extracted_snippet", Text, nullable=False, server_default=""),
     Column("source_ref", Text, nullable=False, server_default=""),
     Column("confidence", Float, nullable=True),
+    # CR-007 Phase F: does the LLM's own cited source (composer.
+    # extract_requirements' freeform "<doc> ... p.<N>" string) actually name
+    # a real page of a real submitted document? A cross-check on the
+    # self-reported `confidence` above, not a replacement for it — NULL for
+    # rows extracted before this existed (unknown, not "unverified"; never
+    # backfilled/guessed). See composer._verify_source.
+    Column("source_verified", Boolean, nullable=True),
     Column("validation", Text, nullable=False, server_default="pending"),
     Column("gap_status", Text, nullable=True),
     Column("similarity", Float, nullable=True),

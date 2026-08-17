@@ -24,6 +24,7 @@ here:
 import base64
 import json
 import os
+import re
 from datetime import datetime
 
 import chromadb
@@ -255,9 +256,10 @@ _MAX_REQUIREMENTS_CONTEXT_CHARS = 180_000
 def extract_requirements(documents):
     """documents: [{"filename": str, "role": "sow"|"parta", "pages": [str, ...]}]
     (parta docs should already be clipped via extract_parta_section before
-    being passed in). Returns [{"title", "extracted", "source", "confidence"}],
-    or [] if ANTHROPIC_API_KEY isn't configured or nothing parseable came
-    back — same graceful-skip convention as vault.extract_metadata.
+    being passed in). Returns [{"title", "extracted", "source", "confidence",
+    "source_verified"}], or [] if ANTHROPIC_API_KEY isn't configured or
+    nothing parseable came back — same graceful-skip convention as
+    vault.extract_metadata.
     """
     if not os.getenv("ANTHROPIC_API_KEY"):
         return []
@@ -276,7 +278,10 @@ def extract_requirements(documents):
         model=CLAUDE_MODEL, max_tokens=4096,
         messages=[{"role": "user", "content": _REQUIREMENTS_PROMPT.format(text=text)}],
     )
-    return _parse_requirements_response(message.content[0].text)
+    parsed = _parse_requirements_response(message.content[0].text)
+    for item in parsed:
+        item["source_verified"] = _verify_source(item["source"], documents)
+    return parsed
 
 
 def _parse_requirements_response(text):
@@ -303,6 +308,38 @@ def _parse_requirements_response(text):
             "confidence": confidence if isinstance(confidence, (int, float)) else None,
         })
     return out
+
+
+_SOURCE_PAGE_RE = re.compile(r"p\.?\s*(\d+)", re.IGNORECASE)
+
+
+def _verify_source(source, documents):
+    """CR-007 Phase F: best-effort check that an extracted requirement's
+    cited source (freeform text like "sow_tender.pdf §4.2 · p.12", per
+    _REQUIREMENTS_PROMPT's own instructed shape) actually names a real page
+    of a real submitted document — a cross-check the self-reported
+    `confidence` alone can't provide, catching a real LLM failure mode (a
+    hallucinated or off-by-one page reference).
+
+    False means "couldn't verify", not "wrong" — a source the LLM phrased
+    unusually (no matching filename substring, no parseable page number)
+    also comes back False. This is a signal surfaced to the reviewer
+    alongside confidence (composer_requirements.source_verified), never a
+    filter — a genuinely correct but oddly-worded citation still gets
+    reviewed and validated the normal way.
+    """
+    if not source:
+        return False
+    match = _SOURCE_PAGE_RE.search(source)
+    if not match:
+        return False
+    page = int(match.group(1))
+    for doc in documents:
+        filename = doc.get("filename") or ""
+        if filename and filename in source:
+            pages = doc.get("pages") or []
+            return 1 <= page <= len(pages)
+    return False
 
 
 def retrieve_evidence(tenant_id, pub_number, query, roles, top_k=TOP_K):
@@ -433,34 +470,57 @@ def refine_section(requirement_text, current_response, feedback, evidence_chunks
     return message.content[0].text.strip()
 
 
+# CR-007 Phase F: cap on how many Vault chunks blend into each requirement's
+# automated evidence — the tender's own "tech" docs stay the primary source
+# (unchanged `top_k`), Vault is supplementary breadth, not a replacement.
+VAULT_EVIDENCE_TOP_K = 3
+
+
 def run_generate(tenant_id, pub_number, requirements, style_guide=None,
-                  top_k=TOP_K, good_similarity=GOOD_SIMILARITY, partial_similarity=PARTIAL_SIMILARITY):
+                  top_k=TOP_K, good_similarity=GOOD_SIMILARITY, partial_similarity=PARTIAL_SIMILARITY,
+                  vault_doc_ids=None, valid_until_by_doc_id=None):
     """requirements: [{id, title, extracted}] (validated requirements only —
     the caller enforces the validation gate). For each: retrieve tech
-    evidence, derive gap_status from similarity, and generate a response
-    unless there's no evidence at all. Returns
-    [{id, gap_status, similarity, response_text, citations}] in the same
-    order given — the caller persists these via
-    store.update_composer_requirement_result.
+    evidence (this tender's own uploaded SOW/tech/background/parta docs),
+    derive gap_status from similarity, and generate a response unless
+    there's no evidence at all. Returns [{id, gap_status, similarity,
+    response_text, citations}] in the same order given — the caller
+    persists these via store.update_composer_requirement_result.
 
     `top_k`/`good_similarity`/`partial_similarity` — tenant-configurable
     (Composer Settings); default to this module's constants when not
     overridden.
+
+    CR-007 Phase F: `vault_doc_ids` (already CPV-scoped to this tender by
+    the caller — see api._run_composer_generate) blends the tenant's Vault
+    library into this *automated* pass too — previously Vault only reached
+    Composer through a manual refine with explicitly attached documents.
+    `valid_until_by_doc_id` down-ranks an expired Vault document's chunks
+    (vault.rank_chunks_by_expiry) rather than citing it with no lifecycle
+    awareness, same as the manual paths. Both are optional/no-ops when
+    omitted, so existing callers/tests without them see no change.
     """
     results = []
     for req in requirements:
         query = f"{req['title']} {req['extracted']}"
         tech_chunks = retrieve_evidence(tenant_id, pub_number, query, roles=["tech"], top_k=top_k)
-        status = _gap_status(tech_chunks, good_similarity=good_similarity, partial_similarity=partial_similarity)
-        best_sim = max((c["similarity"] for c in tech_chunks), default=0.0)
+        vault_chunks = []
+        if vault_doc_ids:
+            vault_chunks = vault.search_vault(tenant_id, vault_doc_ids, query, top_k=VAULT_EVIDENCE_TOP_K)
+            vault.rank_chunks_by_expiry(vault_chunks, valid_until_by_doc_id or {})
+            for c in vault_chunks:
+                c["source"] = f"Vault: {c['source']}"  # visibly distinct from tender-scoped sources
+        combined_chunks = vault_chunks + tech_chunks
+        status = _gap_status(combined_chunks, good_similarity=good_similarity, partial_similarity=partial_similarity)
+        best_sim = max((c["similarity"] for c in combined_chunks), default=0.0)
         response_text, citations = None, []
         if status != "completed":
-            citations = [{"doc": c["source"], "score": c["similarity"]} for c in tech_chunks]
+            citations = [{"doc": c["source"], "score": c["similarity"]} for c in combined_chunks]
             # Still worth persisting gap_status/similarity/citations without a
             # key configured (informative for Gaps Report); only the prose
             # generation itself needs Claude.
             if os.getenv("ANTHROPIC_API_KEY"):
-                response_text = generate_response(req["extracted"], tech_chunks, style_guide)
+                response_text = generate_response(req["extracted"], combined_chunks, style_guide)
         results.append({"id": req["id"], "gap_status": status, "similarity": best_sim,
                          "response_text": response_text, "citations": citations})
     return results

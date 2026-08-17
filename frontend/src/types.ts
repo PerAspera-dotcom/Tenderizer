@@ -257,6 +257,11 @@ export interface ComposerRequirement {
   extracted: string;
   source: string;
   confidence: number | null;
+  // CR-007 Phase F: whether the cited source page could be verified against
+  // the actually-submitted documents — null for requirements extracted
+  // before this existed (unknown, not "unverified"). A cross-check on
+  // confidence, not a replacement for it — see composer._verify_source.
+  source_verified: boolean | null;
   validation: 'pending' | 'validated' | 'flagged';
   gap_status: 'complete' | 'linked' | 'completed' | null;
   similarity: number | null;

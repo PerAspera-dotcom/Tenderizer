@@ -1472,8 +1472,10 @@ def set_composer_matrix_filled_path(conn, tenant_id, pub_number, filled_path):
 
 def add_composer_requirements(conn, tenant_id, pub_number, requirements):
     """Bulk insert from composer.extract_requirements's output
-    ([{title, extracted, source, confidence}]) — one row per requirement,
-    validation defaults to 'pending' (schema default).
+    ([{title, extracted, source, confidence, source_verified}]) — one row
+    per requirement, validation defaults to 'pending' (schema default).
+    `source_verified` defaults to None (unknown) for callers that don't
+    supply it, same "never fabricate" rule as confidence.
     """
     if not requirements:
         return []
@@ -1484,7 +1486,8 @@ def add_composer_requirements(conn, tenant_id, pub_number, requirements):
             result = c.execute(insert(composer_requirements).values(
                 tenant_id=tenant_id, pub_number=pub_number, title=req["title"],
                 extracted_snippet=req["extracted"], source_ref=req["source"],
-                confidence=req["confidence"], created_at=now))
+                confidence=req["confidence"], source_verified=req.get("source_verified"),
+                created_at=now))
             ids.append(result.inserted_primary_key[0])
     return ids
 
@@ -1496,7 +1499,7 @@ _COMPOSER_REQ_COLS = (
     composer_requirements.c.gap_status, composer_requirements.c.similarity,
     composer_requirements.c.response_text, composer_requirements.c.citations_json,
     composer_requirements.c.resolved, composer_requirements.c.version,
-    composer_requirements.c.version_history_json,
+    composer_requirements.c.version_history_json, composer_requirements.c.source_verified,
 )
 
 
@@ -1505,7 +1508,7 @@ def _composer_req_row(r):
             "confidence": r[4], "validation": r[5], "gap_status": r[6],
             "similarity": r[7], "response": r[8], "citations": json.loads(r[9]),
             "resolved": bool(r[10]), "version": r[11],
-            "version_history": json.loads(r[12])}
+            "version_history": json.loads(r[12]), "source_verified": r[13]}
 
 
 def list_composer_requirements(conn, tenant_id, pub_number):

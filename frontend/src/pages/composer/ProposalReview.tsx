@@ -328,7 +328,13 @@ export default function ProposalReview() {
 
                   {selected.citations.length > 0 && (
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 8 }}>Source citations · from Vault</div>
+                      {/* CR-007 Phase F: citations can come from this tender's
+                          own uploaded docs OR the tenant's Vault library (now
+                          blended into the automated pass, not just refine) —
+                          each row already self-identifies via a "Vault: "
+                          prefix on c.doc when it's a Vault source, so the
+                          header no longer overclaims a single source. */}
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7990', textTransform: 'uppercase', marginBottom: 8 }}>Source citations</div>
                       {selected.citations.map((c, i) => (
                         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #1b2536' }}>
                           <span style={{ color: '#6b7990' }}>↳</span>

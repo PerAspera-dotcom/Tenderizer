@@ -345,7 +345,8 @@ def test_run_composer_generate_passes_style_guide_and_settings(tmp_path, monkeyp
     captured = {}
 
     def _fake_run_generate(tenant_id, pub_number, requirements, style_guide=None,
-                            top_k=None, good_similarity=None, partial_similarity=None):
+                            top_k=None, good_similarity=None, partial_similarity=None,
+                            vault_doc_ids=None, valid_until_by_doc_id=None):
         captured["style_guide"] = style_guide
         captured["top_k"] = top_k
         return [{"id": req_id, "gap_status": "complete", "similarity": 0.6,

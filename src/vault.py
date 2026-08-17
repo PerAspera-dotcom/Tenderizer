@@ -292,6 +292,38 @@ def search_vault(tenant_id, doc_ids, query, top_k=8):
     return chunks[:top_k]
 
 
+def is_expired(valid_until, today=None):
+    """CR-007 Phase E/F: a document is expired once its own stated validity
+    date has passed. No `valid_until` (most documents) is never expired —
+    "unknown" is not "expired". An unparseable value is treated the same
+    (defensive only; extract_metadata already validates before storing).
+    """
+    if not valid_until:
+        return False
+    try:
+        return date.fromisoformat(valid_until) < (today or date.today())
+    except ValueError:
+        return False
+
+
+def rank_chunks_by_expiry(chunks, valid_until_by_doc_id):
+    """CR-007 Phase F: sorts a search_vault result (each chunk carries
+    `doc_id`/`similarity`) so a chunk from an expired document sorts after
+    every non-expired one — down-rank, never exclude, per the CR's own
+    "don't silently delete either" theme (Phase C's duplicate handling,
+    Phase E's own doc-listing down-rank). Factored out here, not left as a
+    one-off in api.py, so every caller that merges Vault evidence into
+    something else (the search panel, Composer refine, Composer's automated
+    generate pass — see composer.run_generate) ranks the same way rather
+    than only whichever call site happened to remember to. Mutates and
+    returns `chunks`, adding an `expired` key.
+    """
+    for c in chunks:
+        c["expired"] = is_expired(valid_until_by_doc_id.get(c["doc_id"]))
+    chunks.sort(key=lambda c: (c["expired"], -(c["similarity"] or 0)))
+    return chunks
+
+
 def process_upload(tenant_id, doc_id, path, content_type, extra_hints=None, confidence_threshold=None):
     """The full background-task pipeline for one uploaded document: embed
     for retrieval, then extract display metadata. Returns the fields

@@ -334,6 +334,14 @@ export default function ComposerIngest() {
                     {req.confidence != null && (
                       <span style={{ fontSize: 11, color: '#6b7990' }}>{Math.round(req.confidence * 100)}% extraction confidence</span>
                     )}
+                    {/* CR-007 Phase F: a cross-check on the confidence above,
+                        not a replacement — surfaced so a reviewer notices a
+                        possibly-hallucinated source page before validating. */}
+                    {req.source_verified === false && (
+                      <span title="The cited source page couldn't be matched to a real page in the submitted documents — double-check before validating." style={{ fontSize: 11, color: '#e3b341' }}>
+                        ⚠ Unverified source
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
