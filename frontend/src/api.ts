@@ -83,6 +83,16 @@ export function getScoutSettings(): Promise<ScoutSettings> {
   return apiFetch('/api/scout/settings');
 }
 
+// CR-007 Phase G (G1): account-to-account forward/reminder — see
+// components/ForwardTender.tsx.
+export function forwardTender(pub_number: string, to_email: string, message?: string): Promise<unknown> {
+  return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}/forward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to_email, message: message || undefined }),
+  });
+}
+
 export function putScoutSettings(body: Partial<ScoutSettings>): Promise<{ saved: boolean }> {
   return apiFetch('/api/scout/settings', {
     method: 'PUT',

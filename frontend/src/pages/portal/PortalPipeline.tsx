@@ -3,6 +3,7 @@ import { getPipeline, patchPipeline, listDocuments, uploadDocument, downloadDocu
 import type { PipelineEntry, DocumentEntry, PipelineHistoryEntry } from '../../types';
 import { formatDate, formatTime, daysLeft, countryFlag, hasTranslatedTagLine, displayTagLine } from '../../utils';
 import { useNavigate } from '../../router';
+import ForwardTender from '../../components/ForwardTender';
 
 const HISTORY_FIELD_LABELS: Record<string, string> = {
   submission_status: 'Status', deadline_override: 'Deadline', owner: 'Owner',
@@ -331,6 +332,14 @@ export default function PortalPipeline() {
                     onChange={e => setOwner(e.target.value)}
                     onBlur={handleOwnerBlur}
                   />
+                </div>
+
+                {/* CR-007 Phase G (G1): a deadline reminder, sent to a
+                    specific colleague rather than the tenant's single
+                    notify_email — separate from the automatic owner-handoff
+                    email above, which fires only when Owner actually changes. */}
+                <div style={{ marginBottom: 16 }}>
+                  <ForwardTender pubNumber={selected.pub_number} />
                 </div>
 
                 {/* Notes */}

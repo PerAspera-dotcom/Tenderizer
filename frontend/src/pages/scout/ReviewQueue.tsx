@@ -4,6 +4,7 @@ import type { Tender } from '../../types';
 import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
+import ForwardTender from '../../components/ForwardTender';
 
 type SortBy = 'pub_date' | 'deadline';
 // CR-007 Phase B (B1/B2): 'dismissed' is now stage 1/soft (still queued,
@@ -652,6 +653,11 @@ export default function ReviewQueue() {
                     </button>
                   )}
                 </div>
+
+                {/* CR-007 Phase G (G1): "please review this tender" — an
+                    explicit account-to-account nudge, separate from the
+                    triage actions above (doesn't change status). */}
+                <ForwardTender pubNumber={selected.pub_number} />
 
                 {/* CR-006 D2 / CR-007 B1-B2: reason required — Confirm stays
                     disabled until the note (and, for a dismiss, category) is set. */}

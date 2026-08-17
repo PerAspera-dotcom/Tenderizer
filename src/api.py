@@ -601,6 +601,55 @@ def post_tender_presence(pub_number: str, identity: Identity = Depends(get_curre
     return {"ok": True}
 
 
+class ForwardBody(BaseModel):
+    to_email: str
+    message: Optional[str] = None
+
+
+def _send_forward_email(tenant_id, pub_number, to_email, message, sender_name):
+    """CR-007 Phase G (G1): an explicit account-to-account reminder/forward
+    — "please review this tender" from the Review Queue, or a deadline
+    nudge from the Pipeline — reusing the same alerts.send_tenant_email
+    primitive _send_owner_handoff_email already established for tenant-
+    facing mail, just addressed to a specific colleague's inbox (`to_email`)
+    rather than the tenant's single notify_email. Deliberately no new
+    notification subsystem — rides the existing one, per the CR's own
+    instruction ("build it as part of that notification layer, not a
+    separate silo"); no new persistence either, same fire-and-forget shape
+    as the owner-handoff email.
+    """
+    import alerts
+    conn = _db()
+    tender = _find_tender(conn, tenant_id, pub_number)
+    label = f"{tender['tag_line']} ({pub_number})" if tender else pub_number
+    lines = [f"{sender_name} sent you a reminder about a tender:", "", label]
+    if tender and tender.get("deadline"):
+        lines.append(f"Deadline: {tender['deadline'][:10]}")
+    if message:
+        lines += ["", message]
+    alerts.send_tenant_email(to_email, f"Tenderizer — {sender_name} sent you a reminder", "\n".join(lines))
+
+
+@app.post("/api/tenders/{pub_number}/forward")
+def forward_tender(pub_number: str, body: ForwardBody, background: BackgroundTasks,
+                    identity: Identity = Depends(get_current_identity)):
+    """CR-007 Phase G (G1): forward a tender to a specific colleague's email
+    — a deadline reminder or a "please review this" nudge, sender and
+    recipient both explicit accounts, never a broadcast.
+    """
+    to_email = body.to_email.strip()
+    if "@" not in to_email:
+        raise HTTPException(422, "to_email must be a valid email address")
+    conn = _db()
+    if not any(r["pub_number"] == pub_number for r in store.all_records(conn, identity.tenant_id)):
+        if store.pub_number_exists_for_other_tenant(conn, identity.tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    background.add_task(_send_forward_email, identity.tenant_id, pub_number, to_email,
+                         (body.message or "").strip() or None, identity.account_name)
+    return {"sent": True}
+
+
 @app.get("/api/tenders/{pub_number}/history")
 def get_tender_history(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
     return {"pub_number": pub_number, "history": store.get_tender_history(_db(), tenant_id, pub_number)}
