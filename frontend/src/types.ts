@@ -29,6 +29,9 @@ export interface Tender {
   dismissal_reason_category: string | null;
   dismissed_by: string | null;
   dismissed_at: string | null;
+  // Post-CR-007: colleague pinged on a needs_review parking — only ever set
+  // alongside status "needs_review", see api._send_needs_review_ping_email.
+  assigned_to: string | null;
   notice_type: string;
   awarded_to: string | null;
   awarded_value: string | null;

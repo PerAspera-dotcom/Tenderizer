@@ -203,6 +203,18 @@ Index("ix_tender_history_tenant_pub", tender_history.c.tenant_id, tender_history
 # only for a dismiss action, purely so relevance scoring can aggregate on
 # "similar tenders were dismissed for reason X" without doing NLP over
 # free text — see relevance.py and RELEVANCE_REASON_CATEGORIES below.
+#
+# Post-CR-007: `assigned_to` — a "needs_review" parking is often really "I
+# don't know, ask Christoph" — an optional colleague's email the reviewer can
+# name when parking a tender, distinct from `account_name` (the person who
+# parked it, not who's meant to act on it). Only meaningful alongside
+# needs_review; sticky like reason/dismissed_at above (overwritten by a new
+# assignment, never auto-cleared on a later status change) rather than a
+# separate assignment-history table — same "current state, not a full audit
+# log" convention as this table's other fields. Triggers a one-off email ping
+# to that address (api._send_needs_review_ping_email) via the same
+# alerts.send_tenant_email primitive CR-007 G1's forward-to-colleague uses;
+# no new notification subsystem.
 tender_reviews = Table(
     "tender_reviews", metadata,
     Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
@@ -213,6 +225,7 @@ tender_reviews = Table(
     Column("reason", Text, nullable=True),
     Column("reason_category", Text, nullable=True),
     Column("dismissed_at", Text, nullable=True),
+    Column("assigned_to", Text, nullable=True),
     Column("updated_at", Text, nullable=False, server_default=""),
     PrimaryKeyConstraint("tenant_id", "pub_number", "clerk_user_id"),
 )

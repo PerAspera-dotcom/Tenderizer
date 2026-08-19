@@ -106,16 +106,19 @@ export default function ReviewQueue() {
   // dismiss-only inline panel (dismissOpen/dismissNote) into one shared
   // shape so all three actions reuse the same UI and required-field guard.
   const [noteAction, setNoteAction] = useState<
-    null | { status: string; label: string; requireCategory: boolean }
+    null | { status: string; label: string; requireCategory: boolean; allowAssignee: boolean }
   >(null);
   const [noteText, setNoteText] = useState('');
   const [reasonCategory, setReasonCategory] = useState('');
+  // Post-CR-007: optional colleague to ping — only surfaced on a needs_review parking.
+  const [assignedTo, setAssignedTo] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   function closeNoteAction() {
     setNoteAction(null);
     setNoteText('');
     setReasonCategory('');
+    setAssignedTo('');
   }
 
   function selectTender(t: Tender) {
@@ -144,11 +147,11 @@ export default function ReviewQueue() {
     return () => { if (presenceRef.current) clearInterval(presenceRef.current); };
   }, [selected?.pub_number]);
 
-  async function applyStatus(status: string, note?: string, category?: string) {
+  async function applyStatus(status: string, note?: string, category?: string, assignee?: string) {
     if (!selected || patching) return;
     setPatching(true);
     try {
-      await patchTender(selected.pub_number, status, note, category);
+      await patchTender(selected.pub_number, status, note, category, assignee);
       load();
     } finally {
       setPatching(false);
@@ -164,15 +167,17 @@ export default function ReviewQueue() {
       status: isFinal ? 'dismissed_final' : 'dismissed',
       label: isFinal ? 'Confirm final dismiss' : 'Dismiss',
       requireCategory: true,
+      allowAssignee: false,
     });
     setNoteText(isFinal ? (selected?.dismissal_reason ?? '') : '');
     setReasonCategory(isFinal ? (selected?.dismissal_reason_category ?? '') : '');
   }
 
   function startNeedsReview() {
-    setNoteAction({ status: 'needs_review', label: 'Needs further review', requireCategory: false });
+    setNoteAction({ status: 'needs_review', label: 'Needs further review', requireCategory: false, allowAssignee: true });
     setNoteText('');
     setReasonCategory('');
+    setAssignedTo(selected?.assigned_to ?? '');
   }
 
   function confirmNoteAction() {
@@ -180,7 +185,9 @@ export default function ReviewQueue() {
     const note = noteText.trim();
     if (!note) return;  // mirrors the API's 400
     if (noteAction.requireCategory && !reasonCategory) return;
-    applyStatus(noteAction.status, note, noteAction.requireCategory ? reasonCategory : undefined);
+    const assignee = noteAction.allowAssignee ? assignedTo.trim() : undefined;
+    if (assignee && !assignee.includes('@')) return;  // mirrors the API's 422
+    applyStatus(noteAction.status, note, noteAction.requireCategory ? reasonCategory : undefined, assignee || undefined);
     closeNoteAction();
   }
 
@@ -329,6 +336,9 @@ export default function ReviewQueue() {
                         )}
                         {t.duplicates.length > 0 && (
                           <span title={`Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
+                        )}
+                        {t.status === 'needs_review' && t.assigned_to && (
+                          <span title={`Assigned to ${t.assigned_to}`} style={{ fontSize: 11 }}>✉</span>
                         )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -684,9 +694,19 @@ export default function ReviewQueue() {
                         {REASON_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                       </select>
                     )}
+                    {noteAction.allowAssignee && (
+                      <input
+                        className="input-field"
+                        style={{ marginTop: 8, width: '100%' }}
+                        placeholder="Assign to colleague's email (optional)…"
+                        value={assignedTo}
+                        onChange={e => setAssignedTo(e.target.value)}
+                      />
+                    )}
                     <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                       <button className="btn"
-                              disabled={patching || !noteText.trim() || (noteAction.requireCategory && !reasonCategory)}
+                              disabled={patching || !noteText.trim() || (noteAction.requireCategory && !reasonCategory)
+                                || (assignedTo.trim() !== '' && !assignedTo.includes('@'))}
                               onClick={confirmNoteAction}
                               style={{ background: '#f87171', color: '#0f1623', fontWeight: 600, fontSize: 12 }}>
                         {noteAction.label}
@@ -717,6 +737,11 @@ export default function ReviewQueue() {
                         {selected.dismissed_by && <>by {selected.dismissed_by}</>}
                         {selected.dismissed_by && selected.dismissed_at && ' · '}
                         {selected.dismissed_at && formatDate(selected.dismissed_at)}
+                      </div>
+                    )}
+                    {selected.status === 'needs_review' && selected.assigned_to && (
+                      <div style={{ fontSize: 11, color: '#c084fc', marginTop: 6 }}>
+                        ✉ Assigned to {selected.assigned_to}
                       </div>
                     )}
                   </div>

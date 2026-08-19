@@ -48,13 +48,16 @@ export function getTender(pub_number: string): Promise<Tender> {
 }
 
 export function patchTender(
-  pub_number: string, status: string, note?: string, reason_category?: string,
+  pub_number: string, status: string, note?: string, reason_category?: string, assigned_to?: string,
 ): Promise<unknown> {
   const body: Record<string, string> = { status };
   if (note) body.note = note;
   // CR-007 Phase B (B3): required alongside `note` for a dismiss stage —
   // see ReviewQueue.tsx's REASON_CATEGORIES.
   if (reason_category) body.reason_category = reason_category;
+  // Post-CR-007: optional colleague to ping — only meaningful alongside a
+  // needs_review parking, see ReviewQueue.tsx's noteAction panel.
+  if (assigned_to) body.assigned_to = assigned_to;
   return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

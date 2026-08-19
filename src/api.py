@@ -283,12 +283,14 @@ def _merge_personal_review_state(records, reviews, account_name):
             r["dismissal_reason_category"] = personal["reason_category"]
             r["dismissed_by"] = account_name if personal["status"] in ("dismissed", "dismissed_final") else None
             r["dismissed_at"] = personal["dismissed_at"]
+            r["assigned_to"] = personal["assigned_to"]
         else:
             r["status"] = "new"
             r["dismissal_reason"] = None
             r["dismissal_reason_category"] = None
             r["dismissed_by"] = None
             r["dismissed_at"] = None
+            r["assigned_to"] = None
     return records
 
 
@@ -504,6 +506,9 @@ class StatusBody(BaseModel):
     # CR-007 Phase B (B3): fixed dismiss-reason tag, required alongside `note`
     # on either dismiss stage — see schema.RELEVANCE_REASON_CATEGORIES.
     reason_category: Optional[str] = None
+    # Post-CR-007: optional colleague to ping on a needs_review parking —
+    # see _send_needs_review_ping_email below. Ignored for any other status.
+    assigned_to: Optional[str] = None
 
 _VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed", "dismissed_final", "needs_review"}
 # CR-007 Phase B (B1): both dismiss stages require their own mandatory note
@@ -523,9 +528,31 @@ _NOTE_REQUIRED_STATUSES = _DISMISS_STATUSES | {"needs_review"}
 # decision, not starting a fresh personal one.
 _SHARED_STATUSES = {"shortlisted"}
 
+def _send_needs_review_ping_email(tenant_id, pub_number, assigned_to, note, sender_name):
+    """Post-CR-007: pings the colleague named in a needs_review parking —
+    same alerts.send_tenant_email primitive as _send_owner_handoff_email /
+    CR-007 G1's _send_forward_email, addressed to that specific colleague
+    rather than the tenant's single notify_email. Fire-and-forget, no new
+    notification subsystem, same shape as its siblings above.
+    """
+    import alerts
+    conn = _db()
+    tender = _find_tender(conn, tenant_id, pub_number)
+    label = f"{tender['tag_line']} ({pub_number})" if tender else pub_number
+    lines = [f"{sender_name} flagged a tender for your review:", "", label, "", note]
+    if tender and tender.get("deadline"):
+        lines.append(f"Deadline: {tender['deadline'][:10]}")
+    alerts.send_tenant_email(assigned_to, f"Tenderizer — {sender_name} needs your review", "\n".join(lines))
+
+
 @app.patch("/api/tenders/{pub_number}")
-def patch_tender(pub_number: str, body: StatusBody,
+def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks = None,
                   identity: Identity = Depends(get_current_identity)):
+    # background defaults to None (unlike forward_tender/patch_pipeline's bare
+    # `background: BackgroundTasks`) so the many existing direct-call test
+    # sites that predate the assigned_to ping don't all need updating —
+    # FastAPI still injects a real BackgroundTasks for actual HTTP requests
+    # regardless of the default; only a direct Python call can leave it None.
     tenant_id = identity.tenant_id
     if body.status not in _VALID_STATUSES:
         raise HTTPException(422, f"status must be one of {_VALID_STATUSES}")
@@ -545,6 +572,11 @@ def patch_tender(pub_number: str, body: StatusBody,
         raise HTTPException(400, f"A reason is required to {verb} a tender")
     if body.status in _DISMISS_STATUSES and body.reason_category not in RELEVANCE_REASON_CATEGORIES:
         raise HTTPException(400, f"reason_category must be one of {RELEVANCE_REASON_CATEGORIES}")
+    assigned_to = (body.assigned_to or "").strip() or None
+    if assigned_to and body.status != "needs_review":
+        assigned_to = None  # only meaningful alongside a needs_review parking
+    elif assigned_to and "@" not in assigned_to:
+        raise HTTPException(422, "assigned_to must be a valid email address")
 
     reverting_shortlist = current["status"] == "shortlisted" and body.status == "new"
     if body.status in _SHARED_STATUSES or reverting_shortlist:
@@ -554,7 +586,11 @@ def patch_tender(pub_number: str, body: StatusBody,
             conn, tenant_id, pub_number, identity.clerk_user_id, identity.account_name,
             body.status,
             reason=body.note.strip() if body.status in _NOTE_REQUIRED_STATUSES else None,
-            reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None)
+            reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None,
+            assigned_to=assigned_to)
+        if assigned_to and background is not None:
+            background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
+                                 assigned_to, body.note.strip(), identity.account_name)
     return {"pub_number": pub_number, "status": body.status}
 
 
@@ -707,7 +743,18 @@ def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
 _PORTAL_META = [
     {"name": "TED",           "region": "EU",      "status": "live"},
     {"name": "BOAMP",         "region": "France",  "status": "live"},
-    {"name": "e-Procurement", "region": "Belgium", "status": "planned"},
+    # CR-008: investigated adding this as a fourth source. Its listings API
+    # (POST /api/sea/search/publications, found via the SPA's own network
+    # calls) 403s scripted requests — including same-session fetch() calls
+    # made from within the live page itself, not just cold requests — so this
+    # isn't a fetchable connector today. BOSA's ToU (bosa.belgium.be) and
+    # publicprocurement.be carry no robots.txt and no published API/scraping
+    # policy either way — nothing to build against or clear compliance-wise
+    # until BOSA confirms automated access is permitted. Same paused shape as
+    # DTVP below rather than "planned", since "planned" implied only that
+    # nobody had gotten to it yet.
+    {"name": "Belgian e-Procurement (BDA)", "region": "Belgium", "status": "paused",
+     "detail": "Scraper paused — no API access confirmed, search endpoint blocks scripted requests"},
     {"name": "DTVP",          "region": "Germany", "status": "paused",
      "detail": "Scraper paused — ToS review pending"},
 ]

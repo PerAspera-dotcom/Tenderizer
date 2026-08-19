@@ -797,7 +797,7 @@ _DISMISS_STATUSES = {"dismissed", "dismissed_final"}
 
 
 def upsert_tender_review(conn, tenant_id, pub_number, clerk_user_id, account_name, status,
-                          reason=None, reason_category=None):
+                          reason=None, reason_category=None, assigned_to=None):
     """CR-007 Phase A: the personal counterpart to set_status above — every
     triage action other than shortlisting (see api.patch_tender) lands here
     instead of on the shared `tenders` row, keyed by the acting account, so
@@ -806,6 +806,10 @@ def upsert_tender_review(conn, tenant_id, pub_number, clerk_user_id, account_nam
     caller) — also reused for B2's mandatory "needs further review" comment.
     `dismissed_at` is stamped on either dismiss stage (B1). `reason_category`
     (B3) is only meaningful alongside a dismiss; left untouched otherwise.
+    `assigned_to` (post-CR-007) is the colleague being pinged on a
+    needs_review parking — sticky like `reason`, only written when the caller
+    actually supplies one, so a later status change never silently clears a
+    prior assignment.
     """
     now = datetime.now(timezone.utc).isoformat()
     values = {"account_name": account_name, "status": status, "updated_at": now}
@@ -813,6 +817,8 @@ def upsert_tender_review(conn, tenant_id, pub_number, clerk_user_id, account_nam
         values["reason"] = reason
     if reason_category is not None:
         values["reason_category"] = reason_category
+    if assigned_to is not None:
+        values["assigned_to"] = assigned_to
     if status in _DISMISS_STATUSES:
         values["dismissed_at"] = now
     key = ((tender_reviews.c.tenant_id == tenant_id) &
@@ -837,11 +843,13 @@ def get_tender_reviews_for_account(conn, tenant_id, clerk_user_id):
         rows = c.execute(select(
             tender_reviews.c.pub_number, tender_reviews.c.status,
             tender_reviews.c.reason, tender_reviews.c.reason_category, tender_reviews.c.dismissed_at,
+            tender_reviews.c.assigned_to,
         ).where(
             (tender_reviews.c.tenant_id == tenant_id) &
             (tender_reviews.c.clerk_user_id == clerk_user_id)
         )).fetchall()
-    return {r[0]: {"status": r[1], "reason": r[2], "reason_category": r[3], "dismissed_at": r[4]}
+    return {r[0]: {"status": r[1], "reason": r[2], "reason_category": r[3], "dismissed_at": r[4],
+                   "assigned_to": r[5]}
             for r in rows}
 
 

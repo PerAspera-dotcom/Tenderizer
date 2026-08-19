@@ -5,8 +5,9 @@ a mandatory comment (same required-field pattern as CR-006's dismiss
 reason). Follows test_36_dismissal_attribution.py's conventions.
 """
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
+import alerts
 import store
 import api
 from conftest import TEST_TENANT_ID, TEST_ACCOUNT_NAME_B, TEST_CLERK_USER_ID_B, make_identity
@@ -72,3 +73,70 @@ def test_needs_review_shows_under_its_own_filter_not_the_plain_new_list(tmp_path
 
     plain_new = api.list_tenders(status="new", limit=100, offset=0, identity=make_identity())["results"]
     assert {r["pub_number"] for r in plain_new} == {"PUB-2"}
+
+
+# Post-CR-007: optional colleague assignment + ping on a needs_review parking.
+
+def test_needs_review_with_an_assignee_persists_and_pings_them(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    captured = {}
+    monkeypatch.setattr(alerts, "send_tenant_email",
+                         lambda to_addr, subject, body: captured.update(to=to_addr, subject=subject, body=body))
+    background = BackgroundTasks()
+
+    api.patch_tender("PUB-1", api.StatusBody(status="needs_review", note="Check budget with finance",
+                                              assigned_to="colleague@example.com"),
+                      background, identity=make_identity())
+    assert len(background.tasks) == 1
+    for task in background.tasks:
+        task.func(*task.args, **task.kwargs)
+
+    rec = api.get_tender("PUB-1", identity=make_identity())
+    assert rec["status"] == "needs_review"
+    assert rec["assigned_to"] == "colleague@example.com"
+    assert captured["to"] == "colleague@example.com"
+    assert "Check budget with finance" in captured["body"]
+    assert "PUB-1" in captured["body"] or "Tent supply" in captured["body"]
+
+
+def test_needs_review_without_an_assignee_does_not_ping(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    background = BackgroundTasks()
+    api.patch_tender("PUB-1", api.StatusBody(status="needs_review", note="Ask the client"),
+                      background, identity=make_identity())
+    assert len(background.tasks) == 0
+    assert api.get_tender("PUB-1", identity=make_identity())["assigned_to"] is None
+
+
+def test_assigned_to_is_ignored_for_a_non_needs_review_status(tmp_path, monkeypatch):
+    """assigned_to is only meaningful alongside a needs_review parking — sent
+    on any other status, it's silently dropped rather than 422ing, same
+    tolerant-ignore behavior as `note` on a non-required status.
+    """
+    _seed(tmp_path, monkeypatch)
+    background = BackgroundTasks()
+    api.patch_tender("PUB-1", api.StatusBody(status="reviewed", assigned_to="colleague@example.com"),
+                      background, identity=make_identity())
+    assert len(background.tasks) == 0
+    assert api.get_tender("PUB-1", identity=make_identity())["assigned_to"] is None
+
+
+def test_needs_review_rejects_an_invalid_assignee_email(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        api.patch_tender("PUB-1", api.StatusBody(status="needs_review", note="Ask the client",
+                                                  assigned_to="not-an-email"),
+                          BackgroundTasks(), identity=make_identity())
+    assert exc.value.status_code == 422
+
+
+def test_needs_review_assignment_is_personal_to_the_parking_account(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    api.patch_tender("PUB-1", api.StatusBody(status="needs_review", note="Ask the client",
+                                              assigned_to="colleague@example.com"),
+                      BackgroundTasks(), identity=make_identity())
+
+    colleague = make_identity(account_name=TEST_ACCOUNT_NAME_B, clerk_user_id=TEST_CLERK_USER_ID_B)
+    rec = api.get_tender("PUB-1", identity=colleague)
+    assert rec["status"] == "new"
+    assert rec["assigned_to"] is None
