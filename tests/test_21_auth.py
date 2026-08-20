@@ -15,6 +15,7 @@ import time
 
 import jwt
 import pytest
+import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
@@ -229,3 +230,78 @@ def test_a_regular_clerk_session_does_not_satisfy_require_ops_access(monkeypatch
     with pytest.raises(HTTPException) as exc:
         api.require_ops_access(creds=_creds("a-real-looking.clerk.jwt"))
     assert exc.value.status_code == 403
+
+
+# Post-CR-007: the real Clerk org roster for the colleague picker.
+
+class _FakeResponse:
+    def __init__(self, json_data, status=200):
+        self._json = json_data
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}")
+
+    def json(self):
+        return self._json
+
+
+def test_list_organization_members_returns_empty_when_secret_key_unset(monkeypatch):
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    assert auth.list_organization_members("org_1") == []
+
+
+def test_list_organization_members_returns_empty_with_no_org_id(monkeypatch):
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_x")
+    assert auth.list_organization_members(None) == []
+
+
+def test_list_organization_members_parses_the_clerk_response(monkeypatch):
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_x")
+    captured = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        captured.update(url=url, headers=headers)
+        return _FakeResponse({"data": [
+            {"public_user_data": {"user_id": "user_a", "identifier": "a@example.com"}},
+            {"public_user_data": {"user_id": "user_b", "identifier": "b@example.com"}},
+        ]})
+
+    monkeypatch.setattr(auth.requests, "get", fake_get)
+    members = auth.list_organization_members("org_1")
+    assert members == [
+        {"email": "a@example.com", "clerk_user_id": "user_a"},
+        {"email": "b@example.com", "clerk_user_id": "user_b"},
+    ]
+    assert "org_1" in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer sk_test_x"
+
+
+def test_list_organization_members_skips_entries_without_an_email(monkeypatch):
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(auth.requests, "get", lambda *a, **k: _FakeResponse(
+        {"data": [{"public_user_data": {"user_id": "user_a"}}]}))
+    assert auth.list_organization_members("org_1") == []
+
+
+def test_list_organization_members_returns_empty_on_request_failure(monkeypatch):
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_x")
+
+    def raise_error(*a, **k):
+        raise requests.RequestException("network error")
+
+    monkeypatch.setattr(auth.requests, "get", raise_error)
+    assert auth.list_organization_members("org_1") == []
+
+
+def test_get_org_members_endpoint_excludes_the_caller(monkeypatch):
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(auth, "list_organization_members", lambda org_id: [
+        {"email": "me@example.com", "clerk_user_id": "user_me"},
+        {"email": "colleague@example.com", "clerk_user_id": "user_colleague"},
+    ])
+    identity = api.Identity(tenant_id=1, account_name="me@example.com",
+                             clerk_user_id="user_me", org_id="org_1")
+    result = api.get_org_members(identity=identity)
+    assert result == [{"email": "colleague@example.com", "clerk_user_id": "user_colleague"}]

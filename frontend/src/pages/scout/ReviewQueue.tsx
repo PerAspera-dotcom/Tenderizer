@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings } from '../../api';
+import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, type OrgMember } from '../../api';
 import type { Tender } from '../../types';
 import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft } from '../../utils';
 import MatchChip from '../../components/MatchChip';
@@ -13,6 +13,10 @@ type StatusFilter = 'all' | 'new' | 'shortlisted' | 'reviewed' | 'needs_review';
 
 // CR-007 Phase B (B3): mirrors schema.RELEVANCE_REASON_CATEGORIES — required
 // alongside a dismiss reason so relevance scoring can aggregate on it.
+// Post-CR-007: sentinel for the assignee <select>'s "enter manually" option
+// — mirrors ForwardTender.tsx's identical MANUAL_ENTRY.
+const MANUAL_ASSIGNEE = '__manual__';
+
 const REASON_CATEGORIES: { value: string; label: string }[] = [
   { value: 'wrong_sector', label: 'Wrong sector/CPV mismatch' },
   { value: 'value_too_low', label: 'Value too low' },
@@ -71,6 +75,10 @@ export default function ReviewQueue() {
   // formerly a hard 72h exclude, now purely a display threshold.
   const [deadlineFloorHours, setDeadlineFloorHours] = useState(72);
   useEffect(() => { getScoutSettings().then(s => setDeadlineFloorHours(s.deadline_floor_hours)).catch(() => {}); }, []);
+  // Post-CR-007: the real Clerk org roster (self excluded) for the
+  // needs_review assignee picker — see ForwardTender.tsx's identical use.
+  const [orgMembers, setOrgMembers] = useState<OrgMember[]>([]);
+  useEffect(() => { getOrgMembers().then(setOrgMembers).catch(() => setOrgMembers([])); }, []);
 
   function sortTenders(list: Tender[], by: SortBy): Tender[] {
     const sorted = [...list];
@@ -110,8 +118,11 @@ export default function ReviewQueue() {
   >(null);
   const [noteText, setNoteText] = useState('');
   const [reasonCategory, setReasonCategory] = useState('');
-  // Post-CR-007: optional colleague to ping — only surfaced on a needs_review parking.
+  // Post-CR-007: optional colleague to ping — only surfaced on a needs_review
+  // parking. assigneeManual mirrors ForwardTender.tsx's MANUAL_ENTRY toggle —
+  // falls back to free-text entry when there's no org roster to pick from.
   const [assignedTo, setAssignedTo] = useState('');
+  const [assigneeManual, setAssigneeManual] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   function closeNoteAction() {
@@ -119,6 +130,7 @@ export default function ReviewQueue() {
     setNoteText('');
     setReasonCategory('');
     setAssignedTo('');
+    setAssigneeManual(false);
   }
 
   function selectTender(t: Tender) {
@@ -178,6 +190,7 @@ export default function ReviewQueue() {
     setNoteText('');
     setReasonCategory('');
     setAssignedTo(selected?.assigned_to ?? '');
+    setAssigneeManual(orgMembers.length === 0);
   }
 
   function confirmNoteAction() {
@@ -694,14 +707,37 @@ export default function ReviewQueue() {
                         {REASON_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                       </select>
                     )}
-                    {noteAction.allowAssignee && (
-                      <input
+                    {noteAction.allowAssignee && !assigneeManual && (
+                      <select
                         className="input-field"
                         style={{ marginTop: 8, width: '100%' }}
-                        placeholder="Assign to colleague's email (optional)…"
                         value={assignedTo}
-                        onChange={e => setAssignedTo(e.target.value)}
-                      />
+                        onChange={e => {
+                          if (e.target.value === MANUAL_ASSIGNEE) { setAssigneeManual(true); setAssignedTo(''); }
+                          else setAssignedTo(e.target.value);
+                        }}
+                      >
+                        <option value="">Assign to colleague (optional)…</option>
+                        {orgMembers.map(m => <option key={m.clerk_user_id} value={m.email}>{m.email}</option>)}
+                        <option value={MANUAL_ASSIGNEE}>Other (enter email)…</option>
+                      </select>
+                    )}
+                    {noteAction.allowAssignee && assigneeManual && (
+                      <>
+                        <input
+                          className="input-field"
+                          style={{ marginTop: 8, width: '100%' }}
+                          placeholder="Assign to colleague's email (optional)…"
+                          value={assignedTo}
+                          onChange={e => setAssignedTo(e.target.value)}
+                        />
+                        {orgMembers.length > 0 && (
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 6px', marginTop: 4 }}
+                                  onClick={() => { setAssigneeManual(false); setAssignedTo(''); }}>
+                            ← Pick from colleagues
+                          </button>
+                        )}
+                      </>
                     )}
                     <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                       <button className="btn"

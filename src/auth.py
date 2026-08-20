@@ -18,9 +18,13 @@ Two independent schemes:
     internal dashboard hits without a human user session at all.
 """
 import hmac
+import logging
 import os
 import jwt
+import requests
 from jwt import PyJWKClient
+
+logger = logging.getLogger(__name__)
 
 _jwks_client = None
 _jwks_client_url = None
@@ -62,6 +66,45 @@ def verify_token(token):
                            options={"require": ["exp", "sub"]})
     except jwt.PyJWTError as e:
         raise AuthError(str(e)) from e
+
+
+def list_organization_members(org_id):
+    """The real Clerk org roster (emails) for the "forward to a colleague" /
+    "assign for review" pickers — the session JWT only ever tells the server
+    who the *caller* is and which org they're in (see api._org_id_from_claims),
+    never the full membership list, so this is the one place the backend
+    actually calls out to Clerk's API rather than just verifying a token.
+
+    Same "inert if unconfigured" convention as alerts.py/Sentry: returns []
+    (never raises) if CLERK_SECRET_KEY isn't set or the call fails, so a
+    tenant that hasn't wired it up yet just sees an empty picker rather than
+    a 500 — callers fall back to manual email entry in that case.
+    """
+    secret_key = os.getenv("CLERK_SECRET_KEY")
+    if not secret_key or not org_id:
+        return []
+    try:
+        resp = requests.get(
+            f"https://api.clerk.com/v1/organizations/{org_id}/memberships",
+            headers={"Authorization": f"Bearer {secret_key}"},
+            params={"limit": 100},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+    except requests.RequestException:
+        logger.exception("Clerk organization membership lookup failed")
+        return []
+    members = []
+    for m in data:
+        user = m.get("public_user_data") or {}
+        # `identifier` is the member's primary email address on an
+        # email/password or email-code Clerk instance (this one — see
+        # get_current_identity's own claims.get("email") reliance).
+        email = user.get("identifier")
+        if email:
+            members.append({"email": email, "clerk_user_id": user.get("user_id")})
+    return members
 
 
 def verify_ops_token(token):

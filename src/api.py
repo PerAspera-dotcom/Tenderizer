@@ -188,10 +188,14 @@ class Identity:
     its own dependency rather than changing get_current_tenant_id's return
     type, to avoid touching every existing route.
     """
-    def __init__(self, tenant_id: int, account_name: str, clerk_user_id: str):
+    def __init__(self, tenant_id: int, account_name: str, clerk_user_id: str, org_id: Optional[str] = None):
         self.tenant_id = tenant_id
         self.account_name = account_name
         self.clerk_user_id = clerk_user_id
+        # None when the caller has no active Clerk organization selected
+        # (pre-Phase-A solo tenant, or Organizations disabled) — see
+        # auth.list_organization_members, the one consumer of this.
+        self.org_id = org_id
 
 
 def get_current_identity(
@@ -204,7 +208,8 @@ def get_current_identity(
     # create_tenant_for_clerk_user's claims.get("email") above). Fall back to
     # the Clerk user id so attribution never silently ends up empty.
     account_name = claims.get("email") or claims["sub"]
-    return Identity(tenant_id=tenant_id, account_name=account_name, clerk_user_id=claims["sub"])
+    return Identity(tenant_id=tenant_id, account_name=account_name, clerk_user_id=claims["sub"],
+                     org_id=_org_id_from_claims(claims))
 
 
 def require_ops_access(
@@ -684,6 +689,18 @@ def forward_tender(pub_number: str, body: ForwardBody, background: BackgroundTas
     background.add_task(_send_forward_email, identity.tenant_id, pub_number, to_email,
                          (body.message or "").strip() or None, identity.account_name)
     return {"sent": True}
+
+
+@app.get("/api/org/members")
+def get_org_members(identity: Identity = Depends(get_current_identity)):
+    """The real Clerk org roster (self excluded) that feeds the "forward to
+    a colleague" and "assign for review" pickers — see
+    auth.list_organization_members. Always a plain list, never an error: no
+    active org, or CLERK_SECRET_KEY unset, both just mean an empty list, and
+    the frontend falls back to manual email entry either way.
+    """
+    members = auth.list_organization_members(identity.org_id)
+    return [m for m in members if m["clerk_user_id"] != identity.clerk_user_id]
 
 
 @app.get("/api/tenders/{pub_number}/history")

@@ -96,6 +96,20 @@ export function forwardTender(pub_number: string, to_email: string, message?: st
   });
 }
 
+export interface OrgMember {
+  email: string;
+  clerk_user_id: string;
+}
+
+// Post-CR-007: the real Clerk org roster (self excluded) — feeds the
+// colleague picker in ForwardTender.tsx and ReviewQueue.tsx's needs_review
+// assignee field. Always [] rather than an error (no active org, or
+// CLERK_SECRET_KEY unset server-side) — both callers fall back to manual
+// email entry on an empty list.
+export function getOrgMembers(): Promise<OrgMember[]> {
+  return apiFetch('/api/org/members');
+}
+
 export function putScoutSettings(body: Partial<ScoutSettings>): Promise<{ saved: boolean }> {
   return apiFetch('/api/scout/settings', {
     method: 'PUT',
