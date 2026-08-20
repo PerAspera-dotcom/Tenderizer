@@ -1,12 +1,12 @@
 """CR-007 Phase A — org-shared workspace.
 
-Covers the two pieces api.py/store.py added: resolving/self-healing a
-tenant from a Clerk organization claim (store.link_or_create_tenant_for_
-clerk_org / api._resolve_tenant_id / api._org_id_from_claims), and the
-per-account tender_reviews split that keeps the Review Queue personal while
-letting a shortlist become the org's shared decision (further exercised in
-test_36_dismissal_attribution.py). Two different orgs must stay as fully
-isolated as two different pre-Phase-A tenants always were.
+Covers resolving/self-healing a tenant from a Clerk organization claim
+(store.link_or_create_tenant_for_clerk_org / api._resolve_tenant_id /
+api._org_id_from_claims). Every Review Queue action is org-shared post-CR-007
+(see schema.py's tender_reviews retirement comment; test_36_dismissal_
+attribution.py has that layer's dedicated coverage) — this file's remaining
+job is two different orgs staying as fully isolated as two different
+pre-Phase-A tenants always were.
 """
 import store
 import api
@@ -133,13 +133,12 @@ def test_two_orgs_tenders_and_pipeline_are_fully_isolated(tmp_path, monkeypatch)
     assert store.get_pipeline_entries(conn, org_b) == []
 
 
-# ── Per-account review state stays personal while shortlist rolls up to the
-# org (see also test_36_dismissal_attribution.py's dedicated coverage) ──────
+# ── Every review action rolls up to the org, shortlist included (see also
+# test_36_dismissal_attribution.py's dedicated coverage) ────────────────────
 
 def test_org_shared_overview_acceptance_criterion(tmp_path, monkeypatch):
     """The CR-007 Phase A global acceptance line: user A shortlists a tender
-    -> user B (same org) sees it in the shared Overview/pipeline; user A's
-    personal review state doesn't leak to B and vice versa.
+    -> user B (same org) sees it in the shared Overview/pipeline.
     """
     conn = _db(tmp_path, monkeypatch)
     store.upsert(conn, TEST_TENANT_ID, {

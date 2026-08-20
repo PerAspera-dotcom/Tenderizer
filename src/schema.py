@@ -109,6 +109,17 @@ tenders = Table(
     # find_cross_portal_duplicates) matches this across different `source`
     # values for the same tenant; never compared when either side is NULL.
     Column("internal_identifier", Text, nullable=True),
+    # Post-CR-007: the whole Review Queue became org-shared, not per-account
+    # (client feedback: "if one person dismisses a tender or makes a note it
+    # needs to be visible to all members"). `reason_category`/`assigned_to`
+    # used to live only on the now-retired `tender_reviews` (see its comment
+    # below) — moved here so every status transition writes the one shared
+    # row via store.set_status, same as `dismissal_reason`/`dismissed_by`/
+    # `dismissed_at` already did pre-CR-007-Phase-A. Same nullable/sticky
+    # convention as those: real NULL when never set, never cleared by a later
+    # transition that doesn't supply a new value.
+    Column("reason_category", Text, nullable=True),
+    Column("assigned_to", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 
@@ -165,11 +176,12 @@ Index("ix_pipeline_history_tenant_pub", pipeline_history.c.tenant_id, pipeline_h
 # status transition, which previously had no history at all.
 #
 # CR-007 Phase A note: "tenant_id already answers who" is no longer true once
-# a tenant can be a multi-member org (see tenants.clerk_org_id) — this table
-# only ever logs the org-shared field="status" transition (new->shortlisted),
-# so it's still fine without changed_by for now, but that's the reason it'll
-# eventually need one. See tender_reviews below for the new per-account state
-# that CR-007 Phase A actually needed a person-level column for.
+# a tenant can be a multi-member org (see tenants.clerk_org_id) — every
+# status transition is logged here now (post-CR-007: the whole Review Queue
+# is org-shared, see the tender_reviews retirement comment below), so a real
+# changed_by column would genuinely add "who" beyond what tenant_id answers.
+# Not added yet — dismissed_by already covers the one status (a dismiss
+# stage) callers actually ask "who" about today.
 tender_history = Table(
     "tender_history", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -182,60 +194,31 @@ tender_history = Table(
 )
 Index("ix_tender_history_tenant_pub", tender_history.c.tenant_id, tender_history.c.pub_number)
 
-# CR-007 Phase A: per-account triage state. Org-shared `tenders.status` now
-# only ever holds "new" or "shortlisted" — the org's collective decision.
-# Every other triage action (reviewed / dismissed, + CR-006's mandatory
-# dismiss reason) is personal: each org member gets their own row per tender,
-# so one analyst dismissing something doesn't remove it from a colleague's
-# queue. `pub_number`, not `hash`, matches tender_history/pipeline's existing
-# addressing convention. No separate history table for this one (matches
-# tenders' own "not a black box, but not a full audit log either" choice —
-# see dismissed_by's comment above); `reason`/`dismissed_at` are simply
-# overwritten on each new personal action, same as tenders.dismissal_reason.
+# RETIRED post-CR-007: `tender_reviews` used to hold CR-007 Phase A's
+# per-account triage state (dismiss/reviewed/needs_review, each org member
+# getting their own row so one analyst's action never affected a colleague's
+# queue). Direct client feedback reversed that: "the review queue does not
+# need to be individual, all transactions can be carried across to the
+# organizational level for all to see... if one person dismisses a tender or
+# makes a note it needs to be visible to all members." Every status
+# transition now writes the single shared `tenders` row via store.set_status
+# (reason_category/assigned_to moved there — see tenders' own comments
+# above), the same mechanism "shortlisted" already used pre-Phase-A.
 #
-# CR-007 Phase B: `status` gains two more values on top of Phase A's
-# new/reviewed/dismissed — `dismissed_final` (B1's second dismiss stage;
-# plain `dismissed` is now implicitly "stage 1 / soft", its existing
-# greyed-out-but-still-queued meaning already matches that) and
-# `needs_review` (B2, reusing `reason` as its mandatory parking comment,
-# same required-field pattern as a dismiss). `reason_category` (B3) is a
-# small fixed-vocabulary tag alongside the free-text `reason`, populated
-# only for a dismiss action, purely so relevance scoring can aggregate on
-# "similar tenders were dismissed for reason X" without doing NLP over
-# free text — see relevance.py and RELEVANCE_REASON_CATEGORIES below.
-#
-# Post-CR-007: `assigned_to` — a "needs_review" parking is often really "I
-# don't know, ask Christoph" — an optional colleague's email the reviewer can
-# name when parking a tender, distinct from `account_name` (the person who
-# parked it, not who's meant to act on it). Only meaningful alongside
-# needs_review; sticky like reason/dismissed_at above (overwritten by a new
-# assignment, never auto-cleared on a later status change) rather than a
-# separate assignment-history table — same "current state, not a full audit
-# log" convention as this table's other fields. Triggers a one-off email ping
-# to that address (api._send_needs_review_ping_email) via the same
-# alerts.send_tenant_email primitive CR-007 G1's forward-to-colleague uses;
-# no new notification subsystem.
-tender_reviews = Table(
-    "tender_reviews", metadata,
-    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
-    Column("pub_number", Text, nullable=False),
-    Column("clerk_user_id", Text, nullable=False),
-    Column("account_name", Text, nullable=False, server_default=""),
-    Column("status", Text, nullable=False, server_default="new"),
-    Column("reason", Text, nullable=True),
-    Column("reason_category", Text, nullable=True),
-    Column("dismissed_at", Text, nullable=True),
-    Column("assigned_to", Text, nullable=True),
-    Column("updated_at", Text, nullable=False, server_default=""),
-    PrimaryKeyConstraint("tenant_id", "pub_number", "clerk_user_id"),
-)
-Index("ix_tender_reviews_tenant_pub", tender_reviews.c.tenant_id, tender_reviews.c.pub_number)
-Index("ix_tender_reviews_tenant_user", tender_reviews.c.tenant_id, tender_reviews.c.clerk_user_id)
+# The Python model is gone (nothing reads/writes it any more — a fresh dev
+# SQLite DB no longer gets this table via create_all), but the *migration*
+# deliberately did not DROP TABLE in production Postgres — an ADD COLUMN +
+# backfill is safely reversible, a table drop on live data isn't, and
+# nothing here needs to be automatic. See alembic/versions/<the migration
+# after f6a1c9d3e7b2>: it backfills each tenant's most-recently-updated
+# tender_reviews row onto the matching `tenders` row, then leaves the
+# now-unread table in place as an inert archive of the old per-account
+# history until a human decides to drop it for real.
 
-# CR-007 Phase B (B3): fixed, small vocabulary for `tender_reviews.
-# reason_category` — a dismiss reason is still freeform text first and
-# foremost (shown verbatim everywhere), this is purely an aggregation tag so
-# "similar tenders were dismissed for reason X" is computable without NLP.
+# CR-007 Phase B (B3): fixed, small vocabulary for `tenders.reason_category`
+# — a dismiss reason is still freeform text first and foremost (shown
+# verbatim everywhere), this is purely an aggregation tag so "similar
+# tenders were dismissed for reason X" is computable without NLP.
 RELEVANCE_REASON_CATEGORIES = [
     "wrong_sector", "value_too_low", "wrong_region", "excluded_type",
     "duplicate", "deadline_missed", "other",

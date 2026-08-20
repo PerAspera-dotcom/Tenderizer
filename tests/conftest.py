@@ -13,9 +13,10 @@ TEST_TENANT_ID = 1
 # already bypasses get_current_tenant_id.
 TEST_ACCOUNT_NAME = "tester@example.com"
 
-# CR-007 Phase A: the Clerk user id behind TEST_ACCOUNT_NAME — the key for
-# personal tender_reviews rows. A second constant (below) stands in for a
-# colleague sharing the same TEST_TENANT_ID org.
+# CR-007 Phase A: the Clerk user id behind TEST_ACCOUNT_NAME. A second
+# constant (below) stands in for a colleague sharing the same TEST_TENANT_ID
+# org — post-CR-007, every Review Queue action either of them takes is
+# visible to the other (see schema.py's tender_reviews retirement comment).
 TEST_CLERK_USER_ID = "user_test_1"
 TEST_ACCOUNT_NAME_B = "colleague@example.com"
 TEST_CLERK_USER_ID_B = "user_test_2"

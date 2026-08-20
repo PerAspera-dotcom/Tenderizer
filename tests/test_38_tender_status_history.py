@@ -5,11 +5,11 @@ a dismiss (which only ever populated dismissed_by/dismissed_at/dismissal_
 reason — see test_36_dismissal_attribution.py). This file confirms the new
 event log is additive to that CR-006 behaviour, not a replacement of it.
 
-CR-007 Phase A update: tender_history (like `tenders.status` itself) now
-only ever logs the org-shared new<->shortlisted transition — "reviewed" and
-"dismissed" moved to personal per-account state (store.tender_reviews) that
-never touches the shared row, so they no longer appear here. See
-test_36_dismissal_attribution.py for that layer's own coverage.
+Post-CR-007 update: every status transition (not just new<->shortlisted)
+writes the shared `tenders` row via store.set_status now — client feedback
+reversed CR-007 Phase A's personal-per-account split (see schema.py's
+tender_reviews retirement comment) — so "reviewed"/"dismissed"/etc. log here
+too. See test_36_dismissal_attribution.py for that layer's own coverage.
 """
 import store
 import api
@@ -85,10 +85,10 @@ def test_tender_history_is_tenant_scoped(tmp_path):
     assert [h["new_value"] for h in store.get_tender_history(conn, OTHER_TENANT_ID, "P-1")] == ["shortlisted"]
 
 
-def test_dismiss_via_api_is_personal_and_not_logged_in_the_shared_tender_history(tmp_path, monkeypatch):
-    """CR-007 Phase A: dismiss no longer touches the shared `tenders` row at
-    all (see test_36_dismissal_attribution.py for where its metadata now
-    lives — the caller's own tender_reviews row / the API's merged view).
+def test_dismiss_via_api_is_shared_and_logged_in_the_tender_history(tmp_path, monkeypatch):
+    """Post-CR-007: dismiss writes the shared `tenders` row directly (see
+    test_36_dismissal_attribution.py for that layer's own coverage), and
+    like any other status change, that transition is logged here too.
     """
     conn = _seed(tmp_path, monkeypatch)
 
@@ -96,16 +96,19 @@ def test_dismiss_via_api_is_personal_and_not_logged_in_the_shared_tender_history
                                             reason_category="other"),
                       identity=make_identity())
 
-    assert store.get_tender_history(conn, TEST_TENANT_ID, "P-1") == []
+    history = store.get_tender_history(conn, TEST_TENANT_ID, "P-1")
+    assert len(history) == 1
+    assert history[0]["old_value"] == "new"
+    assert history[0]["new_value"] == "dismissed"
     rec = next(r for r in store.all_records(conn, TEST_TENANT_ID) if r["pub_number"] == "P-1")
-    assert rec["status"] == "new"
-    assert rec["dismissal_reason"] is None
-    assert rec["dismissed_by"] is None
+    assert rec["status"] == "dismissed"
+    assert rec["dismissal_reason"] == "Second look needed"
+    assert rec["dismissed_by"] == TEST_ACCOUNT_NAME
 
 
 def test_get_tender_history_endpoint_round_trips(tmp_path, monkeypatch):
-    """CR-007 Phase A: "reviewed" is personal (no shared-row change, so no
-    history entry); only the "new" -> "shortlisted" transition is logged.
+    """Post-CR-007: "reviewed" now writes the shared row too, so both
+    transitions are logged (newest first).
     """
     _seed(tmp_path, monkeypatch)
 
@@ -114,6 +117,8 @@ def test_get_tender_history_endpoint_round_trips(tmp_path, monkeypatch):
 
     result = api.get_tender_history("P-1", tenant_id=TEST_TENANT_ID)
     assert result["pub_number"] == "P-1"
-    assert len(result["history"]) == 1
-    assert result["history"][0]["old_value"] == "new"
+    assert len(result["history"]) == 2
+    assert result["history"][0]["old_value"] == "reviewed"
     assert result["history"][0]["new_value"] == "shortlisted"
+    assert result["history"][1]["old_value"] == "new"
+    assert result["history"][1]["new_value"] == "reviewed"

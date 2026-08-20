@@ -1,8 +1,9 @@
 """CR-007 Phase B (B2) — "Needs further review" state.
 
-A third personal appraisal state alongside new/reviewed/dismissed, carrying
-a mandatory comment (same required-field pattern as CR-006's dismiss
-reason). Follows test_36_dismissal_attribution.py's conventions.
+A third org-shared appraisal state alongside new/reviewed/dismissed,
+carrying a mandatory comment (same required-field pattern as CR-006's
+dismiss reason) and, post-CR-007, an optional colleague assignment. Follows
+test_36_dismissal_attribution.py's conventions.
 """
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -37,7 +38,7 @@ def test_needs_review_without_a_comment_is_400(tmp_path, monkeypatch):
     assert exc.value.status_code == 400
 
 
-def test_needs_review_with_a_comment_succeeds_and_is_personal(tmp_path, monkeypatch):
+def test_needs_review_with_a_comment_succeeds_and_is_visible_to_the_whole_org(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch)
     api.patch_tender("PUB-1", api.StatusBody(status="needs_review", note="Check budget with finance"),
                       identity=make_identity())
@@ -47,7 +48,9 @@ def test_needs_review_with_a_comment_succeeds_and_is_personal(tmp_path, monkeypa
     assert rec["dismissal_reason"] == "Check budget with finance"
 
     colleague = make_identity(account_name=TEST_ACCOUNT_NAME_B, clerk_user_id=TEST_CLERK_USER_ID_B)
-    assert api.get_tender("PUB-1", identity=colleague)["status"] == "new"
+    colleague_rec = api.get_tender("PUB-1", identity=colleague)
+    assert colleague_rec["status"] == "needs_review"
+    assert colleague_rec["dismissal_reason"] == "Check budget with finance"
 
 
 def test_needs_review_does_not_require_a_reason_category(tmp_path, monkeypatch):
@@ -130,7 +133,7 @@ def test_needs_review_rejects_an_invalid_assignee_email(tmp_path, monkeypatch):
     assert exc.value.status_code == 422
 
 
-def test_needs_review_assignment_is_personal_to_the_parking_account(tmp_path, monkeypatch):
+def test_needs_review_assignment_is_visible_to_the_whole_org(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     api.patch_tender("PUB-1", api.StatusBody(status="needs_review", note="Ask the client",
                                               assigned_to="colleague@example.com"),
@@ -138,5 +141,5 @@ def test_needs_review_assignment_is_personal_to_the_parking_account(tmp_path, mo
 
     colleague = make_identity(account_name=TEST_ACCOUNT_NAME_B, clerk_user_id=TEST_CLERK_USER_ID_B)
     rec = api.get_tender("PUB-1", identity=colleague)
-    assert rec["status"] == "new"
-    assert rec["assigned_to"] is None
+    assert rec["status"] == "needs_review"
+    assert rec["assigned_to"] == "colleague@example.com"

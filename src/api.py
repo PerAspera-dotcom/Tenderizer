@@ -182,11 +182,11 @@ class Identity:
     """tenant_id + a human-readable account name + the raw Clerk user id,
     all taken from a verified Clerk token — never client-supplied. CR-006
     D3: dismissal attribution needs "who", not just "which tenant", which
-    get_current_tenant_id alone doesn't expose. CR-007 Phase A: clerk_user_id
-    is the key for personal, per-account tender_reviews rows now that
-    tenant_id can be shared by a whole org (see api.patch_tender). Kept as
-    its own dependency rather than changing get_current_tenant_id's return
-    type, to avoid touching every existing route.
+    get_current_tenant_id alone doesn't expose — clerk_user_id/account_name
+    matter once tenant_id can be shared by a whole org (see api.patch_tender,
+    auth.list_organization_members). Kept as its own dependency rather than
+    changing get_current_tenant_id's return type, to avoid touching every
+    existing route.
     """
     def __init__(self, tenant_id: int, account_name: str, clerk_user_id: str, org_id: Optional[str] = None):
         self.tenant_id = tenant_id
@@ -268,54 +268,37 @@ def health_check():
 
 # ── Tenders ───────────────────────────────────────────────────────────────────
 
-def _merge_personal_review_state(records, reviews, account_name):
-    """CR-007 Phase A: `tenders.status` (+ dismissal_reason/dismissed_by/
-    dismissed_at) is the org-shared decision now — "shortlisted" only.
-    Every other status is this caller's own tender_reviews row, defaulting
-    to "new" if they haven't personally acted on it yet. `reviews` is
-    store.get_tender_reviews_for_account's pub_number-keyed map. Mutates and
-    returns `records` in place — the response shape is unchanged (same
-    field names/values as pre-Phase-A), so existing frontend reads need no
-    changes.
+def _add_dismissal_reason_category(records):
+    """Post-CR-007: the whole Review Queue is org-shared now — `all_records`
+    already returns the one true `status`/dismissal_reason/dismissed_by/
+    dismissed_at/assigned_to straight off the `tenders` row, no per-account
+    merge needed (see schema.py's tender_reviews retirement comment). The
+    one translation still needed: the DB column is `reason_category` (it
+    lives right next to `dismissal_reason` on `tenders`), but the API/
+    frontend contract has always called it `dismissal_reason_category` (see
+    types.ts) — renamed here rather than churning every existing caller.
+    Mutates and returns `records` in place.
     """
     for r in records:
-        if r.get("status") == "shortlisted":
-            continue
-        personal = reviews.get(r["pub_number"])
-        if personal:
-            r["status"] = personal["status"]
-            r["dismissal_reason"] = personal["reason"]
-            r["dismissal_reason_category"] = personal["reason_category"]
-            r["dismissed_by"] = account_name if personal["status"] in ("dismissed", "dismissed_final") else None
-            r["dismissed_at"] = personal["dismissed_at"]
-            r["assigned_to"] = personal["assigned_to"]
-        else:
-            r["status"] = "new"
-            r["dismissal_reason"] = None
-            r["dismissal_reason_category"] = None
-            r["dismissed_by"] = None
-            r["dismissed_at"] = None
-            r["assigned_to"] = None
+        r["dismissal_reason_category"] = r.pop("reason_category", None)
     return records
 
 
 def _attach_relevance(conn, tenant_id, records):
     """CR-007 Phase B (B3): computes relevance_score/relevance_reasoning for
     every tender still awaiting a decision (status "new" or "needs_review")
-    — a decided tender (shortlisted/dismissed_final) doesn't need one.
-    `records` must already have personal review state merged
-    (_merge_personal_review_state) so `status` reflects what the caller
-    actually sees. The positive/negative training pools are pulled from
-    this same `records` list (must be the tenant's *full* record set, not
-    an already-filtered/paginated slice) plus every org member's dismissals
-    (store.get_org_dismissed_final_reviews) — an org-wide aggregate, not
-    just the caller's own history. Mutates `records` in place and returns it.
+    — a decided tender (shortlisted/dismissed_final) doesn't need one. The
+    positive/negative training pools are pulled straight from this same
+    `records` list (must be the tenant's *full* record set, not an already-
+    filtered/paginated slice) — an org-wide aggregate by construction now
+    that status/reason_category live on the one shared `tenders` row (post-
+    CR-007; used to need a separate store.get_org_dismissed_final_reviews
+    join here, back when dismissal was personal per-account). Must run
+    before _add_dismissal_reason_category renames that field. Mutates
+    `records` in place and returns it.
     """
     positive = [r for r in records if r.get("status") == "shortlisted"]
-    by_pub = {r["pub_number"]: r for r in records}
-    dismissed = store.get_org_dismissed_final_reviews(conn, tenant_id)
-    negative = [{**by_pub[d["pub_number"]], "reason_category": d["reason_category"]}
-                for d in dismissed if d["pub_number"] in by_pub]
+    negative = [r for r in records if r.get("status") == "dismissed_final"]
     overrides = store.get_relevance_overrides(conn, tenant_id)
 
     for r in records:
@@ -415,9 +398,8 @@ def list_tenders(
     tenant_id = identity.tenant_id
     conn = _db()
     records = store.all_records(conn, tenant_id)
-    reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
-    _merge_personal_review_state(records, reviews, identity.account_name)
     _attach_relevance(conn, tenant_id, records)
+    _add_dismissal_reason_category(records)
     _attach_duplicates(conn, tenant_id, records)
     _attach_presence(conn, tenant_id, records, identity)
 
@@ -488,9 +470,8 @@ def get_tender(pub_number: str, include_excluded: bool = False,
     # real positive/negative pools rather than an empty one, and so a
     # duplicate's counterpart (see _attach_duplicates) is resolvable too.
     records = store.all_records(conn, tenant_id)
-    reviews = store.get_tender_reviews_for_account(conn, tenant_id, identity.clerk_user_id)
-    _merge_personal_review_state(records, reviews, identity.account_name)
     _attach_relevance(conn, tenant_id, records)
+    _add_dismissal_reason_category(records)
     _attach_duplicates(conn, tenant_id, records)
     _attach_presence(conn, tenant_id, records, identity)
     for r in records:
@@ -524,14 +505,6 @@ _VALID_STATUSES = {"new", "reviewed", "shortlisted", "dismissed", "dismissed_fin
 # has no category (that's a dismiss-only aggregation signal).
 _DISMISS_STATUSES = {"dismissed", "dismissed_final"}
 _NOTE_REQUIRED_STATUSES = _DISMISS_STATUSES | {"needs_review"}
-# CR-007 Phase A: "shortlisted" is the org's collective decision — the only
-# status that still writes the shared `tenders` row via store.set_status.
-# Everything else is personal triage, written to tender_reviews instead (see
-# _merge_personal_review_state above for how the read side puts it back
-# together). Un-shortlisting (status="new" on a currently-shortlisted
-# tender) is treated the same way, since it's reverting that same shared
-# decision, not starting a fresh personal one.
-_SHARED_STATUSES = {"shortlisted"}
 
 def _send_needs_review_ping_email(tenant_id, pub_number, assigned_to, note, sender_name):
     """Post-CR-007: pings the colleague named in a needs_review parking —
@@ -583,19 +556,20 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
     elif assigned_to and "@" not in assigned_to:
         raise HTTPException(422, "assigned_to must be a valid email address")
 
-    reverting_shortlist = current["status"] == "shortlisted" and body.status == "new"
-    if body.status in _SHARED_STATUSES or reverting_shortlist:
-        store.set_status(conn, tenant_id, pub_number, body.status)
-    else:
-        store.upsert_tender_review(
-            conn, tenant_id, pub_number, identity.clerk_user_id, identity.account_name,
-            body.status,
-            reason=body.note.strip() if body.status in _NOTE_REQUIRED_STATUSES else None,
-            reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None,
-            assigned_to=assigned_to)
-        if assigned_to and background is not None:
-            background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
-                                 assigned_to, body.note.strip(), identity.account_name)
+    # Post-CR-007: every transition writes the one shared `tenders` row now
+    # (client feedback reversed CR-007 Phase A's personal-per-account split —
+    # see schema.py's tender_reviews retirement comment) — "shortlisted" is
+    # no longer a special case among statuses.
+    store.set_status(
+        conn, tenant_id, pub_number, body.status,
+        dismissal_reason=body.note.strip() if body.status in _NOTE_REQUIRED_STATUSES else None,
+        dismissed_by=identity.account_name if body.status in _DISMISS_STATUSES else None,
+        dismissed_at=datetime.now(timezone.utc).isoformat() if body.status in _DISMISS_STATUSES else None,
+        reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None,
+        assigned_to=assigned_to)
+    if assigned_to and background is not None:
+        background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
+                             assigned_to, body.note.strip(), identity.account_name)
     return {"pub_number": pub_number, "status": body.status}
 
 
