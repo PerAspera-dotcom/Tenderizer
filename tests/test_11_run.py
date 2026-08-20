@@ -122,6 +122,44 @@ def test_republished_notices_collapse_via_full_pipeline(tmp_path, raw_ted_supply
     assert "111111-2026" not in pub_numbers      # collapsed, not shown twice
     assert "222222-2026" in pub_numbers          # the kept (latest) version surfaces
 
+def test_reviewed_tender_is_protected_from_supersede_and_surfaces_as_duplicate(tmp_path, raw_ted_supply):
+    # CR-008 P0: reproduces the reported incident (tender 563438-2026,
+    # Lithuania camp beds, vanished from the Review Queue after an auto-sync).
+    # Root cause: find_duplicate_groups/mark_superseded ran unconditionally,
+    # so a near-duplicate showing up in a later run could hide a tender a
+    # reviewer had already shortlisted. Fix: a protected candidate (non-'new'
+    # status/assigned_to/reason_category) must stay surfaced and instead
+    # appear as a same-source possible-duplicate link.
+    import store, copy
+    raw_a = copy.deepcopy(raw_ted_supply)
+    raw_a["publication-number"] = "563438-2026"
+    raw_a["notice-title"] = {"eng": "Lithuania - Supply of camp beds"}
+    raw_a["publication-date"] = "20260601"
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src_a = {"name": "TED", "fetch": lambda: [raw_a], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src_a], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    store.set_status(conn, TEST_TENANT_ID, "563438-2026", "shortlisted")
+
+    raw_b = copy.deepcopy(raw_ted_supply)
+    raw_b["publication-number"] = "563439-2026"
+    raw_b["notice-title"] = {"eng": "Lithuania - Supply of camp beds"}
+    raw_b["publication-date"] = "20260615"   # next sync's near-duplicate
+    src_b = {"name": "TED", "fetch": lambda: [raw_b], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src_b], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
+    assert records["563438-2026"]["exclude_reason"] == ""       # never hidden
+    assert records["563438-2026"]["status"] == "shortlisted"    # review state untouched
+
+    dups = store.get_tender_duplicates_for_tenant(conn, TEST_TENANT_ID)
+    assert any(d["match_type"] == "same_source"
+               and {d["pub_number_a"], d["pub_number_b"]} == {"563438-2026", "563439-2026"}
+               for d in dups)
+
+
 def test_genuinely_different_tenders_same_buyer_are_not_merged(tmp_path, raw_ted_supply):
     import store, copy
     raw_a = copy.deepcopy(raw_ted_supply)

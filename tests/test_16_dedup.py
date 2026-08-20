@@ -124,6 +124,83 @@ def test_mark_superseded_sets_reason_and_supersedes_list(tmp_path):
     assert records["RO-2"]["exclude_reason"] == ""   # the kept record stays surfaced
 
 
+# ── dedup.is_protected (CR-008 P0) ──────────────────────────────────────────
+
+def test_default_status_is_not_protected():
+    assert dedup.is_protected(_rec("RO-1")) is False
+
+
+def test_explicit_new_status_is_not_protected():
+    assert dedup.is_protected(dict(_rec("RO-1"), status="new")) is False
+
+
+def test_shortlisted_status_is_protected():
+    assert dedup.is_protected(dict(_rec("RO-1"), status="shortlisted")) is True
+
+
+def test_needs_review_status_is_protected():
+    assert dedup.is_protected(dict(_rec("RO-1"), status="needs_review")) is True
+
+
+def test_dismissed_status_is_protected():
+    assert dedup.is_protected(dict(_rec("RO-1"), status="dismissed")) is True
+
+
+def test_assigned_to_protects_even_with_default_status():
+    assert dedup.is_protected(dict(_rec("RO-1"), assigned_to="alice@example.com")) is True
+
+
+def test_reason_category_protects_even_with_default_status():
+    assert dedup.is_protected(dict(_rec("RO-1"), reason_category="wrong_region")) is True
+
+
+def test_mark_superseded_writes_tender_history(tmp_path):
+    # CR-008 P0: every supersede must be traceable — the reported incident
+    # was a tender vanishing with no record of what happened to it.
+    conn = store.init_db(str(tmp_path / "t.db"))
+    kept = _stored_rec("RO-2", "Ministry X", "Tents", "2026-07-10T12:00:00+00:00")
+    old = _stored_rec("RO-1", "Ministry X", "Tents", "2026-07-10T12:00:00+00:00")
+    store.upsert(conn, TEST_TENANT_ID, kept)
+    store.upsert(conn, TEST_TENANT_ID, old)
+
+    store.mark_superseded(conn, TEST_TENANT_ID, "RO-2", [dict(old, supersedes=[])])
+
+    history = store.get_tender_history(conn, TEST_TENANT_ID, "RO-1")
+    entry = next(h for h in history if h["field"] == "exclude_reason")
+    assert entry["old_value"] == ""
+    assert "RO-2" in entry["new_value"]
+
+
+def test_restore_superseded_clears_reason_and_supersedes_link(tmp_path):
+    # CR-008 P0: the undo path used for the one-off recovery of the reported
+    # incident (tender 563438-2026) and for any future manual reversal.
+    conn = store.init_db(str(tmp_path / "t.db"))
+    kept = _stored_rec("RO-2", "Ministry X", "Tents", "2026-07-10T12:00:00+00:00")
+    old = _stored_rec("RO-1", "Ministry X", "Tents", "2026-07-10T12:00:00+00:00")
+    store.upsert(conn, TEST_TENANT_ID, kept)
+    store.upsert(conn, TEST_TENANT_ID, old)
+    store.mark_superseded(conn, TEST_TENANT_ID, "RO-2", [dict(old, supersedes=[])])
+
+    store.restore_superseded(conn, TEST_TENANT_ID, "RO-1", restored_by="ops")
+
+    records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
+    assert records["RO-1"]["exclude_reason"] == ""
+    assert records["RO-2"]["supersedes"] == []
+
+    history = store.get_tender_history(conn, TEST_TENANT_ID, "RO-1")
+    entry = next(h for h in history if h["field"] == "exclude_reason" and h["new_value"].startswith("restored"))
+    assert "ops" in entry["new_value"]
+
+
+def test_restore_superseded_unknown_pub_number_raises(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    try:
+        store.restore_superseded(conn, TEST_TENANT_ID, "NOPE-1")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
 def test_mark_superseded_accumulates_multi_generation_chain(tmp_path):
     # RO-1 was already superseded by RO-2 in an earlier run; now RO-3 supersedes
     # RO-2 — RO-3's supersedes list should show the full chain, not just RO-2.

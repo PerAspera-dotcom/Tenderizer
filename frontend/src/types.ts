@@ -53,11 +53,14 @@ export interface Tender {
 }
 
 // CR-007 Phase C: one entry per detected cross-portal counterpart.
+// CR-008 P0: 'same_source' added — a same-source near-duplicate (would have
+// been auto-merged by find_duplicate_groups) that dedup.is_protected() kept
+// visible instead, because the candidate already had a status/assignee/note.
 export interface TenderDuplicate {
   pub_number: string;
   source: string;
   url: string;
-  match_type: 'reference' | 'similarity';
+  match_type: 'reference' | 'similarity' | 'same_source';
   similarity: number | null;
 }
 

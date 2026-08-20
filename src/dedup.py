@@ -52,6 +52,25 @@ def _same_or_close_deadline(a, b):
     return abs(da - db) <= DEADLINE_WINDOW
 
 
+def is_protected(record):
+    """CR-008 P0: true once a human has touched this tender — any status past
+    the pipeline's own 'new' default, or a set assigned_to/reason_category
+    (both of which only ever get set alongside a status transition via
+    store.set_status, but checked independently here in case that ever
+    changes). A protected record must never be auto-superseded by
+    find_duplicate_groups/mark_superseded (see run.py's dedup pass) — the
+    reported incident (tender 563438-2026 vanishing from the Review Queue)
+    traced back to an unconditional supersede colliding with a tender someone
+    was actively reviewing. Client instruction: "too many tenders rather than
+    too few" — a protected candidate gets surfaced as a possible duplicate
+    (store.upsert_tender_duplicate, match_type='same_source') instead of
+    hidden.
+    """
+    if (record.get("status") or "new") != "new":
+        return True
+    return bool(record.get("assigned_to")) or bool(record.get("reason_category"))
+
+
 def find_duplicate_groups(records):
     """Group records that are republished versions of the same tender.
 

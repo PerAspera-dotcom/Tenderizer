@@ -954,6 +954,13 @@ def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
     shows full version history on the latest kept record) gets
     exclude_reason='superseded' (auditable, not deleted). The kept record's
     `supersedes` accumulates their pub_numbers.
+
+    CR-008 P0: callers (run.py's dedup pass) must never pass a record
+    dedup.is_protected() flags — this function itself doesn't re-check that,
+    it only logs. Every supersede writes a tender_history row (field=
+    "exclude_reason") so a hidden tender is always traceable to which run
+    superseded it in favor of which kept pub_number, closing the "vanished
+    with no trace" gap from the reported incident.
     """
     all_superseded = []
     with conn.begin() as c:
@@ -963,6 +970,10 @@ def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
             c.execute(update(tenders).where(
                 (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == r["pub_number"])
             ).values(exclude_reason="superseded"))
+            c.execute(insert(tender_history).values(
+                tenant_id=tenant_id, pub_number=r["pub_number"], field="exclude_reason",
+                old_value=r.get("exclude_reason") or "", new_value=f"superseded by {kept_pub_number}",
+                changed_at=datetime.now(timezone.utc).isoformat()))
         row = c.execute(select(tenders.c.supersedes).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == kept_pub_number)
         )).fetchone()
@@ -971,6 +982,42 @@ def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
         c.execute(update(tenders).where(
             (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == kept_pub_number)
         ).values(supersedes=json.dumps(merged)))
+
+
+def restore_superseded(conn, tenant_id, pub_number, restored_by=None):
+    """CR-008 P0: undo a mark_superseded — clears exclude_reason back to '',
+    strips `pub_number` out of whichever record's `supersedes` list currently
+    names it (a superseded record only ever appears in one kept record's
+    list, so this is a full, not partial, scan), and logs the reversal to
+    tender_history the same way the original supersede was logged. Used by
+    the one-off recovery for the reported incident (tender 563438-2026) and
+    by any future manual "undo" action.
+    """
+    with conn.begin() as c:
+        row = c.execute(select(tenders.c.exclude_reason).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        )).fetchone()
+        if row is None:
+            raise ValueError(f"no tender {pub_number!r} for tenant {tenant_id}")
+        old_reason = row[0] or ""
+        c.execute(update(tenders).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+        ).values(exclude_reason=""))
+        c.execute(insert(tender_history).values(
+            tenant_id=tenant_id, pub_number=pub_number, field="exclude_reason",
+            old_value=old_reason, new_value=f"restored{f' by {restored_by}' if restored_by else ''}",
+            changed_at=datetime.now(timezone.utc).isoformat()))
+
+        holders = c.execute(select(tenders.c.pub_number, tenders.c.supersedes).where(
+            (tenders.c.tenant_id == tenant_id) & (tenders.c.supersedes != "[]")
+        )).fetchall()
+        for holder_pub, supersedes_json in holders:
+            chain = json.loads(supersedes_json or "[]")
+            if pub_number in chain:
+                chain.remove(pub_number)
+                c.execute(update(tenders).where(
+                    (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == holder_pub)
+                ).values(supersedes=json.dumps(chain)))
 
 
 # ── Translation cache (CR-001 R3/C1) — global, NOT tenant-scoped ────────────

@@ -348,7 +348,9 @@ export default function ReviewQueue() {
                           <span title={`${t.viewers.map(v => v.account_name).join(', ')} currently working this`} style={{ fontSize: 11 }}>👀</span>
                         )}
                         {t.duplicates.length > 0 && (
-                          <span title={`Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
+                          <span title={t.duplicates.some(d => d.match_type === 'same_source')
+                            ? 'Possible duplicate of a tender already in review'
+                            : `Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
                         )}
                         {t.status === 'needs_review' && t.assigned_to && (
                           <span title={`Assigned to ${t.assigned_to}`} style={{ fontSize: 11 }}>✉</span>
@@ -409,8 +411,12 @@ export default function ReviewQueue() {
                     <span style={{ color: '#60a5fa', fontSize: 12 }}>🔗</span>
                     {selected.duplicates.map(d => (
                       <span key={d.pub_number} style={{ fontSize: 12, color: '#c8d0de' }}>
-                        Also listed on <strong>{d.source}</strong>
-                        {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}
+                        {d.match_type === 'same_source' ? (
+                          <>Possible duplicate — similar tender already in review ({d.pub_number})</>
+                        ) : (
+                          <>Also listed on <strong>{d.source}</strong>
+                          {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}</>
+                        )}
                         {d.url && (
                           <> · <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>View ↗</a></>
                         )}

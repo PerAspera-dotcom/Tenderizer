@@ -107,9 +107,21 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
 
     # CR-001 D-DUP: cross-record pass, so it runs once here over everything
     # ingested so far — not per-record like the filters above.
+    # CR-008 P0: a candidate a human has already touched (dedup.is_protected)
+    # is never auto-superseded — the reported data-loss incident was exactly
+    # this, an unconditional supersede colliding with an in-review tender.
+    # It's surfaced as a same-source possible-duplicate link instead (the
+    # CR-007 Phase C "surface, never hide" pattern below), so a reviewer sees
+    # and decides rather than the tender silently vanishing.
     for group in dedup.find_duplicate_groups(store.all_records(conn, tenant_id)):
-        kept, *superseded = group
-        store.mark_superseded(conn, tenant_id, kept["pub_number"], superseded)
+        kept, *candidates = group
+        to_supersede = [r for r in candidates if not dedup.is_protected(r)]
+        if to_supersede:
+            store.mark_superseded(conn, tenant_id, kept["pub_number"], to_supersede)
+        for r in candidates:
+            if dedup.is_protected(r):
+                store.upsert_tender_duplicate(conn, tenant_id, kept["pub_number"],
+                                               r["pub_number"], "same_source")
 
     # CR-001 R3 (D1 — DeepL, Free tier): translate non-English SURFACED tenders
     # only — after dedup, so a just-superseded record never spends DeepL quota.
