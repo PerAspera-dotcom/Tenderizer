@@ -264,6 +264,29 @@ def test_boamp_language_always_fra(raw_boamp_supply):
     assert normalize.normalize_boamp(raw_boamp_supply)["language"] == "fra"
 
 
+# ── CR-008 P1: title and description don't reliably share a language ────────
+
+def test_language_is_fra_when_english_title_but_no_english_description(raw_ted_supply):
+    # The actual production bug: TED gave an English notice-title (buyers
+    # often add one for visibility) but description-proc has no 'eng' key at
+    # all -- language must reflect the description needing translation, not
+    # just report 'eng' because the title happened to have one.
+    del raw_ted_supply["description-proc"]["eng"]
+    raw_ted_supply["description-proc"]["fra"] = "Fourniture de tentes militaires pour camps de campagne."
+    assert normalize.normalize_ted(raw_ted_supply)["language"] == "fra"
+
+
+def test_language_stays_eng_when_both_title_and_description_are_english(raw_ted_supply):
+    assert normalize.normalize_ted(raw_ted_supply)["language"] == "eng"
+
+
+def test_language_uses_title_language_when_title_is_not_english(raw_ted_supply):
+    # tag_lang already non-English is the common, already-correct case --
+    # desc_lang must not override it even if the two happen to differ.
+    del raw_ted_supply["notice-title"]["eng"]
+    assert normalize.normalize_ted(raw_ted_supply)["language"] == "fra"
+
+
 # ── Phase 2/3 step 3: tenant isolation ───────────────────────────────────────
 
 def test_two_tenants_can_store_the_same_notice_independently(tmp_path, raw_ted_supply):

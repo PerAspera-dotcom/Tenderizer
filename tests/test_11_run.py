@@ -239,6 +239,29 @@ def test_non_english_notice_is_translated(tmp_path, raw_ted_supply, monkeypatch)
     assert stored["translation_status"] == "ok"
     assert stored["tag_line_en"] == "[EN] Suède - Fourniture de tentes militaires"
 
+def test_english_title_but_untranslated_description_still_gets_translated(tmp_path, raw_ted_supply, monkeypatch):
+    # CR-008 P1: reproduces the real production bug -- TED gave an English
+    # notice-title (buyers commonly add one) but description-proc had no
+    # 'eng' key, so normalize_ted used to report language='eng' from the
+    # title alone and the description silently never reached DeepL.
+    import translate, copy
+    monkeypatch.setattr(translate, "translate_to_english",
+                         lambda text, api_key=None, timeout=15: (f"[EN] {text}", "ok"))
+    raw = copy.deepcopy(raw_ted_supply)
+    raw["publication-number"] = "563438-2026"
+    del raw["description-proc"]["eng"]
+    raw["description-proc"]["fra"] = "Fourniture de tentes militaires pour camps de campagne."
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    import store
+    stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
+    assert stored["language"] == "fra"          # not 'eng' despite the English title
+    assert stored["translation_status"] == "ok"
+    assert stored["description_en"] == "[EN] Fourniture de tentes militaires pour camps de campagne."
+
 def test_english_notice_is_never_sent_to_translate(tmp_path, raw_ted_supply, monkeypatch):
     import translate
     def boom(*a, **k):

@@ -50,6 +50,28 @@ def _pick_lang(field):
     lang, value = next(iter(field.items()))
     return _first(value), lang
 
+def _record_language(tag_lang, desc_lang):
+    """CR-008 P1: which language gates translation for this record (see
+    run.py's `r["language"] == "eng"` skip and frontend utils.ts'
+    needsTranslation — both treat a single `language` value as covering
+    both tag_line and description).
+
+    Historically just tag_lang, on the assumption notice-title and
+    description-proc always share a language — confirmed false in
+    production: TED notices commonly carry an English notice-title (buyers
+    add one for visibility) while description-proc has no 'eng' key at all,
+    so tag_lang alone reported 'eng' and description silently never reached
+    DeepL (run.py's translation step never ran for the record at all).
+    desc_lang now wins whenever tag_lang says 'eng' but desc_lang disagrees
+    — that's the one combination the old assumption got wrong; when
+    tag_lang is itself non-English (the common case, and already correct)
+    it's left untouched.
+    """
+    if tag_lang == "eng" and desc_lang and desc_lang != "eng":
+        return desc_lang
+    return tag_lang
+
+
 def _is_country_code(code):
     return isinstance(code, str) and len(code) == 3 and code.isalpha()
 
@@ -186,7 +208,7 @@ def _ted_award_detail(raw):
 
 def normalize_ted(raw):
     tag_line, tag_lang = _pick_lang(raw.get("notice-title", {}))
-    description, _desc_lang = _pick_lang(raw.get("description-proc", {}))
+    description, desc_lang = _pick_lang(raw.get("description-proc", {}))
     buyer, _buyer_lang = _pick_lang(raw.get("buyer-name", {}))
     # CR-003 G4: structured award fields (see connectors/ted.py's FIELDS comment
     # for how these names were confirmed). winner-name is multilingual like
@@ -222,11 +244,11 @@ def normalize_ted(raw):
         # most notices — value disclosure is optional under EU procurement rules.
         "value": raw.get("estimated-value-proc") or "",
         "value_currency": raw.get("estimated-value-cur-proc") or "",
-        # CR-001 R3: language tag_line/description were picked in (assumes both
-        # fields share a language, true for TED's parallel per-language dicts).
-        # 'eng' when TED provided an English translation, else whatever
-        # LANG_PREF/fallback found — anything != 'eng' needs translation.
-        "language": tag_lang,
+        # CR-001 R3 / CR-008 P1: 'eng' only when BOTH tag_line and description
+        # are actually English — see _record_language's docstring for why
+        # tag_lang alone isn't enough (TED's title/description don't
+        # reliably share a language, unlike the original assumption here).
+        "language": _record_language(tag_lang, desc_lang),
         # CR-003 G4: structured award fields, consumed by
         # classification.extract_award_info in preference to its regex fallback.
         "raw_award_winner": award_winner or None,
