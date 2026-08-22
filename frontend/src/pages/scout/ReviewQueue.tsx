@@ -103,10 +103,18 @@ export default function ReviewQueue() {
   useEffect(() => { getOrgMembers().then(setOrgMembers).catch(() => setOrgMembers([])); }, []);
 
   // CR-008 W1: NotificationBell.tsx's click-through lands here as
-  // ?pub=<pub_number> — consumed once on the first successful load so it
-  // doesn't fight a later manual selection.
+  // ?pub=<pub_number>. Tracked by value, not just consumed once on mount —
+  // NotificationBell is visible on every page including this one, so the
+  // common case is clicking a notification while already here, which
+  // changes the URL's `pub` param without unmounting/remounting this
+  // component. appliedPubParamRef records which value was last acted on,
+  // so a *new* pub param (a second notification clicked later) still jumps
+  // the selection even without a remount, while a load() triggered by some
+  // other action (dismiss, shortlist, ...) doesn't keep re-jumping to a
+  // pub param that's already been applied.
   const [searchParams] = useSearchParams();
-  const pubParamRef = useRef<string | null>(searchParams.get('pub'));
+  const pubParam = searchParams.get('pub');
+  const appliedPubParamRef = useRef<string | null>(null);
 
   // CR-008 W4: region filter — a <select>, not pills, since the candidate
   // set (whatever countries are actually present) is open-ended unlike the
@@ -138,9 +146,9 @@ export default function ReviewQueue() {
       const filtered = r.results.filter(t => t.status !== 'dismissed_final');
       setTenders(sortTenders(filtered, sortBy));
       setSelected(prev => {
-        if (!prev && pubParamRef.current) {
-          const fromParam = r.results.find(t => t.pub_number === pubParamRef.current);
-          pubParamRef.current = null;  // consume once, even if not found
+        if (pubParam && pubParam !== appliedPubParamRef.current) {
+          const fromParam = r.results.find(t => t.pub_number === pubParam);
+          appliedPubParamRef.current = pubParam;  // consume this value, even if not found
           if (fromParam) return fromParam;
         }
         if (!prev) return filtered[0] ?? null;
@@ -189,7 +197,10 @@ export default function ReviewQueue() {
     setRelevanceEditing(false);
   }
 
-  useEffect(() => { load(); }, []);
+  // CR-008 W1: depends on pubParam (not []) so a second notification's
+  // click-through — same page, no remount — still reloads and jumps the
+  // selection (see appliedPubParamRef above).
+  useEffect(() => { load(); }, [pubParam]);
   useEffect(() => { setTenders(prev => sortTenders(prev, sortBy)); }, [sortBy]);
 
   // CR-007 Phase D (D1): presence heartbeat — pings immediately on selecting

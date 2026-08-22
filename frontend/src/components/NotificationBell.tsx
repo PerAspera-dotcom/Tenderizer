@@ -59,10 +59,21 @@ export default function NotificationBell() {
     navigate(`/scout/review-queue?pub=${encodeURIComponent(n.pub_number)}`);
   }
 
+  // Opening the dropdown always fetches fresh, rather than showing whatever
+  // the last POLL_MS tick happened to catch — a notification sent seconds
+  // ago (e.g. by the viewer's own action, forwarding to themselves) would
+  // otherwise be invisible until the next scheduled poll.
+  function toggleOpen() {
+    setOpen(o => {
+      if (!o) load();
+      return !o;
+    });
+  }
+
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={toggleOpen}
         title="Notifications"
         style={{
           position: 'relative', width: 32, height: 32, borderRadius: '50%',
