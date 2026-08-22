@@ -117,6 +117,9 @@ would touch every tenant's data, not just the ones already inspected here.
 
 ## P1 · DeepL/TED translation is broken for a specific, now-identified reason
 
+**Status: RESOLVED, 2026-08-22.** Code fix + retroactive backfill shipped (`a37b774`), prod data
+fixed, backend suite green (706 passed), frontend typechecks/lints clean. See "Resolution" below.
+
 **Report:** DeepL translation doesn't work specifically for TED-sourced tenders; needs a retroactive
 fix for tenders already sitting in the Review Queue.
 
@@ -161,6 +164,41 @@ backfills records where `language` is blank (`not r.get("language")`) — these 
 - New test: `normalize_ted` on a fixture with `notice-title.eng` present but no
   `description-proc.eng` key — language must not resolve to `eng`, or translation must still run
   on the description.
+
+### Resolution
+
+**Code (`src/normalize.py`):** `_record_language(tag_lang, desc_lang)` now prefers the
+description's detected language whenever the title says `eng` but the description disagrees — the
+one combination the old single-field assumption got wrong. `normalize_ted` was already computing
+`desc_lang` (as `_desc_lang`) and discarding it; it's now threaded through instead. The common case
+(title itself non-English) is unchanged. Tests: `tests/test_07_normalize_store.py` (unit coverage
+for `_record_language`'s three cases) and `tests/test_11_run.py` (a full-pipeline regression
+reproducing the exact bug shape — English title, French-only description — confirming
+`description_en` gets populated).
+
+**Retroactive backfill (`scratch_backfill_ted_description_language.py`):** re-checks every
+non-excluded TED tender currently stamped `language='eng'` that was never actually translated, via
+DeepL's own detection on the stored `description` (the raw TED per-language payload isn't
+persisted, so the stored text is all there is to re-check). Deduplicates detection calls by
+description content hash across tenants within one run — `translate.translate_and_detect` isn't
+cached like `translate_cached` is, and multiple tenants commonly track the same public TED notice
+(confirmed: 656 candidate records collapsed to 140 distinct descriptions, a 79% reduction in actual
+DeepL calls).
+
+**Run against prod, 2026-08-22** (via the same temporary Railway Postgres TCP proxy used for the P0
+recovery, closed immediately after):
+
+| tenant | checked | fixed (genuinely mistranslated) | confirmed already English |
+|---|---|---|---|
+| 2 | 172 | 161 | 11 |
+| 5 | 169 | 158 | 11 |
+| 8 | 169 | 158 | 11 |
+| 10 | 146 | 137 | 9 |
+| **total** | **656** | **614 (94%)** | **42** |
+
+Spot-checked the tender from the P0 incident report (563438-2026, Lithuanian) directly: was
+`language='eng'`/never translated, now `language='lit'`, `translation_status='ok'`, with a real
+English `description_en` across all 4 tenants.
 
 ---
 
