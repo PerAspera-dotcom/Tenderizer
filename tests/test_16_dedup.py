@@ -124,6 +124,48 @@ def test_mark_superseded_sets_reason_and_supersedes_list(tmp_path):
     assert records["RO-2"]["exclude_reason"] == ""   # the kept record stays surfaced
 
 
+# ── dedup.kept_order_is_confident (CR-008 P0 follow-up) ─────────────────────
+
+def test_confident_when_kept_pub_date_is_strictly_later():
+    kept = _rec("RO-2", pub_date="2026-06-15")
+    candidate = _rec("RO-1", pub_date="2026-06-01")
+    assert dedup.kept_order_is_confident(kept, candidate) is True
+
+
+def test_not_confident_when_kept_pub_date_is_earlier():
+    # A misordered group (shouldn't happen given find_duplicate_groups sorts
+    # descending, but the check must not just trust its caller).
+    kept = _rec("RO-2", pub_date="2026-06-01")
+    candidate = _rec("RO-1", pub_date="2026-06-15")
+    assert dedup.kept_order_is_confident(kept, candidate) is False
+
+
+def test_not_confident_when_both_pub_dates_blank():
+    # The reported incident's actual shape: tender 563438-2026 and its real
+    # republish 547299-2026 both had pub_date == "" — nothing to sort on.
+    kept = _rec("RO-2", pub_date="")
+    candidate = _rec("RO-1", pub_date="")
+    assert dedup.kept_order_is_confident(kept, candidate) is False
+
+
+def test_not_confident_when_kept_pub_date_is_blank():
+    kept = _rec("RO-2", pub_date="")
+    candidate = _rec("RO-1", pub_date="2026-06-01")
+    assert dedup.kept_order_is_confident(kept, candidate) is False
+
+
+def test_not_confident_when_candidate_pub_date_is_blank():
+    kept = _rec("RO-2", pub_date="2026-06-15")
+    candidate = _rec("RO-1", pub_date="")
+    assert dedup.kept_order_is_confident(kept, candidate) is False
+
+
+def test_not_confident_when_pub_dates_are_equal():
+    kept = _rec("RO-2", pub_date="2026-06-01")
+    candidate = _rec("RO-1", pub_date="2026-06-01")
+    assert dedup.kept_order_is_confident(kept, candidate) is False
+
+
 # ── dedup.is_protected (CR-008 P0) ──────────────────────────────────────────
 
 def test_default_status_is_not_protected():

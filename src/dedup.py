@@ -52,6 +52,32 @@ def _same_or_close_deadline(a, b):
     return abs(da - db) <= DEADLINE_WINDOW
 
 
+def kept_order_is_confident(kept, candidate):
+    """CR-008 P0 follow-up: true only when `kept`'s pub_date is a real,
+    strictly-later date than `candidate`'s — i.e. we actually know `kept` is
+    the newer republish, not just whichever record happened to sort first.
+
+    find_duplicate_groups' "keep index 0" pick relies on sorting by pub_date
+    descending, but TED records commonly carry pub_date == "" (confirmed via
+    a live production incident: tender 563438-2026 and its genuine republish
+    547299-2026 both had pub_date == "" — same buyer, same title, deadlines
+    3 days apart, TED's real amended-deadline-republish pattern). When every
+    candidate in a group ties (most commonly because they're all blank),
+    Python's stable sort just preserves whatever order store.all_records
+    happened to return, which is unspecified per the DB, and confirmed to
+    differ ACROSS TENANTS for the exact same public TED notice pair — the
+    same notice pair resolved to a different "kept" survivor in different
+    tenants purely from row order. That's not a real "newest wins" decision,
+    it's a coin flip, and a coin flip must never decide what gets hidden.
+
+    A candidate that fails this check is never superseded — it's surfaced
+    as a same-source possible-duplicate link instead (see run.py), same as
+    an is_protected candidate.
+    """
+    kd, cd = kept.get("pub_date") or "", candidate.get("pub_date") or ""
+    return bool(kd) and bool(cd) and kd > cd
+
+
 def is_protected(record):
     """CR-008 P0: true once a human has touched this tender — any status past
     the pipeline's own 'new' default, or a set assigned_to/reason_category

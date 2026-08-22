@@ -160,6 +160,42 @@ def test_reviewed_tender_is_protected_from_supersede_and_surfaces_as_duplicate(t
                for d in dups)
 
 
+def test_blank_pub_date_pair_is_not_merged_but_links_as_duplicate(tmp_path, raw_ted_supply):
+    # CR-008 P0 follow-up: reproduces the second bug found while recovering
+    # from the 563438-2026 incident. The real republish pair had pub_date
+    # == "" on BOTH sides (TED's publication-date field wasn't populated),
+    # so find_duplicate_groups' "keep the newest by pub_date" sort had
+    # nothing to sort on -- confirmed live to pick a different survivor per
+    # tenant for the identical public notice. Neither side may be
+    # auto-superseded when pub_date can't confidently order them; both must
+    # stay visible and link as a same-source possible duplicate instead.
+    import store, copy
+    raw_a = copy.deepcopy(raw_ted_supply)
+    raw_a["publication-number"] = "563438-2026"
+    raw_a["notice-title"] = {"eng": "Lithuania - Camp beds"}
+    del raw_a["publication-date"]
+
+    raw_b = copy.deepcopy(raw_ted_supply)
+    raw_b["publication-number"] = "547299-2026"
+    raw_b["notice-title"] = {"eng": "Lithuania - Camp beds"}
+    del raw_b["publication-date"]
+
+    db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
+    src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
+           "normalize": __import__("normalize").normalize_ted}
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+
+    conn = store.init_db(db)
+    records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
+    assert records["563438-2026"]["exclude_reason"] == ""   # neither hidden
+    assert records["547299-2026"]["exclude_reason"] == ""
+
+    dups = store.get_tender_duplicates_for_tenant(conn, TEST_TENANT_ID)
+    assert any(d["match_type"] == "same_source"
+               and {d["pub_number_a"], d["pub_number_b"]} == {"563438-2026", "547299-2026"}
+               for d in dups)
+
+
 def test_genuinely_different_tenders_same_buyer_are_not_merged(tmp_path, raw_ted_supply):
     import store, copy
     raw_a = copy.deepcopy(raw_ted_supply)

@@ -107,19 +107,29 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
 
     # CR-001 D-DUP: cross-record pass, so it runs once here over everything
     # ingested so far — not per-record like the filters above.
-    # CR-008 P0: a candidate a human has already touched (dedup.is_protected)
-    # is never auto-superseded — the reported data-loss incident was exactly
-    # this, an unconditional supersede colliding with an in-review tender.
-    # It's surfaced as a same-source possible-duplicate link instead (the
-    # CR-007 Phase C "surface, never hide" pattern below), so a reviewer sees
-    # and decides rather than the tender silently vanishing.
+    # CR-008 P0: a candidate only gets auto-superseded when BOTH hold:
+    #   1. no human has touched it yet (dedup.is_protected) — the original
+    #      reported incident was an unconditional supersede colliding with
+    #      an in-review tender.
+    #   2. the "kept" record is confidently the newer one, by real pub_date
+    #      (dedup.kept_order_is_confident) — TED's pub_date is commonly
+    #      blank, which made "keep the newest" an unspecified-order coin
+    #      flip that (confirmed live) could pick a different survivor per
+    #      tenant for the same public notice pair.
+    # Either failing means the candidate is surfaced as a same-source
+    # possible-duplicate link instead (the CR-007 Phase C "surface, never
+    # hide" pattern), so a reviewer sees and decides rather than a tender
+    # silently vanishing or an arbitrary one winning.
     for group in dedup.find_duplicate_groups(store.all_records(conn, tenant_id)):
         kept, *candidates = group
-        to_supersede = [r for r in candidates if not dedup.is_protected(r)]
+        to_supersede_pubs = {r["pub_number"] for r in candidates
+                              if not dedup.is_protected(r)
+                              and dedup.kept_order_is_confident(kept, r)}
+        to_supersede = [r for r in candidates if r["pub_number"] in to_supersede_pubs]
         if to_supersede:
             store.mark_superseded(conn, tenant_id, kept["pub_number"], to_supersede)
         for r in candidates:
-            if dedup.is_protected(r):
+            if r["pub_number"] not in to_supersede_pubs:
                 store.upsert_tender_duplicate(conn, tenant_id, kept["pub_number"],
                                                r["pub_number"], "same_source")
 

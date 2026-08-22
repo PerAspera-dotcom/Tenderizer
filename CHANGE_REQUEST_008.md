@@ -8,6 +8,10 @@
 
 ## P0 · BREAKING — tenders silently vanish from the Review Queue on auto-sync
 
+**Status: RESOLVED, 2026-08-22.** Code fix shipped (`81fad5a` + follow-up commit), prod data
+recovered, backend suite green (693+ passed), frontend typechecks/lints clean. See "Resolution"
+below.
+
 **Report:** Tender 563438-2026 (Lithuania, camp beds) was active in the Review Queue; after the
 next scheduled pipeline run it — and a related record — were gone, with no trace and no way to
 recover it (see client's email to Anthony). Client's standing instruction: **"this cannot happen —
@@ -65,6 +69,49 @@ Two compounding problems, both present in the current code:
   documented) before this CR is marked done.
 - New test: two same-buyer, similar-title, close-deadline tenders where one already has
   `status='shortlisted'` — pipeline run must leave both visible.
+
+### Resolution
+
+**Code (`src/dedup.py`, `src/run.py`, `src/store.py`):**
+- `dedup.is_protected(record)` — true once a tender has any status past `new`, or a set
+  `assigned_to`/`reason_category`. A protected candidate is never auto-superseded.
+- `dedup.kept_order_is_confident(kept, candidate)` — **a second bug found while investigating the
+  incident.** The "keep the newest by `pub_date`" tie-break is meaningless when `pub_date` is blank,
+  which TED records commonly are — confirmed live: the actual 563438-2026 ↔ 547299-2026 pair (same
+  buyer, same title, deadlines 3 days apart — TED's real amended-deadline-republish pattern) had
+  `pub_date == ""` on **both** sides. With nothing to sort on, which record survived came down to
+  unspecified DB row order — confirmed to differ **across tenants** for the identical public TED
+  notice (3 of the 10 currently-superseded pairs in prod showed a different "kept" survivor
+  depending on which of the 4 affected tenants you looked at). A candidate now only gets
+  auto-superseded when both `is_protected` is false **and** `kept_order_is_confident` is true;
+  otherwise it's surfaced as a `same_source` possible-duplicate link (reusing CR-007 Phase C's
+  "surface, never hide" mechanism) instead of guessed at.
+- `store.mark_superseded` now writes a `tender_history` row (field=`exclude_reason`) on every
+  supersede. `store.restore_superseded()` added to reverse one.
+- Frontend (`types.ts`, `ReviewQueue.tsx`, `TenderFeed.tsx`) renders the new `same_source`
+  duplicate link with its own copy, distinct from the cross-portal "Also listed on X" wording.
+- Tests: `tests/test_16_dedup.py` (unit coverage for both guard functions + the audit
+  trail/restore path), `tests/test_11_run.py` (two full-pipeline regressions — a protected/touched
+  tender staying visible, and a blank-`pub_date` pair staying visible instead of a coin-flip merge).
+
+**Data recovery (prod, via a temporary Railway Postgres TCP proxy, closed after use):**
+`scratch_recover_superseded.py` (report-only by default; `--restore <pub_number>` to reverse) found
+10 superseded records per affected tenant. Three were confirmed genuine bugs and restored, each
+re-linked as a visible `same_source` duplicate to its counterpart rather than left hidden:
+
+| pub_number | tenant(s) | why it was wrongly hidden |
+|---|---|---|
+| 563438-2026 | 2, 5, 8, 10 | blank-`pub_date` ambiguous tie-break (the reported incident) |
+| 466713-2026 | 10 | was `status='dismissed'`, silently also auto-superseded (pre-fix `is_protected` gap) |
+| 483373-2026 | 10 | was `status='reviewed'`, same pre-fix gap |
+
+The other 7 superseded pairs in prod are untouched (`status='new'`) same-buyer near-duplicates with
+blank `pub_date` on at least one side — plausibly legitimate republish collapses, but resolved by
+the same non-deterministic tie-break the fix above closes. **Not retroactively re-evaluated or
+restored** — out of scope of what was confirmed as a bug for this pass. A full retroactive re-scan
+of all pre-fix supersessions (re-running today's guarded logic against every existing
+`exclude_reason='superseded'` row) is a natural follow-up if wanted; ask before running it, since it
+would touch every tenant's data, not just the ones already inspected here.
 
 ---
 
