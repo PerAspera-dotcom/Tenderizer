@@ -50,6 +50,23 @@ export interface Tender {
   // always present, empty when none, never includes yourself. See
   // api._attach_presence.
   viewers: TenderViewer[];
+  // CR-008 W2: row-level notification metadata — always present, null when
+  // there's never been one. See api._attach_notifications.
+  forwarded_to: string | null;
+  last_notification_at: string | null;
+}
+
+// CR-008 W1: one entry in the caller's own in-app notification feed — see
+// api.get_notifications / store.get_notifications_for_recipient.
+export interface TenderNotification {
+  id: number;
+  pub_number: string;
+  kind: 'forward' | 'needs_review_ping';
+  from_account_name: string;
+  message: string | null;
+  status_at_send: string;
+  created_at: string;
+  read_at: string | null;
 }
 
 // CR-007 Phase C: one entry per detected cross-portal counterpart.

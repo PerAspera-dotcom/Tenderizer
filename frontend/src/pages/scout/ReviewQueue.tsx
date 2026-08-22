@@ -1,15 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
-import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, type OrgMember } from '../../api';
+import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, type OrgMember } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft } from '../../utils';
+import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity } from '../../utils';
+import { useSearchParams } from '../../router';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 import ForwardTender from '../../components/ForwardTender';
 
-type SortBy = 'pub_date' | 'deadline';
+// CR-008 W4: 'status' sorts by decision (see STATUS_SORT_RANK below).
+type SortBy = 'pub_date' | 'deadline' | 'status';
 // CR-007 Phase B (B1/B2): 'dismissed' is now stage 1/soft (still queued,
 // greyed out); 'dismissed_final' is stage 2 (the Dismissed tab).
-type StatusFilter = 'all' | 'new' | 'shortlisted' | 'reviewed' | 'needs_review';
+// CR-008 W3: 'reviewed' dropped as a filter option — the action that set it
+// is gone, superseded by the more specific needs_review/shortlisted/dismissed
+// (existing 'reviewed' rows still render correctly, just via 'all').
+type StatusFilter = 'all' | 'new' | 'shortlisted' | 'needs_review';
+
+// CR-008 W4: undecided-first, then decided-positive, then decided-negative —
+// a more useful grouping than alphabetical when sorting "by decision".
+const STATUS_SORT_RANK: Record<string, number> = {
+  new: 0, needs_review: 1, reviewed: 2, shortlisted: 3, dismissed: 4, dismissed_final: 5,
+};
 
 // CR-007 Phase B (B3): mirrors schema.RELEVANCE_REASON_CATEGORIES — required
 // alongside a dismiss reason so relevance scoring can aggregate on it.
@@ -33,6 +44,17 @@ function statusDotColor(status: string): string {
   if (status === 'needs_review') return '#c084fc';
   if (status === 'dismissed' || status === 'dismissed_final') return '#f87171';
   return '#4c5a70';
+}
+
+// CR-008 W2: compact text label for the row metadata line — StatusBadge
+// above is the full pill used in the detail header, this is its terse form.
+function statusRowLabel(status: string): string {
+  if (status === 'shortlisted') return 'Shortlisted';
+  if (status === 'reviewed') return 'Reviewed';
+  if (status === 'needs_review') return 'Needs further review';
+  if (status === 'dismissed') return 'Dismissed — pending final';
+  if (status === 'dismissed_final') return 'Dismissed';
+  return 'New';
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -80,10 +102,28 @@ export default function ReviewQueue() {
   const [orgMembers, setOrgMembers] = useState<OrgMember[]>([]);
   useEffect(() => { getOrgMembers().then(setOrgMembers).catch(() => setOrgMembers([])); }, []);
 
+  // CR-008 W1: NotificationBell.tsx's click-through lands here as
+  // ?pub=<pub_number> — consumed once on the first successful load so it
+  // doesn't fight a later manual selection.
+  const [searchParams] = useSearchParams();
+  const pubParamRef = useRef<string | null>(searchParams.get('pub'));
+
+  // CR-008 W4: region filter — a <select>, not pills, since the candidate
+  // set (whatever countries are actually present) is open-ended unlike the
+  // fixed status set.
+  const [regionFilter, setRegionFilter] = useState('');
+
+  // CR-008 W5: code -> label lookup for whatever CPV codes the currently
+  // loaded tenders actually carry — fetched once per load() as a single
+  // batched call (see api.getCpvLabels), not per-row.
+  const [cpvLabels, setCpvLabels] = useState<Record<string, { en: string | null }>>({});
+
   function sortTenders(list: Tender[], by: SortBy): Tender[] {
     const sorted = [...list];
     if (by === 'pub_date') {
       sorted.sort((a, b) => (b.pub_date || '').localeCompare(a.pub_date || ''));
+    } else if (by === 'status') {
+      sorted.sort((a, b) => (STATUS_SORT_RANK[a.status] ?? 99) - (STATUS_SORT_RANK[b.status] ?? 99));
     } else {
       sorted.sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
     }
@@ -98,6 +138,11 @@ export default function ReviewQueue() {
       const filtered = r.results.filter(t => t.status !== 'dismissed_final');
       setTenders(sortTenders(filtered, sortBy));
       setSelected(prev => {
+        if (!prev && pubParamRef.current) {
+          const fromParam = r.results.find(t => t.pub_number === pubParamRef.current);
+          pubParamRef.current = null;  // consume once, even if not found
+          if (fromParam) return fromParam;
+        }
         if (!prev) return filtered[0] ?? null;
         // CR-002 C2: look up the previous selection in the FULL result set, not
         // just `filtered` — a tender just dismissed drops out of the left list,
@@ -105,6 +150,10 @@ export default function ReviewQueue() {
         // the user picks something else, rather than silently jumping away.
         return r.results.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
       });
+      // CR-008 W5: batched, deduped-by-the-Set lookup for every code any
+      // loaded tender carries.
+      const codes = Array.from(new Set(r.results.flatMap(t => t.cpv_codes)));
+      getCpvLabels(codes).then(setCpvLabels).catch(() => {});
     }).catch(() => setError('Failed to load tenders'))
       .finally(() => setLoading(false));
   }
@@ -231,9 +280,13 @@ export default function ReviewQueue() {
 
   const newCount = tenders.filter(t => t.status === 'new').length;
   const shortlistedCount = tenders.filter(t => t.status === 'shortlisted').length;
-  const reviewedCount = tenders.filter(t => t.status === 'reviewed').length;
   const needsReviewCount = tenders.filter(t => t.status === 'needs_review').length;
-  const visibleTenders = statusFilter === 'all' ? tenders : tenders.filter(t => t.status === statusFilter);
+  // CR-008 W4: distinct countries actually present, alphabetical — the
+  // region filter's option list.
+  const regions = Array.from(new Set(tenders.map(t => t.country).filter(Boolean))).sort();
+  const visibleTenders = tenders
+    .filter(t => statusFilter === 'all' || t.status === statusFilter)
+    .filter(t => !regionFilter || t.country === regionFilter);
 
   if (loading) return <div className="loading">Loading…</div>;
   if (error) return <div className="error">{error}</div>;
@@ -266,17 +319,22 @@ export default function ReviewQueue() {
           ● {shortlistedCount} shortlisted
         </button>
         <button
-          className="pill pill-amber" style={{ cursor: 'pointer', border: statusFilter === 'reviewed' ? '1px solid #e3b341' : undefined }}
-          onClick={() => setStatusFilter(f => f === 'reviewed' ? 'all' : 'reviewed')}
-        >
-          ● {reviewedCount} reviewed
-        </button>
-        <button
           className="pill pill-purple" style={{ cursor: 'pointer', border: statusFilter === 'needs_review' ? '1px solid #c084fc' : undefined }}
           onClick={() => setStatusFilter(f => f === 'needs_review' ? 'all' : 'needs_review')}
         >
           ● {needsReviewCount} needs review
         </button>
+        {/* CR-008 W4: region filter — a <select> rather than pills since the
+            candidate set is whatever countries are actually present, not a
+            fixed small set like status. */}
+        <select
+          value={regionFilter}
+          onChange={e => setRegionFilter(e.target.value)}
+          style={{ background: '#151d2c', border: `1px solid ${regionFilter ? '#4c5a70' : '#1a2334'}`, color: '#e2e8f0', padding: '5px 10px', borderRadius: 6, fontSize: 13, cursor: 'pointer', outline: 'none' }}
+        >
+          <option value="">All regions</option>
+          {regions.map(r => <option key={r} value={r}>{countryFlag(r)} {r}</option>)}
+        </select>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#8892a4', fontSize: 12 }}>Sort by</span>
           <select
@@ -286,6 +344,7 @@ export default function ReviewQueue() {
           >
             <option value="pub_date">Release date (newest first)</option>
             <option value="deadline">Deadline</option>
+            <option value="status">Decision</option>
           </select>
         </div>
       </div>
@@ -294,7 +353,8 @@ export default function ReviewQueue() {
         <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>No tenders to review.</div>
       ) : visibleTenders.length === 0 ? (
         <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>
-          No tenders match this filter. <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setStatusFilter('all')}>Clear filter</button>
+          No tenders match this filter.{' '}
+          <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setStatusFilter('all'); setRegionFilter(''); }}>Clear filters</button>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'flex-start' }}>
@@ -336,9 +396,23 @@ export default function ReviewQueue() {
                         {translated && <span title="Translated from source language" style={{ marginRight: 4 }}>🌐</span>}
                         {displayTagLine(t, false)}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
                         <span style={{ color: '#8892a4', fontSize: 11 }}>{t.source} · {t.country}</span>
                         <NoticeTypeBadge noticeType={t.notice_type} />
+                        {t.cpv_codes.length > 0 && (() => {
+                          // CR-008 W5: most-specific code's label, full ordered
+                          // list on hover — see utils.sortCpvCodesBySpecificity.
+                          const ordered = sortCpvCodesBySpecificity(Array.from(new Set(t.cpv_codes)));
+                          const topLabel = cpvLabels[ordered[0]]?.en || ordered[0];
+                          return (
+                            <span
+                              title={ordered.map(c => cpvLabels[c]?.en || c).join(', ')}
+                              style={{ fontSize: 10, background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)', padding: '1px 6px', borderRadius: 4, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            >
+                              {topLabel}
+                            </span>
+                          );
+                        })()}
                         {closingSoon && (
                           <span title={`Due within ${deadlineFloorHours}h`} style={{ color: '#f87171', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                             ⏱ Closing soon
@@ -354,6 +428,22 @@ export default function ReviewQueue() {
                         )}
                         {t.status === 'needs_review' && t.assigned_to && (
                           <span title={`Assigned to ${t.assigned_to}`} style={{ fontSize: 11 }}>✉</span>
+                        )}
+                      </div>
+                      {/* CR-008 W2: row-level status/forwarded/last-notification
+                          metadata, visible without opening the tender. */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: dotColor }}>{statusRowLabel(t.status)}</span>
+                        {t.forwarded_to && (
+                          <span style={{ fontSize: 10, color: '#8892a4' }}>· forwarded to {t.forwarded_to}</span>
+                        )}
+                        {t.last_notification_at && (
+                          <span
+                            title={`Last notification: ${formatDate(t.last_notification_at)} ${formatTime(t.last_notification_at)}`}
+                            style={{ fontSize: 10, color: '#4c5a70' }}
+                          >
+                            · 🔔 {formatDate(t.last_notification_at)}
+                          </span>
                         )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -506,9 +596,17 @@ export default function ReviewQueue() {
                     <div style={{ marginTop: 12 }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#4c5a70', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>CPV Codes</div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {/* stable order, unique only — the engine dedupes at ingest, this is a defensive backstop */}
-                        {Array.from(new Set(selected.cpv_codes)).map(c => (
-                          <span key={c} className="mono" style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>{c}</span>
+                        {/* CR-008 W5: labeled (falls back to the raw code if
+                            unrecognized — see api.get_cpv_labels), most
+                            specific first (fewest trailing zeros — see
+                            utils.sortCpvCodesBySpecificity). Unique only —
+                            the engine dedupes at ingest, this is a
+                            defensive backstop. */}
+                        {sortCpvCodesBySpecificity(Array.from(new Set(selected.cpv_codes))).map(c => (
+                          <span key={c} title={c} style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>
+                            {cpvLabels[c]?.en || <span className="mono">{c}</span>}
+                            {cpvLabels[c]?.en && <span className="mono" style={{ color: '#8892a4', marginLeft: 5 }}>{c}</span>}
+                          </span>
                         ))}
                       </div>
                     </div>
@@ -617,19 +715,6 @@ export default function ReviewQueue() {
                     }}
                   >
                     ✓ Shortlist
-                  </button>
-                  <button
-                    className="btn"
-                    disabled={patching}
-                    onClick={() => applyStatus('reviewed')}
-                    style={{
-                      background: selected.status === 'reviewed' ? '#e3b341' : 'rgba(227,179,65,0.1)',
-                      color: selected.status === 'reviewed' ? '#0f1623' : '#e3b341',
-                      border: '1px solid rgba(227,179,65,0.3)',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Mark reviewed
                   </button>
                   <button
                     className="btn"

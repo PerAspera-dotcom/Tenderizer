@@ -114,6 +114,19 @@ export function formatValue(value: string | null | undefined, currency: string |
   return currency ? `${amount} ${currency}` : amount;
 }
 
+// CR-008 W5: CPV codes are hierarchical by trailing zeros — e.g. "39516100"
+// (camp beds) is more specific than "39500000" (textiles). Fewer trailing
+// zeros in the 8-digit code = more specific; sorts ascending so the most
+// specific code comes first. Ties (equal specificity) keep their relative
+// order (Array.prototype.sort is stable).
+export function sortCpvCodesBySpecificity(codes: string[]): string[] {
+  function trailingZeros(code: string): number {
+    const digits = code.slice(0, 8);
+    return digits.length - digits.replace(/0+$/, '').length;
+  }
+  return [...codes].sort((a, b) => trailingZeros(a) - trailingZeros(b));
+}
+
 export function matchLabel(ms: string | null | undefined): string {
   if (!ms || ms === 'None' || ms === 'none') return 'Low';
   if (ms === 'both') return 'Both';

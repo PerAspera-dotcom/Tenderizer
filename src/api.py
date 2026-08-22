@@ -379,6 +379,23 @@ def _attach_presence(conn, tenant_id, records, identity):
     return records
 
 
+def _attach_notifications(conn, tenant_id, records):
+    """CR-008 W2: attaches row-level notification metadata — `forwarded_to`
+    (the most recent forward's recipient, or None) and `last_notification_at`
+    (the most recent ping of any kind, or None) — so the Review Queue list
+    can show this without opening each tender. Org-shared like the rest of
+    the queue (see store.get_last_notification_times' docstring), unlike
+    _attach_presence's personal viewer list or get_notifications' personal
+    feed.
+    """
+    last_notification = store.get_last_notification_times(conn, tenant_id)
+    forwarded_to = store.get_last_forwarded_to(conn, tenant_id)
+    for r in records:
+        r["forwarded_to"] = forwarded_to.get(r["pub_number"])
+        r["last_notification_at"] = last_notification.get(r["pub_number"])
+    return records
+
+
 @app.get("/api/tenders")
 def list_tenders(
     source:           Optional[str]  = None,
@@ -402,6 +419,7 @@ def list_tenders(
     _add_dismissal_reason_category(records)
     _attach_duplicates(conn, tenant_id, records)
     _attach_presence(conn, tenant_id, records, identity)
+    _attach_notifications(conn, tenant_id, records)
 
     # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
     # default so they don't surface here even though the report already hid
@@ -474,6 +492,7 @@ def get_tender(pub_number: str, include_excluded: bool = False,
     _add_dismissal_reason_category(records)
     _attach_duplicates(conn, tenant_id, records)
     _attach_presence(conn, tenant_id, records, identity)
+    _attach_notifications(conn, tenant_id, records)
     for r in records:
         if r["pub_number"] == pub_number:
             if r.get("exclude_reason") and not include_excluded:
@@ -567,9 +586,16 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
         dismissed_at=datetime.now(timezone.utc).isoformat() if body.status in _DISMISS_STATUSES else None,
         reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None,
         assigned_to=assigned_to)
-    if assigned_to and background is not None:
-        background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
-                             assigned_to, body.note.strip(), identity.account_name)
+    if assigned_to:
+        # CR-008 W1: in-app record, written synchronously — see
+        # forward_tender's identical reasoning. Unconditional on `background`
+        # (unlike the email enqueue below) since it's not deferrable work.
+        store.create_tender_notification(conn, tenant_id, pub_number, "needs_review_ping",
+                                          identity.account_name, assigned_to,
+                                          body.note.strip(), body.status)
+        if background is not None:
+            background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
+                                 assigned_to, body.note.strip(), identity.account_name)
     return {"pub_number": pub_number, "status": body.status}
 
 
@@ -656,12 +682,19 @@ def forward_tender(pub_number: str, body: ForwardBody, background: BackgroundTas
     if "@" not in to_email:
         raise HTTPException(422, "to_email must be a valid email address")
     conn = _db()
-    if not any(r["pub_number"] == pub_number for r in store.all_records(conn, identity.tenant_id)):
+    tender = next((r for r in store.all_records(conn, identity.tenant_id) if r["pub_number"] == pub_number), None)
+    if tender is None:
         if store.pub_number_exists_for_other_tenant(conn, identity.tenant_id, pub_number):
             raise HTTPException(403, "Forbidden")
         raise HTTPException(404, "Tender not found")
+    message = (body.message or "").strip() or None
+    # CR-008 W1: in-app record, written synchronously (unlike the email
+    # below, this is a cheap DB write with no reason to defer) so it's
+    # immediately visible in the recipient's notification feed.
+    store.create_tender_notification(conn, identity.tenant_id, pub_number, "forward",
+                                      identity.account_name, to_email, message, tender["status"])
     background.add_task(_send_forward_email, identity.tenant_id, pub_number, to_email,
-                         (body.message or "").strip() or None, identity.account_name)
+                         message, identity.account_name)
     return {"sent": True}
 
 
@@ -675,6 +708,25 @@ def get_org_members(identity: Identity = Depends(get_current_identity)):
     """
     members = auth.list_organization_members(identity.org_id)
     return [m for m in members if m["clerk_user_id"] != identity.clerk_user_id]
+
+
+@app.get("/api/notifications")
+def get_notifications(identity: Identity = Depends(get_current_identity)):
+    """CR-008 W1: the caller's own in-app notification feed — every forward/
+    needs_review ping addressed to them (`to_email` matched against their
+    own Identity.account_name, always their email — see auth.py), newest
+    first, plus the unread count for the profile badge.
+    """
+    conn = _db()
+    notifications = store.get_notifications_for_recipient(conn, identity.tenant_id, identity.account_name)
+    unread = sum(1 for n in notifications if n["read_at"] is None)
+    return {"notifications": notifications, "unread_count": unread}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: int, identity: Identity = Depends(get_current_identity)):
+    store.mark_notification_read(_db(), identity.tenant_id, notification_id, identity.account_name)
+    return {"ok": True}
 
 
 @app.get("/api/tenders/{pub_number}/history")
@@ -833,6 +885,27 @@ def _run_daily_digest():
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/cpv/labels")
+def get_cpv_labels(codes: str = Query(..., description="comma-separated CPV codes")):
+    """CR-008 W5: human-readable labels for arbitrary CPV codes — unlike
+    /api/config/cpv (which only ever returns the tenant's *active* set),
+    this looks up whatever codes the caller asks for, since a tender's own
+    cpv_codes commonly includes codes outside the tenant's active list
+    (e.g. matched via keyword, not CPV). Not tenant-scoped — the reference
+    itself is global (config.cpv_reference's own comment). Unknown codes
+    are simply omitted, matching config.cpv_label's own fallback-to-the-
+    raw-code behavior on the frontend.
+    """
+    ref = config.cpv_reference()
+    wanted = [c.strip() for c in codes.split(",") if c.strip()]
+    return {
+        code: {"en": entry.get("en"), "fr": entry.get("fr"),
+               "nl": entry.get("nl"), "de": entry.get("de")}
+        for code in wanted
+        if (entry := ref.get(code)) is not None
+    }
+
 
 @app.get("/api/config/cpv")
 def get_cpv_config(tenant_id: int = Depends(get_current_tenant_id)):

@@ -4,6 +4,7 @@ import { useNavigate, useLocation, Link } from '../router';
 import { getStats, getHealth, postRun, listTenders } from '../api';
 import type { Stats, PortalHealth } from '../types';
 import { formatTime } from '../utils';
+import NotificationBell from './NotificationBell';
 
 type AppId = 'portal' | 'scout' | 'vault' | 'composer';
 
@@ -307,6 +308,10 @@ export default function Layout({ children }: Props) {
               hidePersonal
               appearance={{ elements: { organizationSwitcherTrigger: { padding: '5px 10px' } } }}
             />
+            {/* CR-008 W1: forwarding/needs-review pings surfaced in-app, not
+                just email — badge + message-board dropdown next to the
+                profile control. */}
+            <NotificationBell />
             <UserButton appearance={{ elements: { avatarBox: { width: 32, height: 32 } } }} />
           </div>
         </header>

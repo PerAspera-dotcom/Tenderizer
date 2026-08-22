@@ -34,7 +34,8 @@ from schema import documents, metadata, pipeline, pipeline_history, source_healt
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 from schema import (tender_history, vault_document_history, composer_document_history,
                      composer_requirement_history, tender_relevance_overrides,
-                     tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence)
+                     tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence,
+                     tender_notifications)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -725,6 +726,102 @@ def get_tender_viewers(conn, tenant_id, since_iso):
         )).fetchall()
     return [{"pub_number": r[0], "clerk_user_id": r[1], "account_name": r[2], "last_seen_at": r[3]}
             for r in rows]
+
+
+def create_tender_notification(conn, tenant_id, pub_number, kind, from_account_name, to_email,
+                                message, status_at_send):
+    """CR-008 W1: logs an in-app record of a forward (CR-007 G1) or
+    needs_review assignee ping — append-only, one row per ping (see
+    schema.py's tender_notifications comment for why `to_email`, not a
+    Clerk user id, is the addressing key).
+    """
+    with conn.begin() as c:
+        c.execute(insert(tender_notifications).values(
+            tenant_id=tenant_id, pub_number=pub_number, kind=kind,
+            from_account_name=from_account_name, to_email=to_email, message=message,
+            status_at_send=status_at_send, created_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_notifications_for_recipient(conn, tenant_id, to_email, limit=50):
+    """CR-008 W1: an account's own in-app notification feed — the dropdown's
+    data source (api.get_notifications). Newest first, capped at `limit`.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_notifications.c.id, tender_notifications.c.pub_number,
+            tender_notifications.c.kind, tender_notifications.c.from_account_name,
+            tender_notifications.c.message, tender_notifications.c.status_at_send,
+            tender_notifications.c.created_at, tender_notifications.c.read_at,
+        ).where(
+            (tender_notifications.c.tenant_id == tenant_id) &
+            (tender_notifications.c.to_email == to_email)
+        ).order_by(tender_notifications.c.id.desc()).limit(limit)).fetchall()
+    return [{"id": r[0], "pub_number": r[1], "kind": r[2], "from_account_name": r[3],
+             "message": r[4], "status_at_send": r[5], "created_at": r[6], "read_at": r[7]}
+            for r in rows]
+
+
+def get_unread_notification_count(conn, tenant_id, to_email):
+    with conn.connect() as c:
+        row = c.execute(select(func.count()).select_from(tender_notifications).where(
+            (tender_notifications.c.tenant_id == tenant_id) &
+            (tender_notifications.c.to_email == to_email) &
+            (tender_notifications.c.read_at.is_(None))
+        )).fetchone()
+    return row[0] if row else 0
+
+
+def mark_notification_read(conn, tenant_id, notification_id, to_email):
+    """Ownership-checked: only the addressed recipient (`to_email` matching
+    their own Identity.account_name) can mark their own notification read —
+    see api.mark_notification_read. Silently a no-op if the id doesn't
+    belong to this tenant/recipient, same "not yours, nothing happens"
+    shape as other tenant-scoped writes.
+    """
+    with conn.begin() as c:
+        c.execute(update(tender_notifications).where(
+            (tender_notifications.c.id == notification_id) &
+            (tender_notifications.c.tenant_id == tenant_id) &
+            (tender_notifications.c.to_email == to_email) &
+            (tender_notifications.c.read_at.is_(None))
+        ).values(read_at=datetime.now(timezone.utc).isoformat()))
+
+
+def get_last_notification_times(conn, tenant_id):
+    """CR-008 W2: per-tender "last notification" timestamp — the most recent
+    ping (forward or needs_review assignee) touching each pub_number,
+    across all recipients (this is tender-row metadata, org-shared like the
+    rest of the Review Queue, unlike get_notifications_for_recipient's
+    personal feed). Returns {pub_number: latest created_at}.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_notifications.c.pub_number, func.max(tender_notifications.c.created_at),
+        ).where(tender_notifications.c.tenant_id == tenant_id)
+         .group_by(tender_notifications.c.pub_number)).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def get_last_forwarded_to(conn, tenant_id):
+    """CR-008 W2: per-tender "forwarded to" row metadata — the most recent
+    kind='forward' ping's recipient for each pub_number (needs_review pings
+    are covered by the tender's own `assigned_to` column already, so this
+    is 'forward'-only). Returns {pub_number: to_email}.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(
+            tender_notifications.c.pub_number, tender_notifications.c.to_email,
+            tender_notifications.c.created_at,
+        ).where(
+            (tender_notifications.c.tenant_id == tenant_id) &
+            (tender_notifications.c.kind == "forward")
+        ).order_by(tender_notifications.c.id.asc())).fetchall()
+    # last-write-wins per pub_number — rows are walked oldest-first so a
+    # later forward always overwrites an earlier one for the same tender.
+    latest: dict = {}
+    for pub_number, to_email, _created_at in rows:
+        latest[pub_number] = to_email
+    return latest
 
 
 def all_records(conn, tenant_id):

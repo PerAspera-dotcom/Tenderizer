@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -108,6 +108,23 @@ export interface OrgMember {
 // email entry on an empty list.
 export function getOrgMembers(): Promise<OrgMember[]> {
   return apiFetch('/api/org/members');
+}
+
+// CR-008 W1: the caller's own in-app notification feed (forwards + needs_review
+// pings addressed to them) — see NotificationBell.tsx.
+export function getNotifications(): Promise<{ notifications: TenderNotification[]; unread_count: number }> {
+  return apiFetch('/api/notifications');
+}
+
+export function markNotificationRead(id: number): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/notifications/${id}/read`, { method: 'POST' });
+}
+
+// CR-008 W5: human-readable labels for arbitrary CPV codes (not limited to
+// the tenant's active set, unlike getCpvConfig) — see ReviewQueue.tsx.
+export function getCpvLabels(codes: string[]): Promise<Record<string, { en: string | null; fr: string | null; nl: string | null; de: string | null }>> {
+  if (codes.length === 0) return Promise.resolve({});
+  return apiFetch(`/api/cpv/labels?codes=${encodeURIComponent(codes.join(','))}`);
 }
 
 export function putScoutSettings(body: Partial<ScoutSettings>): Promise<{ saved: boolean }> {

@@ -278,6 +278,37 @@ tender_presence = Table(
 )
 Index("ix_tender_presence_tenant_pub", tender_presence.c.tenant_id, tender_presence.c.pub_number)
 
+# CR-008 W1: in-app record of the account-to-account pings CR-007 Phase G
+# (forward) and the needs_review assignee ping already send by email —
+# client feedback: "forwarding should show up inside the app", not just an
+# inbox somewhere else. Append-only (like *_history above), one row per
+# ping — `to_email` is the addressing key (matched against the caller's own
+# Identity.account_name, which is always their email — see auth.py) rather
+# than a Clerk user id, since a forward's recipient can be a manually-typed
+# email with no resolvable Clerk membership (ForwardTender.tsx's
+# MANUAL_ENTRY). `status_at_send` snapshots the tender's status at the
+# moment of the ping (the CR's own example: "...tender Y to you...in status
+# W") since the live tenders row can move on afterward. `read_at` backs the
+# unread badge; a notification is "yours" if `to_email` matches you,
+# regardless of whether you're also the sender's org-mate — the whole
+# Review Queue is already org-shared (CR-007 Phase A), this table only adds
+# personal "was this addressed to me" targeting on top of that.
+tender_notifications = Table(
+    "tender_notifications", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("kind", Text, nullable=False),  # 'forward' | 'needs_review_ping'
+    Column("from_account_name", Text, nullable=False),
+    Column("to_email", Text, nullable=False),
+    Column("message", Text, nullable=True),
+    Column("status_at_send", Text, nullable=False),
+    Column("created_at", Text, nullable=False, server_default=""),
+    Column("read_at", Text, nullable=True),
+)
+Index("ix_tender_notifications_tenant_to_email", tender_notifications.c.tenant_id, tender_notifications.c.to_email)
+Index("ix_tender_notifications_tenant_pub", tender_notifications.c.tenant_id, tender_notifications.c.pub_number)
+
 vault_document_history = Table(
     "vault_document_history", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),

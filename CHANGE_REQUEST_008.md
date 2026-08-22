@@ -204,6 +204,11 @@ English `description_en` across all 4 tenants.
 
 ## P2 · Review Queue workflow/UX
 
+**Status: RESOLVED, 2026-08-22.** All five items (W1-W5) shipped in one pass, backend suite green
+(721 passed), frontend typechecks/lints clean. See "Resolution" below. Not yet verified in a live
+browser session — standing up authenticated Clerk auth end-to-end wasn't attempted this round;
+recommend a manual click-through before calling this fully done.
+
 Grouped because they're all Review Queue surface changes; can ship independently of each other.
 
 ### W1 — Forwarding shows up in-app, not just email
@@ -247,6 +252,60 @@ trailing zero-pairs or equivalent specificity signal, most specific first.
 - "Mark reviewed" is gone from the UI; existing `reviewed` rows handled per client decision.
 - Region and decision filters work alongside the existing deadline/pub_date sort.
 - CPV labels render in the queue and detail view, ordered specific-to-generic.
+
+### Resolution
+
+**New table (`src/schema.py`): `tender_notifications`** — one row per forward/needs_review ping,
+append-only. `to_email` (not a Clerk user id) is the addressing key, since a forward's recipient
+can be a manually-typed email with no resolvable org membership. Rides the `create_all` convention
+(brand new table, no existing data to migrate).
+
+**W1 — in-app notifications.** `forward_tender` and `patch_tender`'s needs_review assignee ping
+both now write a `tender_notifications` row synchronously (the DB write, unlike the email, isn't
+deferrable background work) alongside their existing email. New endpoints: `GET /api/notifications`
+(the caller's own feed, matched by `to_email == their account_name/email`, plus unread count) and
+`POST /api/notifications/{id}/read` (ownership-checked). New `NotificationBell.tsx` component —
+badge + unread count in `Layout.tsx`'s header, polls every 30s, dropdown lists recent pings
+message-board style ("X forwarded a tender to you (PUB-NUM) — status · 'message'"), click-through
+marks read and navigates to `/scout/review-queue?pub=<pub_number>` (ReviewQueue.tsx now consumes
+that query param on first load to auto-select).
+
+**W2 — row metadata.** `api._attach_notifications` (mirrors the existing `_attach_presence`/
+`_attach_duplicates` pattern) adds `forwarded_to` (most recent forward's recipient) and
+`last_notification_at` (most recent ping of any kind) to every tender row from `store.
+get_last_forwarded_to`/`get_last_notification_times` — org-shared, not personal, matching the rest
+of the Review Queue. Rendered as a compact metadata line under each row's badges: status text
+(including "Needs further review", previously dot-color-only), forwarded-to, and a 🔔 timestamp.
+
+**W3 — "Mark reviewed" removed.** Button and `applyStatus('reviewed')` call gone from
+`ReviewQueue.tsx`; the `reviewed` filter pill and `StatusFilter` type option dropped. Kept:
+`reviewed` still renders correctly everywhere a status is displayed (`StatusBadge`, dot colors,
+detail view) and the backend still accepts it as a valid status — **existing `status='reviewed'`
+rows were left as-is (historical)**, not migrated to `shortlisted`. This was a judgment call, not a
+confirmed client decision (the original CR flagged it as needing confirmation) — chosen because
+every other change in this CR followed the same non-destructive default, and it's trivially
+reversible with a one-off backfill later if the client wants a migration instead.
+
+**W4 — region + decision filter/sort.** Region: a `<select>` (not pills — the candidate set is
+whatever countries are actually present, open-ended unlike status), filtering client-side against
+`tenders.country`. Decision: added as a third `sortBy` option (`STATUS_SORT_RANK` — undecided
+first, then decided-positive, then decided-negative, rather than alphabetical). The backend
+already had a `country` query filter (`GET /api/tenders?country=`) from an earlier CR; unused here
+since ReviewQueue.tsx already loads its full working set client-side and filters in-memory, same
+as the existing status pills.
+
+**W5 — CPV labels.** New `GET /api/cpv/labels?codes=` endpoint (unlike the existing
+`/api/config/cpv`, not limited to the tenant's *active* set — a tender's own `cpv_codes` commonly
+includes codes matched via keyword rather than CPV, outside that set). New `utils.
+sortCpvCodesBySpecificity` — fewer trailing zeros in the 8-digit code sorts first (`39516100`
+before `39500000`, per the CR's own example). Queue rows show the single most-specific code's
+label as a compact chip (full list on hover); the detail view shows every code labeled, ordered
+specific-to-generic, falling back to the raw code for anything outside `cpv_reference.json`.
+
+**Tests:** `tests/test_48_notifications.py` (new — store primitives, ownership checks, the two
+ping-write sites, both endpoints, the CPV labels endpoint, row-metadata attachment). Existing
+`test_41_needs_review.py`/`test_47_forward_tender.py` re-run clean (no behavior change to their
+existing assertions, only additive DB writes alongside the existing email sends).
 
 ---
 
