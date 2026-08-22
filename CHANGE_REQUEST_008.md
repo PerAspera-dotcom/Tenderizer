@@ -204,10 +204,28 @@ English `description_en` across all 4 tenants.
 
 ## P2 · Review Queue workflow/UX
 
-**Status: RESOLVED, 2026-08-22.** All five items (W1-W5) shipped in one pass, backend suite green
-(721 passed), frontend typechecks/lints clean. See "Resolution" below. Not yet verified in a live
-browser session — standing up authenticated Clerk auth end-to-end wasn't attempted this round;
-recommend a manual click-through before calling this fully done.
+**Status: RESOLVED and verified live, 2026-08-22.** All five items (W1-W5) shipped, backend suite
+green (721 passed), frontend typechecks/lints clean. Deployed to production (Railway + Vercel) and
+driven directly in a real browser session against the live org "World of Tents" — every item
+confirmed working against real data, not just code review. See "Resolution" below.
+
+**Two real bugs were caught by live testing that code review missed** (both fixed, redeployed,
+re-verified, commit `92c1c57`):
+1. Clicking a second notification while already on the Review Queue (the common case —
+   NotificationBell is visible on every page including this one) updated the URL and cleared the
+   unread badge but never switched the selected tender — the deep-link consumption ref only ever
+   fired once per mount. Fixed to track *which value* was last applied instead, so a same-page
+   click-through with a genuinely new pub_number now works. (A same-page click on the exact same
+   already-open notification is a no-op by browser design — `hashchange` doesn't fire for an
+   unchanged hash — which is correct, not a bug.)
+2. The notification dropdown only showed whatever the last 30s poll had caught, so a just-sent
+   forward (including forwarding to yourself as a reminder) was invisible until the next tick.
+   Fixed to always fetch fresh on open.
+
+Test data left in prod from verification: a few real `tender_notifications` rows (self-forwards
+with messages like "CR-008 W1 verification test") against a handful of real tenders. Harmless —
+notifications are an append-only log by design, same as every other history table in this app —
+but flagging so it's not mistaken for a real colleague's activity if noticed later.
 
 Grouped because they're all Review Queue surface changes; can ship independently of each other.
 
