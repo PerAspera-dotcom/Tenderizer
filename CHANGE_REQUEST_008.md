@@ -329,20 +329,10 @@ existing assertions, only additive DB writes alongside the existing email sends)
 
 ## P3 · Needs scoping before implementation
 
-These came out of the feedback session but aren't specified enough to build yet — flagging so
-they aren't lost, not proposing a design.
-
-### Positive reinforcement / promote good tenders based on precedent
-Idea: surface tenders similar to ones the org has previously accepted/won, ranked up. Needs a
-definition of "similar" (CPV overlap? buyer history? past pipeline outcome?) and where it surfaces
-(a badge in the queue? a distinct ranking?) before this is buildable.
-
-### Odoo integration on acceptance
-When a tender is accepted, signal Odoo to create a project and show the resulting project number
-on the tender. Needs: which Odoo instance/API (XML-RPC vs REST), auth method and where the
-credential lives, which Odoo model/template a "project" maps to, and what "accepted" means in
-Tenderizer terms (a new status, or reuse `shortlisted`/pipeline `submission_status`). Recommend a
-short scoping conversation with whoever owns the Odoo instance before this is written up as a CR.
+These came out of the feedback session but aren't specified enough to build yet. Client confirmed
+(2026-08-22) this was "look into what's possible," not a build request — **see `CHANGE_REQUEST_009.md`**
+for the full investigation (what already exists in the codebase, concrete options, and the open
+questions that need answering before either is buildable). Not implemented; reference only.
 
 ---
 
