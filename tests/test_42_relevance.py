@@ -93,6 +93,62 @@ def test_score_relevance_ignores_dissimilar_history():
     assert "no similar" in result["reasoning"].lower()
 
 
+# ── CR-009 A: CPV-group similarity + reinforced reason_category pattern ────
+
+FIRE_GROUPS = {"11111111": "firefighting", "22222222": "firefighting"}
+
+
+def test_is_similar_true_on_shared_cpv_group_even_with_different_codes():
+    # Two distinct codes, same group -- the CR's own example (firefighting
+    # gear under different exact codes should still count as alike).
+    a = {"cpv_codes": ["11111111"], "matched_terms": [], "category": ""}
+    b = {"cpv_codes": ["22222222"], "matched_terms": [], "category": ""}
+    assert not relevance.is_similar(a, b)                      # no group map -> code-only, no match
+    assert relevance.is_similar(a, b, cpv_groups=FIRE_GROUPS)   # group map supplied -> matches
+
+
+def test_score_relevance_group_match_without_group_map_is_neutral():
+    candidate = {"cpv_codes": ["22222222"], "matched_terms": [], "category": ""}
+    negative = [{"cpv_codes": ["11111111"], "matched_terms": [], "category": "",
+                 "reason_category": "wrong_sector"}]
+    result = relevance.score_relevance(candidate, [], negative)  # no cpv_groups
+    assert result["score"] == 50
+    assert "no similar" in result["reasoning"].lower()
+
+
+def test_score_relevance_group_match_with_group_map_counts_as_similar():
+    candidate = {"cpv_codes": ["22222222"], "matched_terms": [], "category": ""}
+    negative = [{"cpv_codes": ["11111111"], "matched_terms": [], "category": "",
+                 "reason_category": "wrong_sector"}]
+    result = relevance.score_relevance(candidate, [], negative, cpv_groups=FIRE_GROUPS)
+    assert result["score"] == 0
+    assert "dismissed" in result["reasoning"].lower()
+
+
+def test_reinforced_reason_category_pulls_the_score_down_further():
+    # Same total evidence shape (1 positive, 2 negatives, each matching on
+    # one dimension) -- only difference is whether the two negatives share
+    # a reason_category. A repeated, articulated reason should be weighted
+    # as a stronger, established pattern than two isolated one-off calls.
+    candidate = {"cpv_codes": ["1"], "matched_terms": [], "category": ""}
+    positive = [{"cpv_codes": ["1"], "matched_terms": [], "category": ""}]
+
+    scattered = [
+        {"cpv_codes": ["1"], "matched_terms": [], "category": "", "reason_category": "wrong_sector"},
+        {"cpv_codes": ["1"], "matched_terms": [], "category": "", "reason_category": "value_too_low"},
+    ]
+    reinforced = [
+        {"cpv_codes": ["1"], "matched_terms": [], "category": "", "reason_category": "wrong_sector"},
+        {"cpv_codes": ["1"], "matched_terms": [], "category": "", "reason_category": "wrong_sector"},
+    ]
+
+    scattered_score = relevance.score_relevance(candidate, positive, scattered)["score"]
+    reinforced_score = relevance.score_relevance(candidate, positive, reinforced)["score"]
+    assert reinforced_score < scattered_score
+    assert scattered_score == 33   # 1 pos-dim vs 1+1 unweighted neg-dims: 100*1/3
+    assert reinforced_score == 20  # each reinforced neg gets +1: 100*1/5
+
+
 # ── API wiring ────────────────────────────────────────────────────────────────
 
 def _rec(pub_number, cpv="39522530", category="Supply", deadline="2030-01-01T00:00:00+00:00"):
@@ -165,6 +221,31 @@ def test_relevance_correction_out_of_range_is_422(tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         api.patch_tender_relevance("PUB-1", api.RelevanceBody(score=150), identity=make_identity())
     assert exc.value.status_code == 422
+
+
+def test_relevance_reflects_a_group_level_cpv_match_not_just_exact_code(tmp_path, monkeypatch):
+    # CR-009 A wired end-to-end: 39522000 and 39522100 are different exact
+    # codes but share config/cpv_reference.json's "tents_covers" group.
+    # category/matched_terms deliberately differ so the CPV-group dimension
+    # is the *only* thing that can make these two records match -- _rec's
+    # own defaults (category="Supply", matched_terms=["tent"]) would
+    # otherwise make them similar regardless of CPV, defeating the point.
+    conn = _seed(tmp_path, monkeypatch)
+    dismissed = dict(_rec("DISMISSED-1", cpv="39522000"), category="Works", matched_terms=["tarpaulin"])
+    candidate = dict(_rec("CANDIDATE-1", cpv="39522100"), category="Services", matched_terms=["awning"])
+    store.upsert(conn, TEST_TENANT_ID, dismissed)
+    store.upsert(conn, TEST_TENANT_ID, candidate)
+
+    api.patch_tender("DISMISSED-1", api.StatusBody(status="dismissed", note="Not for us",
+                                                     reason_category="wrong_sector"),
+                      identity=make_identity())
+    api.patch_tender("DISMISSED-1", api.StatusBody(status="dismissed_final", note="Confirmed",
+                                                     reason_category="wrong_sector"),
+                      identity=make_identity())
+
+    rec = api.get_tender("CANDIDATE-1", identity=make_identity())
+    assert rec["relevance_score"] == 0
+    assert "dismissed" in rec["relevance_reasoning"].lower()
 
 
 def test_relevance_correction_on_another_tenants_tender_is_403(tmp_path, monkeypatch):

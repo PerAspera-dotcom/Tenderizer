@@ -21,6 +21,11 @@ picks a direction.
 
 ## A · Precedent-based promotion
 
+**Status: RESOLVED, 2026-08-25.** Client direction: "all categories that reinforce the accepting
+or dismissing of a tender should teach the platform to adjust alike tenders in the future" (e.g.
+"no fireman related contract"). Implemented as a fourth option below the three originally scoped —
+see "Resolution."
+
 ### What already exists (this is closer to done than the original ask suggested)
 
 CR-007 Phase B already built most of this. `src/relevance.py`'s `score_relevance` computes a
@@ -64,6 +69,47 @@ Has the client actually seen the existing relevance score/reasoning in the Revie
 view? It's possible this ask predates awareness that it exists, in which case the real next step
 is walking them through the current feature and asking what's still missing, rather than guessing
 at #1–#3 blind.
+
+### Resolution — option 4: multi-dimension category reinforcement
+
+Client picked neither #1–#3 directly; clarified the ask as: every category dimension a decision
+(accept *or* dismiss) touches should reinforce scoring for future alike tenders, and gave a
+concrete example — repeatedly dismissing firefighting-related tenders as "wrong sector" should
+teach the platform to down-rank the next firefighting tender, even under a different exact CPV
+code. Implemented in `src/relevance.py`:
+
+- `_match_dimensions(a, b, cpv_groups=None)` replaces the old plain yes/no `is_similar` check with
+  a count of how many independent signals two tenders agree on: shared CPV code, shared CPV
+  **group** (`config/cpv_reference.json`'s `group` field — broader than exact code, e.g. two
+  distinct firefighting-equipment codes land in the same group, which is exactly the "different
+  code, same kind of contract" case the fireman example describes), shared matched keyword, same
+  contract category (Supply/Services/Works/Training). `is_similar(a, b, cpv_groups=None)` is now a
+  thin wrapper (`_match_dimensions(...) > 0`) kept for backward compatibility — existing two-arg
+  callers/tests are unaffected, they just never get the CPV-group dimension.
+- `score_relevance` weighs each similar tender's vote by its dimension count instead of counting
+  every match flatly — a tender that agrees on 3 dimensions is stronger evidence than one that
+  only coincidentally shares 1.
+- **Reinforcement bonus**: a dismissal whose `reason_category` recurs across ≥2 similar tenders
+  gets +1 on top of its dimension count — a repeated, articulated reason is a more established
+  pattern than one reviewer's isolated call, and should pull the score down harder. This is the
+  literal "teach the platform" mechanic the client asked for.
+- `cpv_groups` (a `{code: group}` map) is threaded through as an optional parameter, built once per
+  request in `api._attach_relevance` from `config.cpv_reference()` and passed to `score_relevance`
+  — `relevance.py` itself stays free of file/DB I/O, matching its existing "pure functions, caller
+  supplies the data" convention (same as `positive`/`negative` already being passed in rather than
+  queried inside the module).
+
+No schema change, no new endpoint, no frontend change — the response shape (`relevance_score`,
+`relevance_reasoning`) is unchanged, so the existing Review Queue detail view picks up the improved
+scoring automatically. Tests: `tests/test_42_relevance.py` — CPV-group matching (with and without a
+group map, proving the parameter is genuinely optional), and an isolating test proving a reinforced
+reason_category produces a strictly lower score than the same evidence scattered across different
+reasons (33 vs. 20 in the test's controlled setup) — plus an end-to-end API test using two real
+`cpv_reference.json` codes that share the `tents_covers` group. Full backend suite green.
+
+Options #1 (weight in wins/losses) and #2 (buyer-repeat-business) from the original scoping remain
+un-built — not rejected, just not what was asked for this round. Worth a follow-up conversation if
+the client wants outcome-weighting or buyer history layered on top of this.
 
 ---
 

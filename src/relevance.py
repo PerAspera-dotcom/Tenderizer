@@ -28,50 +28,98 @@ NEUTRAL_SCORE = 50
 NEUTRAL_REASONING = "No similar tenders reviewed yet — neutral baseline."
 
 
-def is_similar(a, b):
-    """Two tenders are "similar" if they share a CPV code, share a matched
-    keyword, or have the same non-empty category — any one signal is
-    enough (not all three), matching the CR's "start simple" ask rather
-    than a weighted/threshold model.
+def _cpv_group_set(cpv_codes, cpv_groups):
+    if not cpv_groups:
+        return set()
+    return {cpv_groups[c] for c in (cpv_codes or []) if c in cpv_groups}
+
+
+def _match_dimensions(a, b, cpv_groups=None):
+    """CR-009 A ("teach the platform" from every category dimension a
+    decision reinforces, per the CR's own example: repeatedly dismissing
+    firefighting-related tenders should down-rank the next one even when
+    it's a different exact CPV code): counts how many independent signals
+    two tenders agree on, rather than is_similar's plain yes/no —
+      - shared CPV code(s)
+      - shared CPV *group* (config.cpv_reference's `group` field, broader
+        than exact code — two different but related codes, e.g. two
+        distinct firefighting-equipment codes, land in the same group;
+        `cpv_groups` is an optional {code: group} map, supplied by the
+        caller so this module stays DB/config-file-free itself, same
+        convention as positive/negative being supplied rather than
+        queried here)
+      - shared matched keyword(s)
+      - same non-empty contract category
+    A tender that agrees with history on multiple independent dimensions
+    is stronger evidence than one that only coincidentally shares one.
     """
-    a_cpv = set(a.get("cpv_codes") or [])
-    b_cpv = set(b.get("cpv_codes") or [])
+    dims = 0
+    a_cpv, b_cpv = set(a.get("cpv_codes") or []), set(b.get("cpv_codes") or [])
     if a_cpv & b_cpv:
-        return True
-    a_terms = set(a.get("matched_terms") or [])
-    b_terms = set(b.get("matched_terms") or [])
+        dims += 1
+    if _cpv_group_set(a_cpv, cpv_groups) & _cpv_group_set(b_cpv, cpv_groups):
+        dims += 1
+    a_terms, b_terms = set(a.get("matched_terms") or []), set(b.get("matched_terms") or [])
     if a_terms & b_terms:
-        return True
+        dims += 1
     a_cat, b_cat = a.get("category"), b.get("category")
-    return bool(a_cat) and a_cat == b_cat
+    if a_cat and a_cat == b_cat:
+        dims += 1
+    return dims
+
+
+def is_similar(a, b, cpv_groups=None):
+    """Two tenders are "similar" if they agree on at least one dimension —
+    see _match_dimensions. `cpv_groups` optional; omitting it just means
+    the CPV-group dimension never fires (exact-code/keyword/category
+    still do), so existing two-arg callers are unaffected.
+    """
+    return _match_dimensions(a, b, cpv_groups) > 0
 
 
 def _plural(n, word):
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
-def score_relevance(candidate, positive, negative):
+def score_relevance(candidate, positive, negative, cpv_groups=None):
     """`positive`/`negative` are lists of tender-shaped dicts (cpv_codes,
     matched_terms, category); `negative` entries also carry
-    `reason_category` (may be None). Returns {"score": int 0-100,
-    "reasoning": str}. Score is simply the share of similar history that
-    was positive — inspectable by construction, not a black-box model.
+    `reason_category` (may be None). `cpv_groups` is an optional
+    {code: group} map (see _match_dimensions) letting group-level CPV
+    similarity count even without an exact code match. Returns
+    {"score": int 0-100, "reasoning": str} — inspectable by construction,
+    not a black-box model.
+
+    CR-009 A: each similar tender's vote is weighted by how many
+    dimensions it agrees with the candidate on (_match_dimensions), not
+    counted flatly — and a negative whose `reason_category` recurs across
+    two or more similar dismissals gets an extra point on top of that,
+    since a *repeated, articulated* reason (the CR's own example: several
+    firefighting-related tenders all dismissed as wrong_sector) is a more
+    established pattern than one reviewer's single call and should teach
+    the platform to weight the next alike tender down harder.
     """
-    similar_pos = [p for p in positive if is_similar(candidate, p)]
-    similar_neg = [n for n in negative if is_similar(candidate, n)]
-    total = len(similar_pos) + len(similar_neg)
-    if total == 0:
+    similar_pos = [(p, d) for p in positive if (d := _match_dimensions(candidate, p, cpv_groups)) > 0]
+    similar_neg = [(n, d) for n in negative if (d := _match_dimensions(candidate, n, cpv_groups)) > 0]
+    if not similar_pos and not similar_neg:
         return {"score": NEUTRAL_SCORE, "reasoning": NEUTRAL_REASONING}
 
-    score = round(100 * len(similar_pos) / total)
+    reason_counts = Counter(n["reason_category"] for n, _ in similar_neg if n.get("reason_category"))
+
+    def neg_weight(n, dims):
+        rc = n.get("reason_category")
+        return dims + 1 if rc and reason_counts[rc] >= 2 else dims
+
+    pos_total = sum(d for _, d in similar_pos)
+    neg_total = sum(neg_weight(n, d) for n, d in similar_neg)
+    score = round(100 * pos_total / (pos_total + neg_total))
 
     pos_clause = _plural(len(similar_pos), "similar tender") + " accepted" if similar_pos else None
     neg_clause = None
     if similar_neg:
         neg_clause = _plural(len(similar_neg), "similar tender") + " dismissed"
-        categories = Counter(n["reason_category"] for n in similar_neg if n.get("reason_category"))
-        if categories:
-            top_category, _ = categories.most_common(1)[0]
+        if reason_counts:
+            top_category, _ = reason_counts.most_common(1)[0]
             label = CATEGORY_LABELS.get(top_category, top_category)
             neg_clause += f", most often for: {label}"
 

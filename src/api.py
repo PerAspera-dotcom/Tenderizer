@@ -300,6 +300,11 @@ def _attach_relevance(conn, tenant_id, records):
     positive = [r for r in records if r.get("status") == "shortlisted"]
     negative = [r for r in records if r.get("status") == "dismissed_final"]
     overrides = store.get_relevance_overrides(conn, tenant_id)
+    # CR-009 A: {code: group} from the global CPV reference, computed once
+    # per request rather than per-candidate — relevance.py stays config-
+    # file-free itself (see its own docstring), same convention as
+    # positive/negative being supplied here instead of queried inside it.
+    cpv_groups = {code: entry["group"] for code, entry in config.cpv_reference().items() if entry.get("group")}
 
     for r in records:
         if r.get("status") not in ("new", "needs_review"):
@@ -311,7 +316,7 @@ def _attach_relevance(conn, tenant_id, records):
             r["relevance_corrected"] = True
             r["relevance_corrected_by"] = override["account_name"]
         else:
-            result = relevance.score_relevance(r, positive, negative)
+            result = relevance.score_relevance(r, positive, negative, cpv_groups)
             r["relevance_score"] = result["score"]
             r["relevance_reasoning"] = result["reasoning"]
             r["relevance_corrected"] = False
