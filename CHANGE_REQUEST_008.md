@@ -113,6 +113,33 @@ of all pre-fix supersessions (re-running today's guarded logic against every exi
 `exclude_reason='superseded'` row) is a natural follow-up if wanted; ask before running it, since it
 would touch every tenant's data, not just the ones already inspected here.
 
+### Follow-up simplification, 2026-08-26 (client direction)
+
+The guarded-auto-supersede design above (`is_protected` + `kept_order_is_confident`, "auto-merge
+unless X or Y") is **retired**. Client direction: replace the hardening with a plain label —
+same-source dedup now never auto-merges at all; every `find_duplicate_groups` match surfaces as a
+`same_source` possible-duplicate link, unconditionally. This makes same-source dedup behave exactly
+like CR-007 Phase C's cross-portal dedup (surface, never hide) and is the simplest form of the
+client's standing instruction ("too many tenders rather than too few") — no gating logic left to
+get wrong.
+
+- `dedup.is_protected` and `dedup.kept_order_is_confident` are deleted (were only called from
+  `run.py`'s dedup pass; confirmed no other callers before removal).
+- `run.py`'s same-source dedup loop now unconditionally calls `store.upsert_tender_duplicate(...,
+  "same_source")` for every candidate in a group; it never calls `store.mark_superseded` anymore.
+- `store.mark_superseded`/`restore_superseded` are **kept** (not what was asked to change) — still
+  valid, tested primitives for a possible future "reviewer confirms merge" action and for
+  `scratch_recover_superseded.py`'s historical cleanup; just no longer auto-invoked by the pipeline.
+- Tests updated: `tests/test_16_dedup.py` drops the two retired functions' unit tests;
+  `tests/test_11_run.py`'s republish-collapse test now asserts both records stay visible and link
+  as `same_source` (previously asserted one got hidden) — this is a real, deliberate behavior
+  change from CR-001's original dedup design, not just a refactor. The 563438-2026 and blank-
+  `pub_date` regression tests are unchanged in substance (both already asserted "stays visible,
+  links as duplicate" — that outcome now follows from the blanket rule rather than the retired
+  guards) but renamed/re-commented to describe the simpler mechanism.
+- No schema change. No frontend behavior change beyond what CR-008 P2 W2 already shipped (row-level
+  "possible duplicate" indicator) — `same_source` was already a recognized `match_type` there.
+
 ---
 
 ## P1 · DeepL/TED translation is broken for a specific, now-identified reason

@@ -3,9 +3,10 @@ were auto-superseded by the old, unguarded dedup pass — the reported
 incident being tender 563438-2026 (Lithuania, camp beds), which vanished
 from the Review Queue after an auto-sync collided it with a near-duplicate.
 
-The pipeline fix (dedup.is_protected + run.py's guarded supersede loop)
-stops this going forward; this script is only for cleaning up whatever the
-old, unguarded code already did to existing data.
+The pipeline fix (run.py's same-source dedup pass no longer auto-merges at
+all -- every match just links as a same-source possible duplicate) stops
+this going forward; this script is only for cleaning up whatever the old,
+unguarded code already did to existing data.
 
 Default mode is REPORT ONLY — lists every superseded tender per tenant,
 which record superseded it (via the kept record's `supersedes` list), and

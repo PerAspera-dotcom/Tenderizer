@@ -93,9 +93,13 @@ def test_above_value_floor_is_kept(tmp_path, raw_ted_supply):
     conn = store.init_db(db)
     assert store.all_records(conn, TEST_TENANT_ID)[0]["exclude_reason"] == ""
 
-def test_republished_notices_collapse_via_full_pipeline(tmp_path, raw_ted_supply):
-    # CR-001 D-DUP's own example: the same tender republished under a new
-    # pub_number should collapse to one surfaced record.
+def test_republished_notices_link_as_possible_duplicate_via_full_pipeline(tmp_path, raw_ted_supply):
+    # CR-001 D-DUP's own example (the same tender republished under a new
+    # pub_number) — CR-008 P0 (simplified 2026-08-26, client direction):
+    # this used to auto-collapse to one surfaced record; it now never
+    # auto-merges at all, both stay visible and link as a same-source
+    # possible duplicate instead, so a reviewer decides rather than either
+    # side silently disappearing.
     import store, copy
     raw_a = copy.deepcopy(raw_ted_supply)
     raw_a["publication-number"] = "111111-2026"
@@ -114,22 +118,26 @@ def test_republished_notices_collapse_via_full_pipeline(tmp_path, raw_ted_supply
 
     conn = store.init_db(db)
     records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
-    assert records["111111-2026"]["exclude_reason"] == "superseded"
-    assert records["222222-2026"]["supersedes"] == ["111111-2026"]
+    assert records["111111-2026"]["exclude_reason"] == ""   # neither hidden
+    assert records["222222-2026"]["exclude_reason"] == ""
+
+    dups = store.get_tender_duplicates_for_tenant(conn, TEST_TENANT_ID)
+    assert any(d["match_type"] == "same_source"
+               and {d["pub_number_a"], d["pub_number_b"]} == {"111111-2026", "222222-2026"}
+               for d in dups)
 
     wb = load_workbook(out)
     pub_numbers = [c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row]
-    assert "111111-2026" not in pub_numbers      # collapsed, not shown twice
-    assert "222222-2026" in pub_numbers          # the kept (latest) version surfaces
+    assert "111111-2026" in pub_numbers          # both surface, not collapsed
+    assert "222222-2026" in pub_numbers
 
-def test_reviewed_tender_is_protected_from_supersede_and_surfaces_as_duplicate(tmp_path, raw_ted_supply):
-    # CR-008 P0: reproduces the reported incident (tender 563438-2026,
-    # Lithuania camp beds, vanished from the Review Queue after an auto-sync).
-    # Root cause: find_duplicate_groups/mark_superseded ran unconditionally,
-    # so a near-duplicate showing up in a later run could hide a tender a
-    # reviewer had already shortlisted. Fix: a protected candidate (non-'new'
-    # status/assigned_to/reason_category) must stay surfaced and instead
-    # appear as a same-source possible-duplicate link.
+def test_reviewed_tender_still_surfaces_as_duplicate_not_hidden(tmp_path, raw_ted_supply):
+    # Regression test for the originally reported incident (tender
+    # 563438-2026, Lithuania camp beds, vanished from the Review Queue
+    # after an auto-sync collided it with a near-duplicate). Now covered by
+    # the blanket "same-source dedup never auto-merges" rule (see run.py)
+    # rather than a status-specific guard, but the incident itself must
+    # stay fixed: a shortlisted tender must never disappear.
     import store, copy
     raw_a = copy.deepcopy(raw_ted_supply)
     raw_a["publication-number"] = "563438-2026"
@@ -161,14 +169,14 @@ def test_reviewed_tender_is_protected_from_supersede_and_surfaces_as_duplicate(t
 
 
 def test_blank_pub_date_pair_is_not_merged_but_links_as_duplicate(tmp_path, raw_ted_supply):
-    # CR-008 P0 follow-up: reproduces the second bug found while recovering
-    # from the 563438-2026 incident. The real republish pair had pub_date
-    # == "" on BOTH sides (TED's publication-date field wasn't populated),
-    # so find_duplicate_groups' "keep the newest by pub_date" sort had
-    # nothing to sort on -- confirmed live to pick a different survivor per
-    # tenant for the identical public notice. Neither side may be
-    # auto-superseded when pub_date can't confidently order them; both must
-    # stay visible and link as a same-source possible duplicate instead.
+    # Regression test for a second bug found while recovering from the
+    # 563438-2026 incident: the real republish pair had pub_date == "" on
+    # BOTH sides (TED's publication-date field wasn't populated), which
+    # under the old "keep the newest by pub_date" logic had nothing to sort
+    # on and (confirmed live) picked a different survivor per tenant for
+    # the identical public notice. Now moot -- same-source dedup never
+    # auto-merges regardless of pub_date -- but kept as a named regression
+    # guard for this specific incident shape.
     import store, copy
     raw_a = copy.deepcopy(raw_ted_supply)
     raw_a["publication-number"] = "563438-2026"

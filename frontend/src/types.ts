@@ -70,9 +70,9 @@ export interface TenderNotification {
 }
 
 // CR-007 Phase C: one entry per detected cross-portal counterpart.
-// CR-008 P0: 'same_source' added — a same-source near-duplicate (would have
-// been auto-merged by find_duplicate_groups) that dedup.is_protected() kept
-// visible instead, because the candidate already had a status/assignee/note.
+// CR-008 P0: 'same_source' added — a same-source near-duplicate
+// (find_duplicate_groups) never auto-merges (simplified 2026-08-26); every
+// match surfaces as this link instead, so a reviewer decides.
 export interface TenderDuplicate {
   pub_number: string;
   source: string;

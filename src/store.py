@@ -1052,9 +1052,11 @@ def mark_superseded(conn, tenant_id, kept_pub_number, superseded_records):
     exclude_reason='superseded' (auditable, not deleted). The kept record's
     `supersedes` accumulates their pub_numbers.
 
-    CR-008 P0: callers (run.py's dedup pass) must never pass a record
-    dedup.is_protected() flags — this function itself doesn't re-check that,
-    it only logs. Every supersede writes a tender_history row (field=
+    CR-008 P0: run.py's dedup pass no longer calls this automatically (see
+    its own comment — every same-source match is surfaced as a possible
+    duplicate now, never auto-merged) — kept as a still-valid manual/audit
+    primitive, and for the recovery script that undoes historical
+    supersessions. Every supersede writes a tender_history row (field=
     "exclude_reason") so a hidden tender is always traceable to which run
     superseded it in favor of which kept pub_number, closing the "vanished
     with no trace" gap from the reported incident.

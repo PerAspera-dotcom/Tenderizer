@@ -52,58 +52,27 @@ def _same_or_close_deadline(a, b):
     return abs(da - db) <= DEADLINE_WINDOW
 
 
-def kept_order_is_confident(kept, candidate):
-    """CR-008 P0 follow-up: true only when `kept`'s pub_date is a real,
-    strictly-later date than `candidate`'s — i.e. we actually know `kept` is
-    the newer republish, not just whichever record happened to sort first.
-
-    find_duplicate_groups' "keep index 0" pick relies on sorting by pub_date
-    descending, but TED records commonly carry pub_date == "" (confirmed via
-    a live production incident: tender 563438-2026 and its genuine republish
-    547299-2026 both had pub_date == "" — same buyer, same title, deadlines
-    3 days apart, TED's real amended-deadline-republish pattern). When every
-    candidate in a group ties (most commonly because they're all blank),
-    Python's stable sort just preserves whatever order store.all_records
-    happened to return, which is unspecified per the DB, and confirmed to
-    differ ACROSS TENANTS for the exact same public TED notice pair — the
-    same notice pair resolved to a different "kept" survivor in different
-    tenants purely from row order. That's not a real "newest wins" decision,
-    it's a coin flip, and a coin flip must never decide what gets hidden.
-
-    A candidate that fails this check is never superseded — it's surfaced
-    as a same-source possible-duplicate link instead (see run.py), same as
-    an is_protected candidate.
-    """
-    kd, cd = kept.get("pub_date") or "", candidate.get("pub_date") or ""
-    return bool(kd) and bool(cd) and kd > cd
-
-
-def is_protected(record):
-    """CR-008 P0: true once a human has touched this tender — any status past
-    the pipeline's own 'new' default, or a set assigned_to/reason_category
-    (both of which only ever get set alongside a status transition via
-    store.set_status, but checked independently here in case that ever
-    changes). A protected record must never be auto-superseded by
-    find_duplicate_groups/mark_superseded (see run.py's dedup pass) — the
-    reported incident (tender 563438-2026 vanishing from the Review Queue)
-    traced back to an unconditional supersede colliding with a tender someone
-    was actively reviewing. Client instruction: "too many tenders rather than
-    too few" — a protected candidate gets surfaced as a possible duplicate
-    (store.upsert_tender_duplicate, match_type='same_source') instead of
-    hidden.
-    """
-    if (record.get("status") or "new") != "new":
-        return True
-    return bool(record.get("assigned_to")) or bool(record.get("reason_category"))
-
-
 def find_duplicate_groups(records):
     """Group records that are republished versions of the same tender.
 
-    Returns a list of groups; each group is a list of >=2 records sorted by
-    pub_date descending (index 0 is the one to keep). Already-excluded records
-    are never considered (a superseded record shouldn't itself gain followers),
-    and each record appears in at most one group.
+    Returns a list of groups; each group is a list of >=2 records. Already-
+    excluded records are never considered, and each record appears in at
+    most one group.
+
+    CR-008 P0 (simplified 2026-08-26, client direction): this used to also
+    pick which record in a group to auto-supersede (sorted by pub_date
+    descending, index 0 kept), guarded by dedup.is_protected/
+    kept_order_is_confident so an in-review tender or an unreliable
+    (commonly blank on TED) pub_date could never get silently hidden. That
+    guarded-auto-merge machinery is retired: every group's members now just
+    get linked as a same-source possible-duplicate (see run.py) — the same
+    "surface, never hide" rule CR-007 Phase C already uses for cross-portal
+    matches. A plain label the reviewer acts on is simpler than gating who's
+    safe to auto-merge, and can't silently hide a tender at all, guarded or
+    not — the standing client instruction throughout this dedup work has
+    been "too many tenders rather than too few." pub_date sort is kept only
+    to give the same-source link a stable, human-readable ordering (which
+    side reads as "kept" in the UI), not to decide anything.
     """
     candidates = [r for r in records if not r.get("exclude_reason")]
     by_buyer = defaultdict(list)
