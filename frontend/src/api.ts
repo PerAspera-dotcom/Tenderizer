@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -217,6 +217,63 @@ export async function downloadDocumentBlob(id: number): Promise<Blob> {
   const r = await fetch(`${BASE}/api/documents/${id}`, { headers });
   if (!r.ok) throw new Error(`${r.status} /api/documents/${id}`);
   return r.blob();
+}
+
+// ── Translated documents (Scout translate/attach/library) ───────────────────
+
+export function getTranslationQuota(documentCount = 1): Promise<TranslationQuota> {
+  return apiFetch<TranslationQuota>(`/api/translated-documents/quota?document_count=${documentCount}`);
+}
+
+export function uploadTranslatedDocument(file: File, targetLang = 'EN', sourceLang?: string): Promise<TranslatedDocument> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('target_lang', targetLang);
+  if (sourceLang) form.append('source_lang', sourceLang);
+  return apiFetch<TranslatedDocument>('/api/translated-documents', { method: 'POST', body: form });
+}
+
+export interface TranslatedDocumentFilters {
+  language?: string;
+  status?: string;
+  attached?: boolean;
+}
+
+export function listTranslatedDocuments(filters: TranslatedDocumentFilters = {}): Promise<TranslatedDocument[]> {
+  const params = new URLSearchParams();
+  if (filters.language) params.set('language', filters.language);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.attached !== undefined) params.set('attached', String(filters.attached));
+  const qs = params.toString();
+  return apiFetch<TranslatedDocument[]>(`/api/translated-documents${qs ? '?' + qs : ''}`);
+}
+
+export function getTranslatedDocument(id: number): Promise<TranslatedDocument> {
+  return apiFetch<TranslatedDocument>(`/api/translated-documents/${id}`);
+}
+
+export async function downloadTranslatedDocumentBlob(id: number, version: 'original' | 'translated'): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const url = `${BASE}/api/translated-documents/${id}/download?version=${version}`;
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.blob();
+}
+
+export function attachTranslatedDocument(id: number, pub_number: string): Promise<unknown> {
+  return apiFetch(`/api/translated-documents/${id}/attach/${encodeURIComponent(pub_number)}`, { method: 'POST' });
+}
+
+export function detachTranslatedDocument(id: number, pub_number: string): Promise<unknown> {
+  return apiFetch(`/api/translated-documents/${id}/detach/${encodeURIComponent(pub_number)}`, { method: 'POST' });
+}
+
+// Convenience: attaches to every active member of pub_number's same_source
+// duplicate group in one call — see api.attach_translated_document_to_group.
+export function attachTranslatedDocumentToGroup(id: number, pub_number: string): Promise<{ attached: boolean; tenders: string[] }> {
+  return apiFetch(`/api/translated-documents/${id}/attach-group/${encodeURIComponent(pub_number)}`, { method: 'POST' });
 }
 
 // ── CPV config ────────────────────────────────────────────────────────────────

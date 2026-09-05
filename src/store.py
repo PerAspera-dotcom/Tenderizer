@@ -35,7 +35,8 @@ from schema import tenant_portals, tenant_settings, tenants, tenders, translatio
 from schema import (tender_history, vault_document_history, composer_document_history,
                      composer_requirement_history, tender_relevance_overrides,
                      tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence,
-                     tender_notifications)
+                     tender_notifications, translated_documents, document_tender_links,
+                     TRANSLATED_DOCUMENTS_COLUMNS)
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -1313,6 +1314,168 @@ def get_document(conn, tenant_id, document_id):
         return None
     return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
             "size": row[3], "storage_path": row[4], "uploaded_at": row[5]}
+
+
+# ── Translated documents (Scout translate/attach/library) ───────────────────
+# Org-shared, tenant-scoped only — see schema.py's translated_documents
+# comment for why this isn't vault_documents or `documents` above.
+
+def create_translated_document(conn, tenant_id, filename, content_type, size,
+                                original_storage_key, original_content_hash, source_lang, target_lang,
+                                deepl_document_id, deepl_document_key, uploaded_by):
+    with conn.begin() as c:
+        result = c.execute(insert(translated_documents).values(
+            tenant_id=tenant_id, filename=filename, content_type=content_type or "", size=size,
+            original_storage_key=original_storage_key, original_content_hash=original_content_hash,
+            source_lang=source_lang, target_lang=target_lang, status="queued",
+            deepl_document_id=deepl_document_id, deepl_document_key=deepl_document_key,
+            uploaded_by=uploaded_by, uploaded_at=datetime.now(timezone.utc).isoformat()))
+        return result.inserted_primary_key[0]
+
+
+def update_translated_document_status(conn, tenant_id, document_id, status, translated_storage_key=None,
+                                       error_message=None, billed_characters=None, source_lang=None):
+    """None = leave untouched, same sticky convention as set_status — a poll
+    that only learns the new `status` shouldn't blank out a previously
+    recorded error_message/billed_characters.
+    """
+    values = {"status": status}
+    if translated_storage_key is not None:
+        values["translated_storage_key"] = translated_storage_key
+    if error_message is not None:
+        values["error_message"] = error_message
+    if billed_characters is not None:
+        values["billed_characters"] = billed_characters
+    if source_lang is not None:
+        values["source_lang"] = source_lang
+    with conn.begin() as c:
+        c.execute(update(translated_documents).where(
+            (translated_documents.c.tenant_id == tenant_id) & (translated_documents.c.id == document_id)
+        ).values(**values))
+
+
+def _translated_document_row(row):
+    return dict(zip(TRANSLATED_DOCUMENTS_COLUMNS, row))
+
+
+def get_translated_document(conn, tenant_id, document_id):
+    with conn.connect() as c:
+        row = c.execute(select(*[translated_documents.c[col] for col in TRANSLATED_DOCUMENTS_COLUMNS]).where(
+            (translated_documents.c.tenant_id == tenant_id) & (translated_documents.c.id == document_id)
+        )).fetchone()
+    return _translated_document_row(row) if row else None
+
+
+def get_translated_document_by_hash(conn, tenant_id, content_hash):
+    """The most recent *ready* translation of a given original file's exact
+    content — lets Composer's ingest (api._run_composer_interpret) recognize
+    "this file was already translated via Scout" and prefer the translated
+    text, without merging composer_documents and translated_documents into
+    one table. None if no such translation exists (or it hasn't finished).
+    """
+    with conn.connect() as c:
+        row = c.execute(select(*[translated_documents.c[col] for col in TRANSLATED_DOCUMENTS_COLUMNS]).where(
+            (translated_documents.c.tenant_id == tenant_id) &
+            (translated_documents.c.original_content_hash == content_hash) &
+            (translated_documents.c.status == "ready")
+        ).order_by(translated_documents.c.id.desc())).fetchone()
+    return _translated_document_row(row) if row else None
+
+
+def list_translated_documents(conn, tenant_id, language=None, status=None, attached=None):
+    """The library listing — org-shared, so no account filter. `attached`
+    (True/False/None) filters on whether the document has at least one
+    currently-active (not detached) tender link. Small per-tenant tables, so
+    this reads the tenant's full set and enriches/filters in Python rather
+    than a per-filter SQL branch.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(*[translated_documents.c[col] for col in TRANSLATED_DOCUMENTS_COLUMNS]).where(
+            translated_documents.c.tenant_id == tenant_id
+        ).order_by(translated_documents.c.id.desc())).fetchall()
+        link_rows = c.execute(select(
+            document_tender_links.c.document_id, document_tender_links.c.pub_number,
+        ).where(
+            (document_tender_links.c.tenant_id == tenant_id) & (document_tender_links.c.detached_at.is_(None))
+        )).fetchall()
+    links_by_doc = {}
+    for doc_id, pub_number in link_rows:
+        links_by_doc.setdefault(doc_id, []).append(pub_number)
+    docs = [_translated_document_row(r) for r in rows]
+    for d in docs:
+        d["attached_tenders"] = links_by_doc.get(d["id"], [])
+    if language:
+        docs = [d for d in docs if language in (d["source_lang"], d["target_lang"])]
+    if status:
+        docs = [d for d in docs if d["status"] == status]
+    if attached is not None:
+        docs = [d for d in docs if bool(d["attached_tenders"]) == attached]
+    return docs
+
+
+# ── Document <-> tender attachment (many-to-many, soft-state) ───────────────
+
+def attach_document_to_tender(conn, tenant_id, document_id, pub_number, attached_by):
+    """Same toggle convention as resolve_tender_duplicate/unresolve_tender_
+    duplicate: one row per (document_id, pub_number), re-attaching after a
+    detach clears detached_by/detached_at on that same row rather than
+    inserting a new one, so the original attach's own attribution survives.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((document_tender_links.c.tenant_id == tenant_id) &
+           (document_tender_links.c.document_id == document_id) &
+           (document_tender_links.c.pub_number == pub_number))
+    with conn.begin() as c:
+        existing = c.execute(select(document_tender_links.c.id).where(key)).fetchone()
+        if existing:
+            c.execute(update(document_tender_links).where(key).values(
+                attached_by=attached_by, attached_at=now, detached_by=None, detached_at=None))
+        else:
+            c.execute(insert(document_tender_links).values(
+                tenant_id=tenant_id, document_id=document_id, pub_number=pub_number,
+                attached_by=attached_by, attached_at=now))
+
+
+def detach_document_from_tender(conn, tenant_id, document_id, pub_number, detached_by):
+    """Raises ValueError if there's no link at all for this pair (never
+    attached) — matching resolve_tender_duplicate's "nothing to act on"
+    behavior. Detaching an already-detached link is a harmless no-op update.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((document_tender_links.c.tenant_id == tenant_id) &
+           (document_tender_links.c.document_id == document_id) &
+           (document_tender_links.c.pub_number == pub_number))
+    with conn.begin() as c:
+        existing = c.execute(select(document_tender_links.c.id).where(key)).fetchone()
+        if existing is None:
+            raise ValueError(f"No attachment between document {document_id} and {pub_number}")
+        c.execute(update(document_tender_links).where(key).values(detached_by=detached_by, detached_at=now))
+
+
+def get_active_document_links_for_tender(conn, tenant_id, pub_number):
+    """Translated-document ids currently attached (not detached) to one
+    tender — used by Composer's ingest lookup and any Review Queue display.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(document_tender_links.c.document_id).where(
+            (document_tender_links.c.tenant_id == tenant_id) &
+            (document_tender_links.c.pub_number == pub_number) &
+            (document_tender_links.c.detached_at.is_(None))
+        )).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_active_tender_links_for_document(conn, tenant_id, document_id):
+    """The reverse of the above — every pub_number one translated document
+    is currently attached to, for the library/detail view.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(document_tender_links.c.pub_number).where(
+            (document_tender_links.c.tenant_id == tenant_id) &
+            (document_tender_links.c.document_id == document_id) &
+            (document_tender_links.c.detached_at.is_(None))
+        )).fetchall()
+    return [r[0] for r in rows]
 
 
 def add_vault_document(conn, tenant_id, filename, content_type, size, storage_path):

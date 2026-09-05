@@ -385,6 +385,85 @@ translations = Table(
     Column("cached_at", Text, nullable=True),
 )
 
+# Scout document translation/attach/library (translation_command.md): a
+# buyer's tender document translated via DeepL's async *document* API
+# (src/translate_document.py) — a different surface from `translations`
+# above (that's the text-endpoint cache; this is whole-file upload -> poll ->
+# download). Deliberately NOT vault_documents: different provenance (the
+# buyer's document, not our reusable evidence), different lifecycle (tied to
+# one bid, no notion of expiry), and none of Vault's metadata-extraction/CPV/
+# quality-gate/embedding machinery applies. Also NOT folded into `documents`
+# above (CR-002 E) — that table is a plain per-tender upload with no
+# translation state, attribution, or multi-tender linkage, and adding all of
+# that to it would mean every non-translation caller of `documents` now
+# carries columns that mean nothing to it.
+#
+# Org-shared like everything else on a tender (Phase A reversal — see
+# tenders' own comment above): no account-scoping, only attribution.
+# `uploaded_by` is stamped server-side from the verified Clerk identity,
+# same CR-006 convention as tenders.dismissed_by. Storage lives in
+# S3-compatible object storage (translate_document.upload_to_s3), not the
+# local filesystem every other *_documents table above uses — these are the
+# buyer's actual bid documents, and translate_document.py's own docstring
+# explains why local disk was rejected. `original_content_hash` (sha256 of
+# the uploaded bytes) is what lets Composer's ingest (api._run_composer_
+# interpret) recognize "this exact file was already translated" and prefer
+# the translated text over the original, without merging the two upload
+# tables. `deepl_document_id`/`deepl_document_key` are DeepL's own handles
+# for resuming the poll/download lifecycle — never exposed to the frontend.
+translated_documents = Table(
+    "translated_documents", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False, server_default=""),
+    Column("size", Integer, nullable=False, server_default="0"),
+    Column("original_storage_key", Text, nullable=False),
+    Column("translated_storage_key", Text, nullable=True),
+    Column("original_content_hash", Text, nullable=False),
+    Column("source_lang", Text, nullable=True),
+    Column("target_lang", Text, nullable=False, server_default="EN"),
+    Column("status", Text, nullable=False, server_default="queued"),  # queued|translating|ready|failed
+    Column("deepl_document_id", Text, nullable=True),
+    Column("deepl_document_key", Text, nullable=True),
+    Column("error_message", Text, nullable=True),
+    Column("billed_characters", Integer, nullable=True),
+    Column("uploaded_by", Text, nullable=False, server_default=""),
+    Column("uploaded_at", Text, nullable=False, server_default=""),
+)
+TRANSLATED_DOCUMENTS_COLUMNS = [c.name for c in translated_documents.columns]
+Index("ix_translated_documents_tenant", translated_documents.c.tenant_id)
+Index("ix_translated_documents_tenant_hash", translated_documents.c.tenant_id,
+      translated_documents.c.original_content_hash)
+
+# Many-to-many attach of a translated document to one or more tenders — a
+# cross-portal duplicate group (dedup.py) can span several pub_numbers that
+# are really the same tender, and a document like a compliance matrix can
+# equally apply to several genuinely different tenders. Soft-state, same
+# toggle convention as tender_duplicates.resolve/unresolve: one row per
+# (document_id, pub_number), attach/detach flip detached_by/detached_at on
+# it rather than inserting a fresh row each cycle, so the original attach's
+# own attribution survives a later detach + re-attach. Deliberately NOT
+# derived live from duplicate_group membership — a reviewer un-resolving a
+# duplicate match later shouldn't silently change who can already see an
+# attached document; the "attach to whole group" action just writes one row
+# per member up front (see api.attach_document_to_duplicate_group).
+document_tender_links = Table(
+    "document_tender_links", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("document_id", Integer, ForeignKey("translated_documents.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("attached_by", Text, nullable=False, server_default=""),
+    Column("attached_at", Text, nullable=False, server_default=""),
+    Column("detached_by", Text, nullable=True),
+    Column("detached_at", Text, nullable=True),
+)
+Index("ix_document_tender_links_tenant_pub", document_tender_links.c.tenant_id,
+      document_tender_links.c.pub_number)
+Index("ix_document_tender_links_tenant_doc", document_tender_links.c.tenant_id,
+      document_tender_links.c.document_id)
+
 # Vault — tenant-wide technical-document library (evidence pool for Composer's
 # later retrieval; see src/vault.py). Not tender-scoped, unlike `documents`
 # above — a datasheet/certificate/drawing is uploaded once and reused across

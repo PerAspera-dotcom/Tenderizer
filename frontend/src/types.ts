@@ -232,6 +232,33 @@ export interface DocumentEntry {
   uploaded_at: string;
 }
 
+// Scout document translation/attach/library (translation_command.md) — a
+// buyer's tender document translated via DeepL's async document API.
+// Separate from DocumentEntry above (CR-002 E, per-tender, no translation
+// state) and from Vault — see schema.py's translated_documents comment.
+export interface TranslatedDocument {
+  id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+  source_lang: string | null;
+  target_lang: string;
+  status: 'queued' | 'translating' | 'ready' | 'failed';
+  error_message: string | null;
+  billed_characters: number | null;
+  uploaded_by: string;
+  uploaded_at: string;
+  attached_tenders: string[];
+}
+
+export interface TranslationQuota {
+  allowed: boolean;
+  estimated_cost: number;
+  remaining_characters: number | null;
+  remaining_documents: number | null;
+  reason: string | null;
+}
+
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
 export interface VaultDoc {

@@ -3,7 +3,7 @@
 No matching, normalisation, or fetching logic lives here.
 Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
-import sys, pathlib, json, logging, os, uuid
+import sys, pathlib, json, logging, os, uuid, hashlib, tempfile, time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -21,13 +21,13 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance, dedup
+import store, config, auth, vault, composer, relevance, dedup, translate_document
 import run as engine
 from schema import RELEVANCE_REASON_CATEGORIES
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from typing import Optional
@@ -1210,6 +1210,216 @@ def download_document(document_id: int, tenant_id: int = Depends(get_current_ten
                          media_type=doc["content_type"] or "application/octet-stream")
 
 
+# ── Translated documents (Scout translate/attach/library) ───────────────────
+# translation_command.md: a buyer's tender document translated via DeepL's
+# async document API (translate_document.py) — separate from the CR-002 E
+# `documents` slice above (no translation state there) and from Vault (see
+# schema.py's translated_documents comment for the full reasoning). Storage
+# is S3 (translate_document.upload_to_s3), not the local UPLOAD_DIR
+# convention every other document table here uses. Org-shared, like
+# everything else on a tender post-Phase-A: no account filter, only
+# attribution (uploaded_by / attach/detach's *_by).
+
+# How long a background poll loop will keep checking DeepL before giving up
+# and marking the document failed — DeepL's own guidance is "seconds for
+# small documents, 1-2 minutes for larger ones once translation has
+# started", so this is a generous multiple of that, not a tight budget.
+TRANSLATION_POLL_INTERVAL_SECONDS = 3
+TRANSLATION_POLL_TIMEOUT_SECONDS = 180
+
+
+def _public_translated_document(doc, attached_tenders=None):
+    """Strips DeepL's own document_id/document_key (never the frontend's
+    business, and no reason to leak DeepL-internal handles) and the raw S3
+    keys — same "server-local details stay server-local" convention as
+    _public_matrix.
+    """
+    return {"id": doc["id"], "filename": doc["filename"], "content_type": doc["content_type"],
+            "size": doc["size"], "source_lang": doc["source_lang"], "target_lang": doc["target_lang"],
+            "status": doc["status"], "error_message": doc["error_message"],
+            "billed_characters": doc["billed_characters"], "uploaded_by": doc["uploaded_by"],
+            "uploaded_at": doc["uploaded_at"],
+            "attached_tenders": attached_tenders if attached_tenders is not None
+            else doc.get("attached_tenders", [])}
+
+
+def _process_translation(tenant_id, document_id):
+    """Background poll -> download -> store lifecycle, kicked off right
+    after upload_translated_document's DeepL upload call returns. Sync
+    function run in BackgroundTasks' thread (same pattern as
+    _run_vault_processing/_run_composer_ingest) so the blocking sleep below
+    never stalls the event loop.
+    """
+    conn = _db()
+    doc = store.get_translated_document(conn, tenant_id, document_id)
+    if doc is None:
+        return
+    deadline = time.monotonic() + TRANSLATION_POLL_TIMEOUT_SECONDS
+    result = {"status": "queued", "error_message": None, "billed_characters": None}
+    while time.monotonic() < deadline:
+        result = translate_document.check_status(doc["deepl_document_id"], doc["deepl_document_key"])
+        if result["status"] in ("done", "error", "unavailable"):
+            break
+        store.update_translated_document_status(conn, tenant_id, document_id, result["status"] or "queued")
+        time.sleep(TRANSLATION_POLL_INTERVAL_SECONDS)
+
+    if result["status"] == "done":
+        content, err = translate_document.download_result(doc["deepl_document_id"], doc["deepl_document_key"])
+        if content is None:
+            store.update_translated_document_status(conn, tenant_id, document_id, "failed",
+                                                      error_message=err or "Could not download the translation")
+            return
+        key = translate_document.storage_key(tenant_id, document_id, "translated", doc["filename"])
+        try:
+            translate_document.upload_to_s3(key, content)
+        except translate_document.StorageNotConfigured as e:
+            store.update_translated_document_status(conn, tenant_id, document_id, "failed", error_message=str(e))
+            return
+        store.update_translated_document_status(conn, tenant_id, document_id, "ready", translated_storage_key=key,
+                                                  billed_characters=result.get("billed_characters"))
+    elif result["status"] == "error":
+        store.update_translated_document_status(
+            conn, tenant_id, document_id, "failed",
+            error_message=result.get("error_message") or "DeepL could not translate this document")
+    elif result["status"] == "unavailable":
+        store.update_translated_document_status(
+            conn, tenant_id, document_id, "failed",
+            error_message=result.get("error_message") or "DeepL was unreachable")
+    else:
+        store.update_translated_document_status(conn, tenant_id, document_id, "failed",
+                                                  error_message="Translation did not complete in time")
+
+
+@app.get("/api/translated-documents/quota")
+def get_translation_quota(document_count: int = 1, tenant_id: int = Depends(get_current_tenant_id)):
+    if document_count < 1:
+        raise HTTPException(422, "document_count must be at least 1")
+    return translate_document.check_quota(document_count)
+
+
+@app.post("/api/translated-documents")
+async def upload_translated_document(background: BackgroundTasks, file: UploadFile = File(...),
+                                      target_lang: str = Form("EN"), source_lang: Optional[str] = Form(None),
+                                      identity: Identity = Depends(get_current_identity)):
+    tenant_id = identity.tenant_id
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, "File too large")
+
+    quota = translate_document.check_quota(1)
+    if not quota["allowed"]:
+        raise HTTPException(409, quota["reason"] or "This upload would breach the DeepL quota reserve")
+
+    content_hash = hashlib.sha256(content).hexdigest()
+    original_key = translate_document.storage_key(tenant_id, content_hash, "original", file.filename)
+    try:
+        translate_document.upload_to_s3(original_key, content)
+    except translate_document.StorageNotConfigured as e:
+        raise HTTPException(503, str(e))
+
+    deepl_document_id, deepl_document_key, err = translate_document.upload_document(
+        content, file.filename or "document", target_lang, source_lang=source_lang)
+    if err:
+        status_code = 503 if "not configured" in err else 422
+        raise HTTPException(status_code, f"DeepL could not accept this document: {err}")
+
+    conn = _db()
+    doc_id = store.create_translated_document(
+        conn, tenant_id, file.filename or "document", file.content_type, len(content), original_key,
+        content_hash, source_lang, target_lang, deepl_document_id, deepl_document_key, identity.account_name)
+    background.add_task(_process_translation, tenant_id, doc_id)
+    doc = store.get_translated_document(conn, tenant_id, doc_id)
+    return _public_translated_document(doc, attached_tenders=[])
+
+
+@app.get("/api/translated-documents")
+def list_translated_documents(language: Optional[str] = None, status: Optional[str] = None,
+                               attached: Optional[bool] = None, tenant_id: int = Depends(get_current_tenant_id)):
+    docs = store.list_translated_documents(_db(), tenant_id, language=language, status=status, attached=attached)
+    return [_public_translated_document(d) for d in docs]
+
+
+@app.get("/api/translated-documents/{document_id}")
+def get_translated_document(document_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    doc = store.get_translated_document(conn, tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    return _public_translated_document(doc, store.get_active_tender_links_for_document(conn, tenant_id, document_id))
+
+
+@app.get("/api/translated-documents/{document_id}/download")
+def download_translated_document(document_id: int, version: str = "translated",
+                                  tenant_id: int = Depends(get_current_tenant_id)):
+    if version not in ("original", "translated"):
+        raise HTTPException(422, "version must be 'original' or 'translated'")
+    doc = store.get_translated_document(_db(), tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    key = doc["original_storage_key"] if version == "original" else doc["translated_storage_key"]
+    if not key:
+        raise HTTPException(404, "That version isn't available yet")
+    try:
+        content = translate_document.download_from_s3(key)
+    except translate_document.StorageNotConfigured as e:
+        raise HTTPException(503, str(e))
+    return Response(content=content, media_type=doc["content_type"] or "application/octet-stream",
+                     headers={"Content-Disposition": f'attachment; filename="{doc["filename"]}"'})
+
+
+@app.post("/api/translated-documents/{document_id}/attach/{pub_number}")
+def attach_translated_document(document_id: int, pub_number: str,
+                                identity: Identity = Depends(get_current_identity)):
+    tenant_id = identity.tenant_id
+    conn = _db()
+    if store.get_translated_document(conn, tenant_id, document_id) is None:
+        raise HTTPException(404, "Document not found")
+    if _find_tender(conn, tenant_id, pub_number) is None:
+        if store.pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):
+            raise HTTPException(403, "Forbidden")
+        raise HTTPException(404, "Tender not found")
+    store.attach_document_to_tender(conn, tenant_id, document_id, pub_number, identity.account_name)
+    return {"attached": True}
+
+
+@app.post("/api/translated-documents/{document_id}/detach/{pub_number}")
+def detach_translated_document(document_id: int, pub_number: str,
+                                identity: Identity = Depends(get_current_identity)):
+    conn = _db()
+    try:
+        store.detach_document_from_tender(conn, identity.tenant_id, document_id, pub_number,
+                                           identity.account_name)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"attached": False}
+
+
+@app.post("/api/translated-documents/{document_id}/attach-group/{pub_number}")
+def attach_translated_document_to_group(document_id: int, pub_number: str,
+                                         identity: Identity = Depends(get_current_identity)):
+    """Convenience for cross-portal duplicates: attaches to every active
+    member of pub_number's same_source duplicate_group (see
+    _attach_duplicates), one document_tender_links row per member — not a
+    single group-level attachment, so a later un-resolve doesn't silently
+    change who can already see this document (see schema.py's
+    document_tender_links comment).
+    """
+    tenant_id = identity.tenant_id
+    conn = _db()
+    if store.get_translated_document(conn, tenant_id, document_id) is None:
+        raise HTTPException(404, "Document not found")
+    records = store.all_records(conn, tenant_id)
+    if not any(r["pub_number"] == pub_number for r in records):
+        raise HTTPException(404, "Tender not found")
+    _attach_duplicates(conn, tenant_id, records)
+    by_pub = {r["pub_number"]: r for r in records}
+    group = by_pub[pub_number].get("duplicate_group")
+    members = [m["pub_number"] for m in group["members"]] if group else [pub_number]
+    for member_pub in members:
+        store.attach_document_to_tender(conn, tenant_id, document_id, member_pub, identity.account_name)
+    return {"attached": True, "tenders": members}
+
+
 # ── Vault — tenant-wide technical-document library ──────────────────────────
 # Unlike the CR-002 documents slice above, these aren't tied to a specific
 # tender: a datasheet/certificate is uploaded once and reused across tenders
@@ -1686,6 +1896,44 @@ def trigger_composer_enrich(pub_number: str, background: BackgroundTasks,
     return {"status": "started"}
 
 
+def _composer_document_pages(tenant_id, full):
+    """The page text used for requirement extraction — the translated
+    version of `full`'s file when this exact original was already
+    translated via Scout's translate-upload flow and that translation is
+    ready, otherwise the original untouched. Composer's extraction
+    previously had no language handling at all (see translate_document.py's
+    module docstring): a French SOW silently produced French-language
+    extracted requirements. Matched by content hash against
+    translated_documents rather than merging composer_documents and
+    translated_documents into one table — the two upload flows stay
+    independent; this is just a lookup.
+    """
+    path, content_type = full["storage_path"], full["content_type"]
+    with open(path, "rb") as f:
+        content_hash = hashlib.sha256(f.read()).hexdigest()
+    translation = store.get_translated_document_by_hash(_db(), tenant_id, content_hash)
+    tmp_path = None
+    if translation and translation["translated_storage_key"]:
+        try:
+            translated_bytes = translate_document.download_from_s3(translation["translated_storage_key"])
+            ext = pathlib.Path(full["filename"]).suffix or pathlib.Path(path).suffix
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(translated_bytes)
+                tmp_path = tmp.name
+            path, content_type = tmp_path, translation["content_type"] or content_type
+        except Exception:
+            logging.exception("failed to load an existing translation for a Composer document — "
+                               "falling back to the original")
+            tmp_path = None
+    try:
+        if _is_pdf_path(path):
+            return composer._pdf_pages_text(path)
+        return [vault.parse_document(path, content_type) or ""]
+    finally:
+        if tmp_path:
+            os.remove(tmp_path)
+
+
 def _run_composer_interpret(tenant_id, pub_number):
     conn = _db()
     inputs = []
@@ -1695,10 +1943,7 @@ def _run_composer_interpret(tenant_id, pub_number):
         full = store.get_composer_document(conn, tenant_id, doc["id"])
         if not full or not os.path.exists(full["storage_path"]):
             continue
-        if _is_pdf_path(full["storage_path"]):
-            pages = composer._pdf_pages_text(full["storage_path"])
-        else:
-            pages = [vault.parse_document(full["storage_path"], full["content_type"]) or ""]
+        pages = _composer_document_pages(tenant_id, full)
         if doc["role"] == "parta":
             pages = [composer.extract_parta_section("\n".join(pages))]
         inputs.append({"filename": full["filename"], "role": doc["role"], "pages": pages})
