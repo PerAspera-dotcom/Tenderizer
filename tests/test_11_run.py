@@ -8,11 +8,19 @@ Interface:
   snapshot so the suite doesn't depend on network access.
   `tenant_id` (Phase 2/3 step 3) scopes every store.py read/write.
 """
+from datetime import datetime, timezone
 from openpyxl import load_workbook
 import run
 from conftest import TEST_TENANT_ID
 
 FX_RATES = {"date": "2026-07-01", "rates": {"EUR": 1.0, "SEK": 11.23}}
+# Fixed "now" for every run_pipeline() call below, same reproducibility
+# rationale as FX_RATES (D2): raw_ted_supply's deadline (2026-08-31) must
+# stay in the future relative to whatever "now" the pipeline uses, or the
+# expired-deadline skip in run.py silently drops the record and every
+# assertion on the stored row fails — this pinning stops that from
+# depending on the real wall-clock date.
+NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)
 
 def _src_ok(raw_ted_supply):
     return {"name":"TED","fetch":lambda:[raw_ted_supply],
@@ -25,22 +33,22 @@ def _src_boom():
 def test_end_to_end_produces_report(tmp_path, raw_ted_supply):
     health = run.run_pipeline([_src_ok(raw_ted_supply)],
                               str(tmp_path/"t.db"), str(tmp_path/"r.xlsx"),
-                              tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+                              tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
     assert "ok" in health["TED"]
     assert load_workbook(str(tmp_path/"r.xlsx"))
 
 def test_failing_source_is_isolated(tmp_path, raw_ted_supply):
     health = run.run_pipeline([_src_ok(raw_ted_supply), _src_boom()],
                               str(tmp_path/"t.db"), str(tmp_path/"r.xlsx"),
-                              tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+                              tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
     assert "ok" in health["TED"]            # good source still ran
     assert "error" in health["BROKEN"]      # bad source captured, not fatal
 
 def test_run_is_idempotent(tmp_path, raw_ted_supply):
     import store
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
     conn = store.init_db(db)
     assert len(store.all_records(conn, TEST_TENANT_ID)) == 1               # no duplicate
 
@@ -54,7 +62,7 @@ def test_excluded_notice_is_stored_but_not_reported(tmp_path, raw_ted_supply):
     raw["classification-cpv"] = ["44211100"]
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     stored = store.all_records(conn, TEST_TENANT_ID)
@@ -73,7 +81,7 @@ def test_below_value_floor_is_excluded_after_fx_conversion(tmp_path, raw_ted_sup
     raw["estimated-value-cur-proc"] = "SEK"
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     stored = store.all_records(conn, TEST_TENANT_ID)[0]
@@ -88,7 +96,7 @@ def test_above_value_floor_is_kept(tmp_path, raw_ted_supply):
     raw["estimated-value-cur-proc"] = "SEK"
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     assert store.all_records(conn, TEST_TENANT_ID)[0]["exclude_reason"] == ""
@@ -114,7 +122,7 @@ def test_republished_notices_link_as_possible_duplicate_via_full_pipeline(tmp_pa
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
@@ -146,7 +154,7 @@ def test_reviewed_tender_still_surfaces_as_duplicate_not_hidden(tmp_path, raw_te
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src_a = {"name": "TED", "fetch": lambda: [raw_a], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src_a], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src_a], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     store.set_status(conn, TEST_TENANT_ID, "563438-2026", "shortlisted")
@@ -156,7 +164,7 @@ def test_reviewed_tender_still_surfaces_as_duplicate_not_hidden(tmp_path, raw_te
     raw_b["notice-title"] = {"eng": "Lithuania - Supply of camp beds"}
     raw_b["publication-date"] = "20260615"   # next sync's near-duplicate
     src_b = {"name": "TED", "fetch": lambda: [raw_b], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src_b], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src_b], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
     assert records["563438-2026"]["exclude_reason"] == ""       # never hidden
@@ -191,7 +199,7 @@ def test_blank_pub_date_pair_is_not_merged_but_links_as_duplicate(tmp_path, raw_
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
@@ -218,7 +226,7 @@ def test_genuinely_different_tenders_same_buyer_are_not_merged(tmp_path, raw_ted
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_a, raw_b],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     records = {r["pub_number"]: r for r in store.all_records(conn, TEST_TENANT_ID)}
@@ -239,7 +247,7 @@ def test_non_english_notice_is_translated(tmp_path, raw_ted_supply, monkeypatch)
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     import store
     stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
@@ -262,7 +270,7 @@ def test_english_title_but_untranslated_description_still_gets_translated(tmp_pa
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     import store
     stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
@@ -277,7 +285,7 @@ def test_english_notice_is_never_sent_to_translate(tmp_path, raw_ted_supply, mon
     monkeypatch.setattr(translate, "translate_to_english", boom)
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     import store
     stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
@@ -299,7 +307,7 @@ def test_excluded_notice_is_never_translated(tmp_path, raw_ted_supply, monkeypat
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     import store
     stored = store.all_records(store.init_db(db), TEST_TENANT_ID)[0]
@@ -317,7 +325,7 @@ def test_translation_failure_does_not_break_the_pipeline(tmp_path, raw_ted_suppl
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    health = run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)   # must not raise
+    health = run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)   # must not raise
 
     assert "ok" in health["TED"]
     import store
@@ -335,8 +343,8 @@ def test_two_tenants_running_the_same_source_stay_isolated(tmp_path, raw_ted_sup
     db = str(tmp_path/"t.db"); out1 = str(tmp_path/"r1.xlsx"); out2 = str(tmp_path/"r2.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
 
-    run.run_pipeline([src], db, out1, tenant_id=1, fx_rates=FX_RATES)
-    run.run_pipeline([src], db, out2, tenant_id=2, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out1, tenant_id=1, fx_rates=FX_RATES, now=NOW)
+    run.run_pipeline([src], db, out2, tenant_id=2, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     assert len(store.all_records(conn, 1)) == 1
@@ -354,7 +362,7 @@ def test_tenant_cpv_customization_affects_matching(tmp_path, raw_ted_supply):
     store.ensure_tenant(conn, TEST_TENANT_ID)
     store.set_tenant_cpv(conn, TEST_TENANT_ID, [])
     src = {"name": "TED", "fetch": lambda: [raw_ted_supply], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     stored = store.all_records(conn, TEST_TENANT_ID)[0]
     assert stored["match_source"] == "keyword"
@@ -392,7 +400,7 @@ def test_matched_total_is_scoped_to_this_runs_own_fetch(tmp_path, raw_ted_supply
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_ted_supply, non_matching],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     meta = _last_run_json(tmp_path)
     assert meta["notices_scanned"] == 2
@@ -411,7 +419,7 @@ def test_empty_deadline_notice_is_tagged_past_tender_with_award_info(tmp_path, r
 
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     stored = store.all_records(conn, TEST_TENANT_ID)[0]
@@ -424,7 +432,7 @@ def test_empty_deadline_notice_is_tagged_past_tender_with_award_info(tmp_path, r
 def test_active_notice_is_tagged_tender_with_no_award_info(tmp_path, raw_ted_supply):
     import store
     db = str(tmp_path/"t.db"); out = str(tmp_path/"r.xlsx")
-    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     stored = store.all_records(conn, TEST_TENANT_ID)[0]
@@ -451,7 +459,7 @@ def test_past_tender_with_single_lot_structured_fields_gets_award_detail(tmp_pat
 
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     stored = store.all_records(conn, TEST_TENANT_ID)[0]
@@ -470,7 +478,7 @@ def test_past_tender_without_lot_identifier_has_no_award_detail(tmp_path, raw_te
 
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw], "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     conn = store.init_db(db)
     stored = store.all_records(conn, TEST_TENANT_ID)[0]
@@ -484,10 +492,10 @@ def test_matched_total_does_not_accumulate_across_runs(tmp_path, raw_ted_supply)
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
     src = {"name": "TED", "fetch": lambda: [raw_ted_supply],
            "normalize": __import__("normalize").normalize_ted}
-    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     empty_src = {"name": "TED", "fetch": lambda: [], "normalize": src["normalize"]}
-    run.run_pipeline([empty_src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    run.run_pipeline([empty_src], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
 
     meta = _last_run_json(tmp_path)
     assert meta["notices_scanned"] == 0

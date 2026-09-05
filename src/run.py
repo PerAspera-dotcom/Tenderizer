@@ -23,7 +23,7 @@ import alerts
 from schema import DEFAULT_TENANT_ID
 from report import build_report
 import json, os
-from datetime import datetime, date, timezone
+from datetime import datetime, timezone
 
 SOURCE_FAILURE_ALERT_THRESHOLD = int(os.getenv("SOURCE_FAILURE_ALERT_THRESHOLD", "3"))
 
@@ -82,7 +82,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
             for raw in raws:
                 rec = _tag(normalize_fn(raw), full_keywords, cpv_set)
                 dl = (rec.get("deadline") or "")[:10]
-                if dl and dl < date.today().isoformat():
+                if dl and dl < run_date:
                     continue  # expired deadline — skip ingest
                 rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
                     rec.get("value"), rec.get("value_currency"), fx_rates)
