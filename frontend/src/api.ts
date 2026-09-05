@@ -65,6 +65,19 @@ export function patchTender(
   });
 }
 
+// Duplicate-resolution follow-up: "Confirm as not a duplicate" / its undo.
+// "Confirm as duplicate" needs no counterpart here — it reuses patchTender
+// above (status='dismissed'/'dismissed_final', reason_category='duplicate').
+export function resolveDuplicate(pub_number: string, other_pub_number: string): Promise<unknown> {
+  return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}/duplicates/${encodeURIComponent(other_pub_number)}/resolve`,
+    { method: 'POST' });
+}
+
+export function unresolveDuplicate(pub_number: string, other_pub_number: string): Promise<unknown> {
+  return apiFetch(`/api/tenders/${encodeURIComponent(pub_number)}/duplicates/${encodeURIComponent(other_pub_number)}/unresolve`,
+    { method: 'POST' });
+}
+
 // CR-007 Phase B (B3): a reviewer's correction to a computed relevance score
 // — see ReviewQueue.tsx's relevance block.
 export function patchTenderRelevance(pub_number: string, score: number, note?: string): Promise<unknown> {

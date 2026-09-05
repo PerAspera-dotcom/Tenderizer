@@ -46,6 +46,10 @@ export interface Tender {
   // CR-007 Phase C: cross-portal duplicates (e.g. the same tender also on
   // BOAMP) — always present, empty when none, see api._attach_duplicates.
   duplicates: TenderDuplicate[];
+  // Duplicate-resolution follow-up: null unless this tender is in an
+  // unresolved same_source group — see api._attach_duplicates /
+  // dedup.group_same_source_duplicates.
+  duplicate_group: DuplicateGroup | null;
   // CR-007 Phase D (D1): other accounts currently viewing this tender —
   // always present, empty when none, never includes yourself. See
   // api._attach_presence.
@@ -79,6 +83,30 @@ export interface TenderDuplicate {
   url: string;
   match_type: 'reference' | 'similarity' | 'same_source';
   similarity: number | null;
+  // Duplicate-resolution follow-up: set once a reviewer confirms this pair
+  // is NOT actually a duplicate — see api.resolve_duplicate/unresolve_duplicate.
+  // Pair-level (both sides carry the same values for the same edge).
+  resolved_by: string | null;
+  resolved_at: string | null;
+}
+
+// Duplicate-resolution follow-up: reconstructed same_source group (the
+// pairwise tender_duplicates rows collapsed into one shared view of the
+// whole group) — see dedup.group_same_source_duplicates on the backend.
+export interface DuplicateGroupMember {
+  pub_number: string;
+  source: string;
+  url: string;
+  // 1-based ascending-chronological position, or null when order_confident
+  // is false (a tie somewhere in the group — never guessed).
+  rank: number | null;
+}
+
+export interface DuplicateGroup {
+  size: number;
+  order_confident: boolean;
+  canonical_pub_number: string;
+  members: DuplicateGroupMember[];
 }
 
 export interface DedupSettings {

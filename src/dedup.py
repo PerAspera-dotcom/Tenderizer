@@ -177,3 +177,153 @@ def find_cross_portal_duplicates(records, similarity_threshold=DESCRIPTION_SIMIL
                     _add(a["pub_number"], b["pub_number"], "similarity", round(sim, 4))
 
     return matches
+
+
+# ── Duplicate-resolution follow-up (2026-08-26) ──────────────────────────────
+# find_duplicate_groups above is the detection pass (runs once per pipeline
+# run, decides WHICH records are same_source matches). Everything below is
+# read-side: given the tender_duplicates rows detection already wrote,
+# reconstruct group membership/ordering for display and for the Review
+# Queue's "unique only" filter. Never runs as part of the pipeline, never
+# writes anything — pure functions over already-detected pairs.
+
+
+def _order_key(rec):
+    """(basis, value) for chronological ordering — pub_date when it's
+    actually populated, first_seen otherwise. TED commonly ships a blank
+    pub_date (confirmed live during the CR-008 P0 investigation); first_seen
+    is always populated (store.upsert stamps it at insert time for every
+    record, both sources) but means "when our pipeline first saw it," not
+    "when it was published" — hence the two are never mixed across sides of
+    a comparison (see _group_ordering).
+    """
+    pub_date = (rec.get("pub_date") or "")[:10]
+    if pub_date:
+        return ("pub_date", pub_date)
+    first_seen = (rec.get("first_seen") or "")[:10]
+    if first_seen:
+        return ("first_seen", first_seen)
+    return (None, None)
+
+
+def _group_ordering(members):
+    """Ascending-chronological [(key, member), ...] for a group, or None if
+    order can't be honestly established.
+
+    Deliberately all-or-nothing: if any two members tie on their resolved
+    date value, the whole group's order is reported unknown rather than
+    ranking the unambiguous members and leaving the tied ones unranked — a
+    partial ranking reads as more confident than the data supports. Members
+    with no resolvable date at all (shouldn't happen; first_seen is always
+    populated) also force "unknown" rather than being silently dropped from
+    the ranking.
+    """
+    keyed = [(_order_key(m), m) for m in members]
+    if any(k == (None, None) for k, _ in keyed):
+        return None
+    # All members must resolve via the SAME basis — comparing one member's
+    # real publish date against another's mere discovery date isn't a
+    # meaningful comparison, even though both are non-null.
+    if len({k[0] for k, _ in keyed}) > 1:
+        return None
+    values = [k[1] for k, _ in keyed]
+    if len(set(values)) < len(values):
+        return None
+    return sorted(keyed, key=lambda km: (km[0][1], km[1]["pub_number"]))
+
+
+def _pick_canonical(members):
+    """The representative record for a group, for the Review Queue's
+    "unique only" filter. Cascade, most-specific signal first:
+
+      1. If only some members carry a deadline, restrict to those — a
+         tender with no deadline is close to unusable in this queue no
+         matter how it otherwise compares.
+      2. Newest by _group_ordering (mirrors the retired dedup.
+         find_duplicate_groups "kept" convention: a republish is usually a
+         deadline amendment/correction, so the newest version is the one a
+         reviewer should act on, not the historical original).
+      3. If order is unknown and only some members have already been
+         triaged (status != 'new'), restrict to those — preserves a
+         reviewer's existing judgment over an arbitrary pick.
+      4. Deterministic tie-break: lowest pub_number. Never row order — a
+         tenant-dependent, non-deterministic "kept" pick is the exact bug
+         CR-008 P0 was filed over.
+
+    Returns a pub_number, not a record, so callers don't need to keep the
+    member dicts around afterward.
+    """
+    pool = members
+    with_deadline = [m for m in pool if (m.get("deadline") or "").strip()]
+    if with_deadline and len(with_deadline) < len(pool):
+        pool = with_deadline
+    if len(pool) > 1:
+        ordering = _group_ordering(pool)
+        if ordering:
+            return ordering[-1][1]["pub_number"]
+        touched = [m for m in pool if (m.get("status") or "new") != "new"]
+        if touched and len(touched) < len(pool):
+            pool = touched
+    return sorted(pool, key=lambda m: m["pub_number"])[0]["pub_number"]
+
+
+def group_same_source_duplicates(records_by_pub, edges):
+    """Reconstructs same_source group membership from pairwise edges.
+
+    `records_by_pub`: {pub_number: record} for the tenant's full record set
+    (records need pub_number/source/url/pub_date/first_seen/deadline/status).
+    `edges`: iterable of (pub_number_a, pub_number_b) — unresolved same_source
+    pairs only (a caller should filter out resolved_by-set rows before
+    calling; this function has no notion of "resolved").
+
+    run.py writes a star topology (the kept record paired with each
+    candidate, never candidate-to-candidate — see find_duplicate_groups'
+    docstring), so a >2-member group is only recoverable by walking the
+    edge graph, not by reading any single row. Returns {pub_number: group}
+    for every pub_number that appears in >=1 edge; group is a dict shared by
+    reference across every member of one connected component:
+        {"size": int, "order_confident": bool,
+         "canonical_pub_number": str,
+         "members": [{"pub_number", "source", "url", "rank"}, ...]}
+    `rank` is 1-based ascending-chronological position, or None when
+    order_confident is False. `members` is sorted by rank (ranked members
+    first), falling back to pub_number among unranked ones.
+    """
+    adjacency = defaultdict(set)
+    for a, b in edges:
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+
+    result = {}
+    visited = set()
+    for start in adjacency:
+        if start in visited:
+            continue
+        component, stack = set(), [start]
+        while stack:
+            node = stack.pop()
+            if node in component:
+                continue
+            component.add(node)
+            stack.extend(adjacency[node] - component)
+        visited |= component
+
+        members = [records_by_pub[p] for p in component if p in records_by_pub]
+        if len(members) < 2:
+            continue  # counterpart missing from this record set (e.g. another tenant's slice)
+
+        ordering = _group_ordering(members)
+        rank_by_pub = {m["pub_number"]: i for i, (_, m) in enumerate(ordering, start=1)} if ordering else {}
+        group = {
+            "size": len(members),
+            "order_confident": ordering is not None,
+            "canonical_pub_number": _pick_canonical(members),
+            "members": sorted(
+                [{"pub_number": m["pub_number"], "source": m["source"], "url": m.get("url", ""),
+                  "rank": rank_by_pub.get(m["pub_number"])} for m in members],
+                key=lambda x: (x["rank"] if x["rank"] is not None else 999, x["pub_number"])),
+        }
+        for p in component:
+            if p in records_by_pub:
+                result[p] = group
+    return result

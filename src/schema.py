@@ -248,14 +248,27 @@ tender_relevance_overrides = Table(
 # let the reviewer act." One row per detected pair; pub_number_a/b store the
 # pair in a stable (sorted) order so the same pair is never inserted twice
 # from either detection direction.
+# Duplicate-resolution follow-up (2026-08-26): a reviewer's verdict that a
+# detected pair is NOT actually the same tender. Pair-level (not per-side) —
+# the match is symmetric evidence, so one side staying flagged while the
+# other clears would be an incoherent state; see store.resolve_tender_
+# duplicate. Soft state, same "auditable, never deleted" convention as
+# tenders.exclude_reason='superseded' — a resolved row stays in place (so the
+# reversal in store.unresolve_tender_duplicate has something to reverse) and
+# api._attach_duplicates stops counting it toward an active same_source group
+# once resolved_by is set. No reviewer action resolves a 'reference'/
+# 'similarity' cross-portal match this way today — only same_source, per the
+# CR that asked for this.
 tender_duplicates = Table(
     "tender_duplicates", metadata,
     Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
     Column("pub_number_a", Text, nullable=False),
     Column("pub_number_b", Text, nullable=False),
-    Column("match_type", Text, nullable=False),  # 'reference' | 'similarity'
+    Column("match_type", Text, nullable=False),  # 'reference' | 'similarity' | 'same_source'
     Column("similarity", Float, nullable=True),  # only set for 'similarity' matches
     Column("detected_at", Text, nullable=False, server_default=""),
+    Column("resolved_by", Text, nullable=True),
+    Column("resolved_at", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "pub_number_a", "pub_number_b"),
 )
 Index("ix_tender_duplicates_tenant_pub_b", tender_duplicates.c.tenant_id, tender_duplicates.c.pub_number_b)

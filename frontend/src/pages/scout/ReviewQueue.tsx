@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, type OrgMember } from '../../api';
-import type { Tender } from '../../types';
+import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, resolveDuplicate, unresolveDuplicate, type OrgMember } from '../../api';
+import type { Tender, TenderDuplicate } from '../../types';
 import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity } from '../../utils';
 import { useSearchParams } from '../../router';
 import MatchChip from '../../components/MatchChip';
@@ -15,6 +15,20 @@ type SortBy = 'pub_date' | 'deadline' | 'status';
 // is gone, superseded by the more specific needs_review/shortlisted/dismissed
 // (existing 'reviewed' rows still render correctly, just via 'all').
 type StatusFilter = 'all' | 'new' | 'shortlisted' | 'needs_review';
+
+// Duplicate-resolution follow-up: "unique" collapses each active same_source
+// group to its canonical member (api._attach_duplicates/dedup.
+// group_same_source_duplicates picks it — never row order). Defaults to
+// 'all' — the client's standing instruction throughout the dedup work has
+// been "too many tenders rather than too few," so a collapsed view is an
+// opt-in declutter, never the default. Collapsing only ever hides a row
+// from *this list*; the hidden member's own group box still lists it with a
+// one-click "View" (see viewCounterpart), so nothing becomes unreachable.
+type DuplicateFilter = 'all' | 'unique';
+
+function activeSameSourceDuplicates(t: Tender): TenderDuplicate[] {
+  return t.duplicates.filter(d => d.match_type === 'same_source' && !d.resolved_by);
+}
 
 // CR-008 W4: undecided-first, then decided-positive, then decided-negative —
 // a more useful grouping than alphabetical when sorting "by decision".
@@ -181,6 +195,8 @@ export default function ReviewQueue() {
   const [assignedTo, setAssignedTo] = useState('');
   const [assigneeManual, setAssigneeManual] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [duplicateFilter, setDuplicateFilter] = useState<DuplicateFilter>('all');
+  const [resolvingDuplicate, setResolvingDuplicate] = useState(false);
 
   function closeNoteAction() {
     setNoteAction(null);
@@ -245,6 +261,62 @@ export default function ReviewQueue() {
     setReasonCategory(isFinal ? (selected?.dismissal_reason_category ?? '') : '');
   }
 
+  // Duplicate-resolution follow-up: "Confirm as duplicate" reuses the exact
+  // same two-stage dismiss flow as startDismiss above (no shortcut around
+  // the soft->final progression) — it only differs in pre-filling
+  // reason_category ('duplicate', already a valid RELEVANCE_REASON_CATEGORIES
+  // value, previously unused by anything automated) and a starting note
+  // naming the counterpart(s). Once stage 1 is reached, the existing
+  // "Dismiss permanently" button below carries the same category/note
+  // forward into stage 2 — no separate stage-2 entry point needed here.
+  function startDismissAsDuplicate() {
+    const isFinal = selected?.status === 'dismissed';
+    const counterparts = selected ? activeSameSourceDuplicates(selected).map(d => d.pub_number) : [];
+    setNoteAction({
+      status: isFinal ? 'dismissed_final' : 'dismissed',
+      label: isFinal ? 'Confirm final dismiss' : 'Dismiss as duplicate',
+      requireCategory: true,
+      allowAssignee: false,
+    });
+    setNoteText(isFinal ? (selected?.dismissal_reason ?? '')
+      : `Duplicate of ${counterparts.join(', ') || 'a related tender already in review'}`);
+    setReasonCategory('duplicate');
+  }
+
+  // Duplicate-resolution follow-up: "Confirm as not a duplicate" / its undo.
+  // Pair-level (see store.resolve_tender_duplicate's docstring) — resolving
+  // clears the badge on BOTH ends of this one edge, not just the notice
+  // currently open, since the match is symmetric evidence for the pair, not
+  // a one-sided claim.
+  async function resolveDuplicatePair(otherPubNumber: string) {
+    if (!selected || resolvingDuplicate) return;
+    setResolvingDuplicate(true);
+    try {
+      await resolveDuplicate(selected.pub_number, otherPubNumber);
+      load();
+    } finally {
+      setResolvingDuplicate(false);
+    }
+  }
+
+  async function undoResolveDuplicatePair(otherPubNumber: string) {
+    if (!selected || resolvingDuplicate) return;
+    setResolvingDuplicate(true);
+    try {
+      await unresolveDuplicate(selected.pub_number, otherPubNumber);
+      load();
+    } finally {
+      setResolvingDuplicate(false);
+    }
+  }
+
+  // Duplicate-resolution follow-up: the ordering cue's one-click way to view
+  // a group counterpart — jumps selection within the already-loaded list.
+  function viewCounterpart(pubNumber: string) {
+    const t = tenders.find(x => x.pub_number === pubNumber);
+    if (t) selectTender(t);
+  }
+
   function startNeedsReview() {
     setNoteAction({ status: 'needs_review', label: 'Needs further review', requireCategory: false, allowAssignee: true });
     setNoteText('');
@@ -295,9 +367,19 @@ export default function ReviewQueue() {
   // CR-008 W4: distinct countries actually present, alphabetical — the
   // region filter's option list.
   const regions = Array.from(new Set(tenders.map(t => t.country).filter(Boolean))).sort();
+  // Duplicate-resolution follow-up: how many rows "unique only" would
+  // collapse away, for the pill's own count — computed against the full
+  // `tenders` set so it doesn't shift as status/region filters change.
+  const collapsedDuplicateCount = tenders.filter(
+    t => t.duplicate_group && t.duplicate_group.canonical_pub_number !== t.pub_number
+  ).length;
   const visibleTenders = tenders
     .filter(t => statusFilter === 'all' || t.status === statusFilter)
-    .filter(t => !regionFilter || t.country === regionFilter);
+    .filter(t => !regionFilter || t.country === regionFilter)
+    // "unique" keeps every tender with no active group, plus exactly the
+    // canonical member of each group that has one — never drops a tender
+    // that isn't part of a group, and never drops more than one per group.
+    .filter(t => duplicateFilter === 'all' || !t.duplicate_group || t.duplicate_group.canonical_pub_number === t.pub_number);
 
   if (loading) return <div className="loading">Loading…</div>;
   if (error) return <div className="error">{error}</div>;
@@ -346,6 +428,19 @@ export default function ReviewQueue() {
           <option value="">All regions</option>
           {regions.map(r => <option key={r} value={r}>{countryFlag(r)} {r}</option>)}
         </select>
+        {/* Duplicate-resolution follow-up: opt-in declutter, defaults to
+            'all' — collapsing is never the default (see DuplicateFilter's
+            comment). Only shown once there's something it would collapse. */}
+        {collapsedDuplicateCount > 0 && (
+          <button
+            className="pill pill-grey"
+            title="Collapses each possible-duplicate group to its one representative notice. Nothing is hidden permanently — every group's other members are still reachable from that notice's duplicate panel."
+            style={{ cursor: 'pointer', border: duplicateFilter === 'unique' ? '1px solid #60a5fa' : undefined }}
+            onClick={() => setDuplicateFilter(f => f === 'unique' ? 'all' : 'unique')}
+          >
+            🔗 Unique only{duplicateFilter === 'unique' ? '' : ` (−${collapsedDuplicateCount})`}
+          </button>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#8892a4', fontSize: 12 }}>Sort by</span>
           <select
@@ -432,10 +527,12 @@ export default function ReviewQueue() {
                         {t.viewers.length > 0 && (
                           <span title={`${t.viewers.map(v => v.account_name).join(', ')} currently working this`} style={{ fontSize: 11 }}>👀</span>
                         )}
-                        {t.duplicates.length > 0 && (
-                          <span title={t.duplicates.some(d => d.match_type === 'same_source')
-                            ? 'Possible duplicate of a tender already in review'
-                            : `Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
+                        {t.duplicate_group ? (
+                          <span title={`Possible duplicate group — ${t.duplicate_group.size} notices${t.pub_number === t.duplicate_group.canonical_pub_number ? ' (this is the representative notice)' : ''}`} style={{ fontSize: 11 }}>
+                            🔗 {t.duplicate_group.size}
+                          </span>
+                        ) : t.duplicates.length > 0 && (
+                          <span title={`Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
                         )}
                         {t.status === 'needs_review' && t.assigned_to && (
                           <span title={`Assigned to ${t.assigned_to}`} style={{ fontSize: 11 }}>✉</span>
@@ -506,22 +603,84 @@ export default function ReviewQueue() {
                 {/* CR-007 Phase C: cross-portal duplicate — surfaced on both
                     records (never hides either), with a direct link to the
                     counterpart's own portal (C2, falls out of storing `url`
-                    on each side already — see api._attach_duplicates). */}
-                {selected.duplicates.length > 0 && (
+                    on each side already — see api._attach_duplicates).
+                    same_source gets its own box below instead — it has
+                    ordering/group/resolve concepts this one doesn't. */}
+                {selected.duplicates.some(d => d.match_type !== 'same_source') && (
                   <div style={{ marginBottom: 16, padding: 10, background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                     <span style={{ color: '#60a5fa', fontSize: 12 }}>🔗</span>
-                    {selected.duplicates.map(d => (
+                    {selected.duplicates.filter(d => d.match_type !== 'same_source').map(d => (
                       <span key={d.pub_number} style={{ fontSize: 12, color: '#c8d0de' }}>
-                        {d.match_type === 'same_source' ? (
-                          <>Possible duplicate — similar tender already in review ({d.pub_number})</>
-                        ) : (
-                          <>Also listed on <strong>{d.source}</strong>
-                          {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}</>
-                        )}
+                        Also listed on <strong>{d.source}</strong>
+                        {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}
                         {d.url && (
                           <> · <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>View ↗</a></>
                         )}
                       </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Duplicate-resolution follow-up: same_source group — the
+                    ordering cue (which notice is earlier/later, group size,
+                    one-click view of a counterpart) plus per-pair resolve/
+                    undo. Renders even once every edge is resolved (no active
+                    duplicate_group left), so a resolved verdict + its Undo
+                    stays visible/reversible rather than disappearing. */}
+                {(selected.duplicate_group || selected.duplicates.some(d => d.match_type === 'same_source')) && (
+                  <div style={{ marginBottom: 16, padding: 10, background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8 }}>
+                    {selected.duplicate_group && (
+                      <>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#f87171', marginBottom: 8 }}>
+                          🔗 Possible duplicate group — {selected.duplicate_group.size} notices
+                          {!selected.duplicate_group.order_confident && ' · order unknown'}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {selected.duplicate_group.members.map(m => {
+                            const group = selected.duplicate_group!;
+                            const isSelf = m.pub_number === selected.pub_number;
+                            const isCanonical = m.pub_number === group.canonical_pub_number;
+                            const orderLabel = !group.order_confident || m.rank == null ? 'order unknown'
+                              : m.rank === 1 ? 'earliest' : m.rank === group.size ? 'most recent' : `#${m.rank} of ${group.size}`;
+                            const directEdge = activeSameSourceDuplicates(selected).find(d => d.pub_number === m.pub_number);
+                            return (
+                              <div key={m.pub_number} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, flexWrap: 'wrap' }}>
+                                <span style={{ color: isSelf ? '#e2e8f0' : '#c8d0de', fontWeight: isSelf ? 600 : 400 }}>
+                                  {isSelf ? 'This notice' : `${m.pub_number} (${m.source})`} — {orderLabel}
+                                  {isCanonical && ' · representative'}
+                                </span>
+                                {!isSelf && (
+                                  <>
+                                    <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 6px' }}
+                                            onClick={() => viewCounterpart(m.pub_number)}>
+                                      View
+                                    </button>
+                                    {directEdge && (
+                                      <button className="btn btn-ghost" disabled={resolvingDuplicate}
+                                              style={{ fontSize: 11, padding: '2px 6px', color: '#60a5fa' }}
+                                              onClick={() => resolveDuplicatePair(m.pub_number)}>
+                                        Not a duplicate
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                    {selected.duplicates.filter(d => d.match_type === 'same_source' && d.resolved_by).map(d => (
+                      <div key={d.pub_number} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#8892a4', marginTop: selected.duplicate_group ? 8 : 0, flexWrap: 'wrap' }}>
+                        <span>
+                          Confirmed not a duplicate of {d.pub_number} — by {d.resolved_by}
+                          {d.resolved_at && ` · ${formatDate(d.resolved_at)}`}
+                        </span>
+                        <button className="btn btn-ghost" disabled={resolvingDuplicate} style={{ fontSize: 11, padding: '2px 6px' }}
+                                onClick={() => undoResolveDuplicatePair(d.pub_number)}>
+                          Undo
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -765,6 +924,21 @@ export default function ReviewQueue() {
                       style={{ background: '#f87171', color: '#0f1623', border: '1px solid rgba(248,113,113,0.3)', fontWeight: 600 }}
                     >
                       Dismiss permanently
+                    </button>
+                  )}
+                  {/* Duplicate-resolution follow-up: same two-stage flow as
+                      "Dismiss" above (see startDismissAsDuplicate) — only
+                      offered for stage 1, since "Dismiss permanently" above
+                      already carries a stage-1 duplicate dismissal's
+                      category/note into stage 2. */}
+                  {selected.duplicate_group && selected.status !== 'dismissed' && selected.status !== 'dismissed_final' && (
+                    <button
+                      className="btn"
+                      disabled={patching}
+                      onClick={startDismissAsDuplicate}
+                      style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.3)', fontWeight: 600 }}
+                    >
+                      Confirm as duplicate
                     </button>
                   )}
                   {selected.status !== 'new' && (

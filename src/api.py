@@ -21,7 +21,7 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance
+import store, config, auth, vault, composer, relevance, dedup
 import run as engine
 from schema import RELEVANCE_REASON_CATEGORIES
 
@@ -335,10 +335,35 @@ def _attach_duplicates(conn, tenant_id, records):
     set (not a filtered/paginated slice) so both sides of a pair resolve
     even if one side would otherwise be filtered out of this particular
     response.
+
+    Duplicate-resolution follow-up: also attaches `duplicate_group` (None,
+    or a dedup.group_same_source_duplicates group dict — see its docstring)
+    to every tender in an *unresolved* same_source group, so the frontend can
+    render the ordering cue and the Review Queue's "unique only" filter
+    without a second round trip. Only same_source groups it — a resolved
+    edge (a reviewer already confirmed "not a duplicate") no longer counts
+    toward group membership, though the edge itself still shows in
+    `duplicates` (with resolved_by/resolved_at) so the verdict stays visible
+    and reversible. Cross-portal 'reference'/'similarity' matches are
+    untouched by this — they're not what CR-008's "possible duplicate" label
+    or this follow-up are about.
+
+    A 'dismissed_final' member (the terminal dismiss stage — the one that
+    actually leaves the Review Queue, see ReviewQueue.tsx/list_tenders'
+    identical status check) is also excluded from the *active* group: it's
+    already been resolved one way or another (most commonly via "Confirm as
+    duplicate", CR-006's dismiss flow with reason_category='duplicate'), so
+    it should stop being counted toward group size or picked as canonical.
+    Its own `duplicates` entry is untouched, so the pairing still shows on
+    the dismissed record itself (Dismissed tab). A soft-dismissed
+    ('dismissed', stage 1 — still an active, visible queue item per CR-007
+    Phase B) still counts; only the terminal stage is excluded.
     """
     by_pub = {r["pub_number"]: r for r in records}
     for r in records:
         r["duplicates"] = []
+        r["duplicate_group"] = None
+    same_source_edges = []
     for d in store.get_tender_duplicates_for_tenant(conn, tenant_id):
         rec_a, rec_b = by_pub.get(d["pub_number_a"]), by_pub.get(d["pub_number_b"])
         if rec_a is None or rec_b is None:
@@ -349,10 +374,17 @@ def _attach_duplicates(conn, tenant_id, records):
         # link") needs no separate plumbing once this is included here.
         rec_a["duplicates"].append({"pub_number": rec_b["pub_number"], "source": rec_b["source"],
                                      "url": rec_b["url"], "match_type": d["match_type"],
-                                     "similarity": d["similarity"]})
+                                     "similarity": d["similarity"],
+                                     "resolved_by": d["resolved_by"], "resolved_at": d["resolved_at"]})
         rec_b["duplicates"].append({"pub_number": rec_a["pub_number"], "source": rec_a["source"],
                                      "url": rec_a["url"], "match_type": d["match_type"],
-                                     "similarity": d["similarity"]})
+                                     "similarity": d["similarity"],
+                                     "resolved_by": d["resolved_by"], "resolved_at": d["resolved_at"]})
+        if (d["match_type"] == "same_source" and not d["resolved_by"]
+                and rec_a.get("status") != "dismissed_final" and rec_b.get("status") != "dismissed_final"):
+            same_source_edges.append((d["pub_number_a"], d["pub_number_b"]))
+    for pub_number, group in dedup.group_same_source_duplicates(by_pub, same_source_edges).items():
+        by_pub[pub_number]["duplicate_group"] = group
     return records
 
 
@@ -602,6 +634,38 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
             background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
                                  assigned_to, body.note.strip(), identity.account_name)
     return {"pub_number": pub_number, "status": body.status}
+
+
+# Duplicate-resolution follow-up: "Confirm as duplicate" reuses patch_tender
+# above (status='dismissed'/'dismissed_final', reason_category='duplicate')
+# rather than a parallel path — no new endpoint needed for that half. These
+# two cover the other reviewer action: "Confirm as not a duplicate" /
+# its reversal. Pair-level, not tender-level (see store.resolve_tender_
+# duplicate's docstring for why) — pub_number/other_pub_number identify the
+# edge, in either order.
+@app.post("/api/tenders/{pub_number}/duplicates/{other_pub_number}/resolve")
+def resolve_duplicate(pub_number: str, other_pub_number: str,
+                       identity: Identity = Depends(get_current_identity)):
+    tenant_id = identity.tenant_id
+    conn = _db()
+    try:
+        store.resolve_tender_duplicate(conn, tenant_id, pub_number, other_pub_number,
+                                        identity.account_name)
+    except ValueError:
+        raise HTTPException(404, "No duplicate link between these tenders")
+    return {"pub_number": pub_number, "other_pub_number": other_pub_number, "resolved": True}
+
+
+@app.post("/api/tenders/{pub_number}/duplicates/{other_pub_number}/unresolve")
+def unresolve_duplicate(pub_number: str, other_pub_number: str,
+                         identity: Identity = Depends(get_current_identity)):
+    tenant_id = identity.tenant_id
+    conn = _db()
+    try:
+        store.unresolve_tender_duplicate(conn, tenant_id, pub_number, other_pub_number)
+    except ValueError:
+        raise HTTPException(404, "No duplicate link between these tenders")
+    return {"pub_number": pub_number, "other_pub_number": other_pub_number, "resolved": False}
 
 
 class RelevanceBody(BaseModel):

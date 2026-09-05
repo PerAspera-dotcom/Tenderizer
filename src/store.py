@@ -684,9 +684,61 @@ def get_tender_duplicates_for_tenant(conn, tenant_id):
         rows = c.execute(select(
             tender_duplicates.c.pub_number_a, tender_duplicates.c.pub_number_b,
             tender_duplicates.c.match_type, tender_duplicates.c.similarity,
+            tender_duplicates.c.resolved_by, tender_duplicates.c.resolved_at,
         ).where(tender_duplicates.c.tenant_id == tenant_id)).fetchall()
-    return [{"pub_number_a": r[0], "pub_number_b": r[1], "match_type": r[2], "similarity": r[3]}
-            for r in rows]
+    return [{"pub_number_a": r[0], "pub_number_b": r[1], "match_type": r[2], "similarity": r[3],
+             "resolved_by": r[4], "resolved_at": r[5]} for r in rows]
+
+
+def resolve_tender_duplicate(conn, tenant_id, pub_number_a, pub_number_b, resolved_by):
+    """Reviewer confirms a same_source match is NOT actually a duplicate.
+
+    Resolves the pair-level edge, not a per-side flag: the match is symmetric
+    evidence (one tender_duplicates row, same detection reasoning on both
+    ends), so a reviewer's "these aren't the same tender" verdict is a
+    judgment about the relationship, not about just the notice they happened
+    to open. Leaving one side flagged while the other cleared would be an
+    incoherent state. The row is kept, not deleted (same auditable-soft-state
+    convention as mark_superseded) so unresolve_tender_duplicate below has
+    something to reverse and the resolution stays visible.
+
+    Raises ValueError if no such pair is on record for this tenant.
+    """
+    a, b = sorted((pub_number_a, pub_number_b))
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((tender_duplicates.c.tenant_id == tenant_id) &
+           (tender_duplicates.c.pub_number_a == a) & (tender_duplicates.c.pub_number_b == b))
+    with conn.begin() as c:
+        existing = c.execute(select(tender_duplicates.c.tenant_id).where(key)).fetchone()
+        if existing is None:
+            raise ValueError(f"No duplicate link between {a} and {b}")
+        c.execute(update(tender_duplicates).where(key).values(resolved_by=resolved_by, resolved_at=now))
+        for pub, other in ((a, b), (b, a)):
+            c.execute(insert(tender_history).values(
+                tenant_id=tenant_id, pub_number=pub, field="duplicate_resolution",
+                old_value="", new_value=f"not_duplicate:{other}", changed_at=now))
+
+
+def unresolve_tender_duplicate(conn, tenant_id, pub_number_a, pub_number_b):
+    """Reverse resolve_tender_duplicate — re-flags the pair as a possible
+    duplicate. Logged the same way, so the resolve/unresolve cycle is fully
+    traceable in tender_history like every other reversible state here.
+
+    Raises ValueError if no such pair is on record for this tenant.
+    """
+    a, b = sorted((pub_number_a, pub_number_b))
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((tender_duplicates.c.tenant_id == tenant_id) &
+           (tender_duplicates.c.pub_number_a == a) & (tender_duplicates.c.pub_number_b == b))
+    with conn.begin() as c:
+        existing = c.execute(select(tender_duplicates.c.tenant_id).where(key)).fetchone()
+        if existing is None:
+            raise ValueError(f"No duplicate link between {a} and {b}")
+        c.execute(update(tender_duplicates).where(key).values(resolved_by=None, resolved_at=None))
+        for pub, other in ((a, b), (b, a)):
+            c.execute(insert(tender_history).values(
+                tenant_id=tenant_id, pub_number=pub, field="duplicate_resolution",
+                old_value=f"not_duplicate:{other}", new_value="", changed_at=now))
 
 
 def upsert_tender_presence(conn, tenant_id, pub_number, clerk_user_id, account_name):
