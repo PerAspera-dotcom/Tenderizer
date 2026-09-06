@@ -8,6 +8,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.claude/settings.local.json
 
 # runtime data / generated output — not source
 data/tenders.db
