@@ -236,13 +236,15 @@ def test_normalize_eprocurement_no_nuts_codes_yields_empty_place(raw_eprocuremen
 
 
 # ── schema parity (CR-010 §3: extend to every normalizer) ──────────────────
+# The full 4-way check (all of CR-010's sources) lives in
+# test_52_bekanntmachungsservice.py now that connector exists too — this one
+# stays as the narrower 3-way TED/BOAMP/e-Procurement check.
 
 def test_eprocurement_ted_boamp_share_identical_schema(
     raw_eprocurement_supply, raw_ted_supply, raw_boamp_supply
 ):
     # the whole pipeline depends on every source producing the same keys —
-    # test_10_boamp.py checks TED<->BOAMP; this is the 3-way version. When
-    # bekanntmachungsservice (CR-010 §2) lands, add its normalizer here too.
+    # test_10_boamp.py checks TED<->BOAMP; this is the 3-way version.
     ted_keys = set(normalize.normalize_ted(raw_ted_supply))
     boamp_keys = set(normalize.normalize_boamp(raw_boamp_supply))
     eprocurement_keys = set(normalize.normalize_eprocurement(raw_eprocurement_supply))

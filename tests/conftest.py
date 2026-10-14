@@ -244,3 +244,59 @@ def raw_eprocurement_multilingual():
         "tedPublished": True,
         "vaultSubmissionDeadline": "2026-11-02T15:00:00",
     }
+
+@pytest.fixture
+def raw_bekanntmachungsservice_supply():
+    # Real notice, fields assembled the way connectors/bekanntmachungsservice.
+    # py's own CSV join produces them (captured live 2026-10-13 export: a
+    # multi-lot Fraunhofer IWES pipeline/control-system award — awarded on
+    # one lot, unsuccessful on the other, both carried in the same notice).
+    return {
+        "noticeIdentifier": "6a06759e-fe07-4383-800c-b6236d96f2a0",
+        "noticeVersion": "02",
+        "formType": "result",
+        "noticeType": "can-standard",
+        "procedureLegalBasis": "de-vob",
+        "publicationDate": "2026-10-13T02:22:05Z",
+        "procedureType": "open",
+        "title": "Sleepertrasse",
+        "description": "Das Fraunhofer-Institut fur Windenergiesysteme IWES plant mit der Verlangerung der bestehenden Medien Pipeline den Standortausbau am Hydrogen Lab Leuna (HLL).",
+        "internalIdentifier": "",
+        "estimatedValue": "",
+        "estimatedValueCurrency": "",
+        "mainNature": "supplies",
+        "cpvCodes": ["42961000", "44160000"],
+        "nutsCodes": ["DEE0B"],
+        "buyerName": "Fraunhofer-Institut fur Windenergiesysteme IWES",
+        "winnerName": "SPIE IMO Service GmbH",
+        "noticeValue": "23790",
+        "noticeValueCurrency": "EUR",
+    }
+
+@pytest.fixture
+def raw_bekanntmachungsservice_below_threshold():
+    # Real notice, below-threshold national form (de-uvgo — the explicit
+    # below-threshold ordinance), active/competition (not yet awarded) —
+    # no winner/value yet, no internalIdentifier populated on this one
+    # (confirmed live: only ~50% of notices carry it).
+    return {
+        "noticeIdentifier": "42d98adf-f195-4aef-a7c8-7063b771caaa",
+        "noticeVersion": "1",  # confirmed live: unpadded "1" and padded "01"
+        "formType": "competition",                    # both occur for the same semantic version — never compare as strings.
+        "noticeType": "cn-standard",
+        "procedureLegalBasis": "de-uvgo",
+        "publicationDate": "2026-10-13T02:24:04Z",
+        "procedureType": "open",
+        "title": "MSR Technik",
+        "description": "Mess-, Steuerungs-, und Regelungstechnikarbeiten fur die Sanierung der Patientenzimmer.",
+        "internalIdentifier": "",
+        "estimatedValue": "",
+        "estimatedValueCurrency": "",
+        "mainNature": "works",
+        "cpvCodes": ["45315700", "45315000"],
+        "nutsCodes": ["DE212"],
+        "buyerName": "Artemed Klinikum Munchen Sud",
+        "winnerName": None,
+        "noticeValue": "",
+        "noticeValueCurrency": "",
+    }

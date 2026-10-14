@@ -697,3 +697,75 @@ def normalize_eprocurement(raw):
         "raw_award_currency": None,
         "raw_award_detail": None,
     }
+
+
+# ── CR-010 §2: Germany — Bekanntmachungsservice ─────────────────────────────
+# Raw shape produced by connectors/bekanntmachungsservice.py's own CSV join
+# (NOT the source's native CSV columns 1:1 — that join already happened in
+# the connector; see its docstring for the real per-table field names this
+# was assembled from and why CSV was chosen over OCDS).
+
+def _bekanntmachungsservice_notice_url(raw):
+    notice_id = raw.get("noticeIdentifier")
+    return f"https://oeffentlichevergabe.de/ui/en/search/details?noticeId={notice_id}" if notice_id else ""
+
+
+def normalize_bekanntmachungsservice(raw):
+    """Normalise a Bekanntmachungsservice (Germany) record into the SAME
+    schema as normalize_ted/normalize_boamp/normalize_eprocurement.
+
+    CR-010 §2: `deadline` is always "" — confirmed absent from BOTH this
+    source's structured exports (CSV and OCDS alike), present only in the
+    raw eForms XML this connector doesn't parse (deferred, same call as
+    Belgium's award-XML deferral). Unlike Belgium, award fields (raw_award_
+    winner/-value/-currency) ARE populated here — this source's CSV export
+    already has them as plain columns, no XML parsing needed. raw_award_detail
+    is still None (not asked for here the way CR-010 §1 discusses Belgium's
+    explicitly; would need contract.csv/duration.csv joins this CR didn't
+    scope). See connectors/bekanntmachungsservice.py's docstring throughout.
+    """
+    return {
+        "source": "Bekanntmachungsservice",
+        "pub_number": raw.get("noticeIdentifier", ""),
+        "tag_line": raw.get("title") or "",
+        "description": raw.get("description") or "",
+        "buyer": raw.get("buyerName") or "",
+        "country": "DE",
+        "place": ", ".join(dict.fromkeys(raw.get("nutsCodes") or [])),
+        "category": map_category(raw.get("mainNature") or ""),
+        # Mixed formats confirmed live: some notices carry a clean eForms
+        # procedure code ("open", "de-open", "neg-w-call", ...), others a
+        # raw German descriptive string (e.g. "beabsichtigte Beschränkte
+        # Ausschreibung") — passed through as-is, not reconciled into one
+        # convention (new normalization work this CR didn't ask for).
+        "procedure": (raw.get("procedureType") or "").lower(),
+        "pub_date": _trim_date(raw.get("publicationDate")) or "",
+        # CR-010 §2: deliberately absent — see docstring above.
+        "deadline": "",
+        "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
+        "matched_terms": [],
+        "match_source": None,
+        "url": _bekanntmachungsservice_notice_url(raw),
+        "first_seen": None,
+        # purpose.csv's internalIdentifier (BT-22) — THE reason CSV was
+        # chosen over OCDS (see connectors/bekanntmachungsservice.py's
+        # docstring): confirmed absent from OCDS entirely.
+        "internal_identifier": raw.get("internalIdentifier") or None,
+        # Pre-award estimate (BT-27), distinct from the award total below —
+        # same notice-level-estimate-vs-award-total split normalize_ted draws
+        # between estimated-value-proc and result-value-notice. Sparse by
+        # design (confirmed live: ~7% fill, matching TED's own "optional
+        # under EU rules" experience) — not a Germany-specific gap.
+        "value": raw.get("estimatedValue") or "",
+        "value_currency": raw.get("estimatedValueCurrency") or "",
+        # Germany publishes exclusively in German (per the connector's own
+        # docs) — no per-notice detection needed, always translate (CR-001 R3),
+        # same stance BOAMP takes for France.
+        "language": "deu",
+        # CR-010 §2: populated — see docstring above on why this source
+        # doesn't need Belgium's XML-parsing deferral.
+        "raw_award_winner": raw.get("winnerName") or None,
+        "raw_award_value": raw.get("noticeValue") or None,
+        "raw_award_currency": raw.get("noticeValueCurrency") or None,
+        "raw_award_detail": None,
+    }
