@@ -29,11 +29,14 @@ Verified live:
   paired with today's date as the upper bound — the one combination actually
   observed working — rather than risk an unconfirmed open-ended range.
 
-  pageSize=25 is the only value confirmed live (the UI's own default).
-  build_params's limit=100 default (kept for interface parity with
-  ted.py/boamp.py) is UNCONFIRMED against the real API — verify before the
-  first production run; fetch()'s page loop will simply get fewer results
-  per call than expected if the real cap turns out lower, not crash.
+  pageSize=100 IS confirmed live (2026-10-14, CR-010 §3 duplicate-rate
+  check) — the UI's own page-size selector offers 10/25/50/100 natively, and
+  a real 100-row page came back successfully (used to pull a 600-notice
+  sample for the TED↔BE duplicate-rate figure in this CR's findings).
+  build_params's limit=100 default is therefore confirmed, not just kept for
+  interface parity. Whether anything above 100 is accepted was never tried
+  (not offered in the UI) — fetch()'s page loop would just get fewer results
+  per call than expected if some higher value silently caps lower, not crash.
 
   `terms` is a single free-text string, not an OR'd keyword list like
   BOAMP's ODSQL `where` — its real tokenization (AND vs OR, phrase vs
