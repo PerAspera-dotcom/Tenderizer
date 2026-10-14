@@ -855,20 +855,30 @@ def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
 _PORTAL_META = [
     {"name": "TED",           "region": "EU",      "status": "live"},
     {"name": "BOAMP",         "region": "France",  "status": "live"},
-    # CR-008: investigated adding this as a fourth source. Its listings API
-    # (POST /api/sea/search/publications, found via the SPA's own network
-    # calls) 403s scripted requests — including same-session fetch() calls
-    # made from within the live page itself, not just cold requests — so this
-    # isn't a fetchable connector today. BOSA's ToU (bosa.belgium.be) and
-    # publicprocurement.be carry no robots.txt and no published API/scraping
-    # policy either way — nothing to build against or clear compliance-wise
-    # until BOSA confirms automated access is permitted. Same paused shape as
-    # DTVP below rather than "planned", since "planned" implied only that
-    # nobody had gotten to it yet.
-    {"name": "Belgian e-Procurement (BDA)", "region": "Belgium", "status": "paused",
-     "detail": "Scraper paused — no API access confirmed, search endpoint blocks scripted requests"},
-    {"name": "DTVP",          "region": "Germany", "status": "paused",
-     "detail": "Scraper paused — ToS review pending"},
+    # CR-010 §1: CR-008's "403s scripted requests" finding above (now removed)
+    # turned out to be solvable, not a dead end — the search endpoint needs an
+    # anonymous Keycloak bearer token the public frontend mints silently from
+    # its own public env.config.js; CR-008's probe never carried one. The
+    # connector is built (connectors/eprocurement.py) and works. Still
+    # `paused` here, not `live`: CR-010 §4 ships it with portals.yaml's
+    # enabled:false pending BOSA's own per-portal legal review (no prohibition
+    # on automated access, unlike DTVP, but no reuse licence granted either).
+    # `name` matches the literal source string everywhere else (normalize.py,
+    # run.py, portals.yaml) — the old display name here never did, so
+    # get_source_health's streak/failure lookup below was silently keyed to a
+    # name no source ever wrote a health row under.
+    {"name": "e-Procurement", "region": "Belgium", "status": "paused",
+     "detail": "Connector built (CR-010) — pending BOSA's per-portal legal review before go-live"},
+    # CR-010 preamble: DTVP itself is confirmed not integrable this way — its
+    # ToS prohibits automated use, unlike e-Procurement above, so there was
+    # never a connector to build against it (CR-010 doesn't reopen it).
+    # Bekanntmachungsservice (oeffentlichevergabe.de) replaces it outright:
+    # the official CC0 open-data service, connector built
+    # (connectors/bekanntmachungsservice.py), licence question already
+    # settled. `paused`, not `live`: enabled:false pending the business's own
+    # manual trial verdict (CR-010 preamble), not a legal gate like Belgium.
+    {"name": "Bekanntmachungsservice", "region": "Germany", "status": "paused",
+     "detail": "Connector built (CR-010), CC0 licensed — pending the business's manual trial verdict before go-live"},
 ]
 
 @app.get("/api/health")
