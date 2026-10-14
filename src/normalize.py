@@ -600,3 +600,100 @@ def normalize_boamp(raw):
         # single-lot notices only (see _boamp_award_detail's docstring).
         "raw_award_detail": _boamp_award_detail(raw),
     }
+
+
+# ── CR-010 §1: Belgium e-Procurement (BDA) ──────────────────────────────────
+# Raw shape verified live (2026-10-14) against connectors/eprocurement.py's
+# search endpoint — see that module's docstring for the endpoint/auth/field
+# discovery notes this normalizer depends on.
+
+# BE's own multilingual shape is a list of {"language": "NL"/"FR"/"DE"/"EN",
+# "text": ...} dicts (2-letter ISO) — e.g. dossier.titles, dossier.descriptions,
+# organisation.organisationNames — unlike TED's {lang: value} dict (_pick_lang)
+# or BOAMP's flat single-language fields. Map to the shared 3-letter-ISO dict
+# shape _pick_lang already expects, so the existing language-preference order
+# and _record_language's translation gate (run.py's `language == "eng"` skip)
+# stay identical across all three sources instead of reinventing them for one
+# connector. Unrecognised codes are dropped rather than guessed.
+_EPROC_LANG_2_TO_3 = {"EN": "eng", "FR": "fra", "NL": "nld", "DE": "deu"}
+
+
+def _eprocurement_lang_dict(items):
+    return {
+        _EPROC_LANG_2_TO_3[item["language"]]: item["text"]
+        for item in (items or [])
+        if item.get("language") in _EPROC_LANG_2_TO_3 and item.get("text")
+    }
+
+
+def _eprocurement_cpv_codes(raw):
+    codes = []
+    main = raw.get("cpvMainCode") or {}
+    if main.get("code"):
+        codes.append(main["code"])
+    for extra in raw.get("cpvAdditionalCodes") or []:
+        if extra.get("code"):
+            codes.append(extra["code"])
+    return _dedupe(codes)
+
+
+def normalize_eprocurement(raw):
+    """Normalise a Belgium e-Procurement (BDA) search-result record into the
+    SAME schema as normalize_ted/normalize_boamp.
+
+    CR-010 §1: award fields (raw_award_winner/value/currency/detail) and
+    value/value_currency are deliberately left absent — NOT an oversight.
+    The search endpoint this raw shape comes from never returns them at all
+    (confirmed live against real award-type notices); they only exist in a
+    separate per-notice detail call whose payload is raw eForms XML, not
+    structured JSON — genuinely new parsing work, deferred per CR-010 §1
+    rather than built unasked. See connectors/eprocurement.py's docstring.
+    """
+    dossier = raw.get("dossier") or {}
+    tag_line, tag_lang = _pick_lang(_eprocurement_lang_dict(dossier.get("titles")))
+    description, desc_lang = _pick_lang(_eprocurement_lang_dict(dossier.get("descriptions")))
+    buyer, _buyer_lang = _pick_lang(
+        _eprocurement_lang_dict((raw.get("organisation") or {}).get("organisationNames"))
+    )
+    procedure_type = dossier.get("procurementProcedureType") or ""
+    return {
+        "source": "e-Procurement",
+        "pub_number": raw.get("referenceNumber", ""),
+        "tag_line": tag_line,
+        "description": description,
+        "buyer": buyer,
+        "country": "BE",
+        "place": ", ".join(dict.fromkeys(raw.get("nutsCodes") or [])),
+        "category": map_category(_first(raw.get("natures")).lower()),
+        "procedure": procedure_type.lower(),
+        "pub_date": raw.get("publicationDate") or "",
+        "deadline": raw.get("vaultSubmissionDeadline") or "",
+        "cpv_codes": _eprocurement_cpv_codes(raw),
+        "matched_terms": [],
+        "match_source": None,
+        "url": (
+            f"https://www.publicprocurement.be/publication-workspaces/{raw['publicationWorkspaceId']}"
+            if raw.get("publicationWorkspaceId") else ""
+        ),
+        "first_seen": None,
+        # CR-010 §1 Q3: dossier.referenceNumber is the buyer's own procurement
+        # reference (confirmed live, e.g. "PPP0TA-235/6035/2026-002-..."),
+        # distinct from the publication-level referenceNumber used as
+        # pub_number above (which changes per republish/corrigendum) — same
+        # cross-portal join key role as TED's internal-identifier-proc /
+        # BOAMP's _boamp_internal_identifier.
+        "internal_identifier": dossier.get("referenceNumber") or None,
+        # Absent from the search response entirely — see docstring above.
+        "value": "",
+        "value_currency": "",
+        # CR-010 §1: Belgium is NOT monolingual like BOAMP — notices appear in
+        # NL/FR/DE (and sometimes EN for EU-funded ones). Derived per notice
+        # via the same tag/description-language reconciliation TED uses
+        # (_record_language), now that both are in the shared 3-letter form.
+        "language": _record_language(tag_lang, desc_lang),
+        # CR-010 §1: deferred — see docstring above.
+        "raw_award_winner": None,
+        "raw_award_value": None,
+        "raw_award_currency": None,
+        "raw_award_detail": None,
+    }

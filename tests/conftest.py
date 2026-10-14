@@ -97,3 +97,150 @@ def raw_boamp_supply():
         "procedure_libelle": "Procédure ouverte",
         "type_marche": "Fournitures",
     }
+
+@pytest.fixture
+def raw_eprocurement_supply():
+    # Real BE e-Procurement (BDA) shape, captured live 2026-10-14 against
+    # POST /api/sea/search/publications — a genuine below-threshold, single-
+    # language (NL) notice: a school board's roof repair, never published to
+    # TED (tedPublished: false, publicationReferenceNumbersTED: []). See
+    # connectors/eprocurement.py's docstring for the endpoint/auth discovery.
+    return {
+        "cpvAdditionalCodes": [
+            {"code": "45261210-9", "descriptions": [
+                {"language": "NL", "text": "Dakdekkerswerkzaamheden"},
+                {"language": "FR", "text": "Travaux de couverture"},
+                {"language": "DE", "text": "Dachdeckarbeiten"},
+                {"language": "EN", "text": "Roof-covering work"},
+            ]},
+        ],
+        "cpvMainCode": {"code": "45261910-6", "descriptions": [
+            {"language": "NL", "text": "Reparatie van daken"},
+            {"language": "FR", "text": "Réparation de toiture"},
+            {"language": "DE", "text": "Dachreparatur"},
+            {"language": "EN", "text": "Roof repair"},
+        ]},
+        "dispatchDate": "2026-10-13",
+        "dossier": {
+            "accreditations": {},
+            "descriptions": [{"language": "NL", "text": "Bakgoot voorgevel Handelsschool"}],
+            "enterpriseCategories": [],
+            "legalBasis": "D24",
+            "number": "PPP0TA-235/6035/2026-002-De Handelsschool-Dakgoot",
+            "procurementProcedureType": "OPEN",
+            "referenceNumber": "PPP0TA-235/6035/2026-002-De Handelsschool-Dakgoot",
+            "titles": [{"language": "NL", "text": "Bakgoot voorgevel Handelsschool"}],
+        },
+        "insertionDate": "2026-10-13",
+        "lots": [{
+            "descriptions": [{"language": "NL", "text": "Bakgoot voorgevel Handelsschool"}],
+            "reservedExecution": ["NO"], "reservedParticipation": ["NONE"],
+            "titles": [{"language": "NL", "text": "Bakgoot voorgevel Handelsschool"}],
+        }],
+        "natures": ["WORKS"],
+        "noticeIds": ["c70edaf6-b46f-4030-849b-4633330da46b"],
+        "noticeSubType": "16",
+        "nutsCodes": ["BE231"],
+        "organisation": {
+            "organisationId": 4885,
+            "organisationNames": [
+                {"language": "FR", "text": "Scholengroep 19 'Dender' (3P)"},
+                {"language": "EN", "text": "Scholengroep 19 'Dender' (3P)"},
+                {"language": "NL", "text": "Scholengroep 19 'Dender'"},
+                {"language": "DE", "text": "Scholengroep 19 'Dender' (3P)"},
+            ],
+            "tree": "200004.200026.1133.4885",
+        },
+        "procedureId": "f2a385b4-8b34-49ab-a35e-31841450fc98",
+        "publicationDate": "2026-10-13",
+        "publicationLanguages": ["NL"],
+        "publicationReferenceNumbersBDA": ["PPP0TA-235/6035/2026-002-De Handelsschool-Dakgoot_001"],
+        "publicationReferenceNumbersTED": [],
+        "publicationType": "ACTIVE",
+        "publicationWorkspaceId": "1b5e777f-e009-401b-8a04-96737a274165",
+        "publishedAt": ["2026-10-13T09:41:45.489776"],
+        "referenceNumber": "PPP0TA-235/6035/2026-002-De Handelsschool-Dakgoot_001",
+        "sentAt": ["2026-10-13T09:41:45.489776"],
+        "tedPublished": False,
+        "vaultSubmissionDeadline": "2026-11-13T11:00:00",
+    }
+
+@pytest.fixture
+def raw_eprocurement_multilingual():
+    # Real BE e-Procurement shape, captured live 2026-10-14 — a notice
+    # published in two languages (FR + EN) rather than the single-language
+    # norm, used to exercise _eprocurement_lang_dict/_record_language's
+    # preference logic. (This particular live example happens to be an
+    # EU-funded notice also carrying a TED publication reference — useful
+    # here purely for its genuine multilingual shape, not as a typical
+    # national BDA notice.)
+    return {
+        "cpvAdditionalCodes": [{"code": "45000000-7", "descriptions": [
+            {"language": "NL", "text": "Bouwwerkzaamheden"},
+            {"language": "FR", "text": "Travaux de construction"},
+            {"language": "DE", "text": "Bauarbeiten"},
+            {"language": "EN", "text": "Construction work"},
+        ]}],
+        "cpvMainCode": {"code": "45000000-7", "descriptions": [
+            {"language": "NL", "text": "Bouwwerkzaamheden"},
+            {"language": "FR", "text": "Travaux de construction"},
+            {"language": "DE", "text": "Bauarbeiten"},
+            {"language": "EN", "text": "Construction work"},
+        ]},
+        "dispatchDate": "2026-10-13",
+        "dossier": {
+            "accreditations": {},
+            "descriptions": [
+                {"language": "FR", "text": "Construction de l'école verte pour filles Al-Bakri à Hébron"},
+                {"language": "EN", "text": "Construction of Al-Bakri Green Girls' School in Hebron"},
+            ],
+            "enterpriseCategories": [],
+            "legalBasis": "D24",
+            "number": "PSE22001-10075",
+            "procurementProcedureType": "OPEN",
+            "referenceNumber": "PSE22001-10075",
+            "titles": [
+                {"language": "FR", "text": "PSE22001-10075 - 1"},
+                {"language": "EN", "text": "PSE22001-10075 - 1"},
+            ],
+        },
+        "insertionDate": "2026-07-15",
+        "lots": [{
+            "descriptions": [
+                {"language": "FR", "text": "Construction de l'école verte pour filles Al-Bakri à Hébron"},
+                {"language": "EN", "text": "Construction of Al-Bakri Green Girls' School in Hebron"},
+            ],
+            "reservedExecution": ["NO"], "reservedParticipation": ["NONE"],
+            "titles": [
+                {"language": "FR", "text": "PSE22001-10075 - 1"},
+                {"language": "EN", "text": "PSE22001-10075 - 1"},
+            ],
+        }],
+        "natures": ["WORKS"],
+        "noticeIds": [
+            "517be104-c2d8-4a8b-86f5-683c0a8e74cd", "ecfe8501-8b78-4037-8953-b83ee7c95380",
+            "235aa6ed-462b-40ba-9cdb-8c18680383f5", "f542b2c2-5519-4a27-aef8-04feb74fe438",
+            "b9be25a6-2212-42e8-aebd-b04cc1553b31",
+        ],
+        "noticeSubType": "16",
+        "nutsCodes": [],
+        "organisation": {
+            "organisationId": 200014,
+            "organisationNames": [
+                {"language": "FR", "text": "Enabel"}, {"language": "EN", "text": "Enabel"},
+            ],
+            "tree": "200002.200014.139",
+        },
+        "procedureId": "d12a63a4-d89c-4361-b53f-b99a5ad1a31e",
+        "publicationDate": "2026-10-14",
+        "publicationLanguages": ["FR", "EN"],
+        "publicationReferenceNumbersBDA": [],
+        "publicationReferenceNumbersTED": ["PSE22001-10075_pub01"],
+        "publicationType": "ACTIVE",
+        "publicationWorkspaceId": "f11c3188-a2c2-4dee-aa78-cd16bdc2bb15",
+        "publishedAt": ["2026-07-15T04:23:07.185971"],
+        "referenceNumber": "PSE22001-10075_pub01",
+        "sentAt": ["2026-07-14T14:17:00.291345"],
+        "tedPublished": True,
+        "vaultSubmissionDeadline": "2026-11-02T15:00:00",
+    }

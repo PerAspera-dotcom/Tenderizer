@@ -178,10 +178,13 @@ def _write_last_run(db_path, health, this_run_records):
 
 
 def _default_sources(conn, tenant_id, since):
-    """The TED + BOAMP sources for a scheduled run, scoped to this tenant's
-    CPV/keyword config and filtered to their enabled portals (step 5).
+    """The TED + BOAMP + e-Procurement sources for a scheduled run, scoped to
+    this tenant's CPV/keyword config and filtered to their enabled portals
+    (step 5). e-Procurement ships `enabled: false` (CR-010 §4 legal gate) —
+    present in the list so it runs the moment a tenant/portal config enables
+    it, same as any other source.
     """
-    from connectors import ted, boamp
+    from connectors import ted, boamp, eprocurement
     cpv_codes = store.get_tenant_cpv(conn, tenant_id)
     distinctive = store.get_tenant_keywords(conn, tenant_id)["distinctive"]
     enabled = store.get_enabled_portal_names(conn, tenant_id)
@@ -192,6 +195,9 @@ def _default_sources(conn, tenant_id, since):
         {"name": "BOAMP",
          "fetch": lambda: boamp.fetch(cpv_codes, distinctive, since),
          "normalize": normalize.normalize_boamp},
+        {"name": "e-Procurement",
+         "fetch": lambda: eprocurement.fetch(cpv_codes, distinctive, since),
+         "normalize": normalize.normalize_eprocurement},
     ]
     return [s for s in sources if s["name"] in enabled]
 

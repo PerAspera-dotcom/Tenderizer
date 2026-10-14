@@ -8,3 +8,10 @@
 - name: BOAMP
   type: api
   enabled: true
+# CR-010 §4 legal gate: licence question unsettled (no prohibition on
+# automated access, unlike DTVP, but no reuse licence granted either —
+# §11 of the platform's own terms claims IP in its data). Stays false until
+# per-portal legal review (handled with the co-dev company) clears it.
+- name: e-Procurement
+  type: api
+  enabled: false
