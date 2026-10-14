@@ -10,6 +10,7 @@ dependencies = [
     "sqlalchemy",
     "alembic",
     "psycopg2-binary",
+    "psycopg[binary]",
     "pyjwt[crypto]",
     "unidecode",
     "fastapi",
