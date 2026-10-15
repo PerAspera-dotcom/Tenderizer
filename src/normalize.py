@@ -626,14 +626,29 @@ def _eprocurement_lang_dict(items):
     }
 
 
+def _eprocurement_strip_checksum(code):
+    """BE's own CPV codes carry an official check-digit suffix
+    ("45000000-7") — confirmed live against /api/loc/cpvs's full 9454-code
+    reference list, every entry keyed the same way. Every other source in
+    this system (TED, BOAMP) and the tenant's own configured CPV list
+    (config/cpv.yaml) use the bare 8-digit code with no suffix — found during
+    review (2026-10-15) that leaving BE's suffix on `cpv_codes` broke CPV-
+    based match classification for every Belgian record (run._tag's
+    `cpv_codes & tenant cpv_set` intersection could never hit, since one side
+    always carried "-N" and the other never did). Stripped here so BE's
+    output matches the shared bare-code convention everywhere downstream.
+    """
+    return code.split("-", 1)[0]
+
+
 def _eprocurement_cpv_codes(raw):
     codes = []
     main = raw.get("cpvMainCode") or {}
     if main.get("code"):
-        codes.append(main["code"])
+        codes.append(_eprocurement_strip_checksum(main["code"]))
     for extra in raw.get("cpvAdditionalCodes") or []:
         if extra.get("code"):
-            codes.append(extra["code"])
+            codes.append(_eprocurement_strip_checksum(extra["code"]))
     return _dedupe(codes)
 
 

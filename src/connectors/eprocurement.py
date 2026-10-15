@@ -67,14 +67,30 @@ search APIs hand back — genuinely new parsing work this CR explicitly scopes
 out. See normalize.normalize_eprocurement's docstring.
 
 Not yet known / explicitly unconfirmed (flag before go-live, not a build
-blocker): the real max pageSize; nutsCodes/publicationLanguages' exact
-request shape (inferred from the UI's own filter names, never independently
-fired — this connector doesn't send either); whether publicationDateFrom
-works unpaired.
+blocker): nutsCodes/publicationLanguages' exact request shape (inferred from
+the UI's own filter names, never independently fired — this connector
+doesn't send either); whether publicationDateFrom works unpaired.
+
+Second header requirement, found during a later review pass (2026-10-15):
+every request to this API — reference GET endpoints included, not just the
+search POST — also needs a `BelGov-Trace-Id` header, a valid v4 UUID. Without
+it: HTTP 400 ("BelGov-Trace-Id header must be a valid v4 UUID"), rejected by
+a gateway layer BEFORE auth is even checked — confirmed by the error
+changing to 403 (an auth rejection) the moment a valid UUID is added, even
+with no bearer token at all. The browser-based testing this connector was
+originally built and verified against never surfaced this: the page's own
+HTTP client attaches it automatically, invisibly. A fair amount of the
+"inconclusive 400" confusion earlier in this module's own history (the
+publicationDateFrom-pairing question above) was likely this header too, not
+only the missing Authorization header blamed at the time — never
+re-diagnosed once the fix below made the actual search call succeed in
+principle; worth re-probing the unpaired-date question now that both known
+header requirements are met.
 """
 import datetime
 import os
 import time
+import uuid
 
 import requests
 
@@ -150,7 +166,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     Rate-limited per CR-010 §1 — see USER_AGENT/REQUEST_DELAY_SECONDS above.
     """
     token = _get_token()
-    headers = {
+    base_headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -159,6 +175,10 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     out, offset = [], 0
     while True:
         body = build_params(cpv_codes, keywords, since, limit=limit, offset=offset)
+        # BelGov-Trace-Id (valid v4 UUID): required on every call to this
+        # gateway, checked before auth — see module docstring. Fresh per
+        # request, matching what a trace ID is for.
+        headers = {**base_headers, "BelGov-Trace-Id": str(uuid.uuid4())}
         resp = requests.post(SEARCH_ENDPOINT, json=body, headers=headers, timeout=60)
         resp.raise_for_status()
         data = resp.json()

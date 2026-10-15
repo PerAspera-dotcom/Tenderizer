@@ -115,6 +115,53 @@ def test_fetch_sends_bearer_token_from_the_token_grant(monkeypatch):
     assert search_call[1]["headers"]["User-Agent"] == eprocurement.USER_AGENT
 
 
+def test_fetch_sends_a_valid_belgov_trace_id_header(monkeypatch):
+    # Found in review (2026-10-15): the real API 400s every request without
+    # this header (a valid v4 UUID), rejected by a gateway layer before auth
+    # is even checked — confirmed live by the error changing from 400 to 403
+    # the moment a valid UUID is added, even with no token at all. Browser-
+    # based testing never caught this because the page's own HTTP client
+    # attaches it invisibly.
+    import uuid as uuid_module
+    monkeypatch.setattr(eprocurement, "AUTH_CLIENT_SECRET", "test-secret")
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if "openid-connect/token" in url:
+            return _FakeResponse({"access_token": "fake-jwt"})
+        return _FakeResponse({"publications": [], "totalCount": 0})
+
+    monkeypatch.setattr(eprocurement.requests, "post", fake_post)
+    eprocurement.fetch(CPV, KW, SINCE)
+
+    search_call = next(c for c in calls if c[0] == eprocurement.SEARCH_ENDPOINT)
+    trace_id = search_call[1]["headers"].get("BelGov-Trace-Id")
+    assert trace_id is not None
+    assert uuid_module.UUID(trace_id).version == 4  # raises if not a valid UUID at all
+
+
+def test_fetch_uses_a_fresh_trace_id_per_page(monkeypatch):
+    monkeypatch.setattr(eprocurement, "AUTH_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr(eprocurement, "REQUEST_DELAY_SECONDS", 0)
+    pages = [
+        {"publications": [{"referenceNumber": str(i)} for i in range(100)], "totalCount": 150},
+        {"publications": [{"referenceNumber": str(i)} for i in range(100, 150)], "totalCount": 150},
+    ]
+    calls = []
+
+    def fake_post(url, **kwargs):
+        if "openid-connect/token" in url:
+            return _FakeResponse({"access_token": "fake-jwt"})
+        calls.append(kwargs["headers"]["BelGov-Trace-Id"])
+        return _FakeResponse(pages.pop(0))
+
+    monkeypatch.setattr(eprocurement.requests, "post", fake_post)
+    eprocurement.fetch(CPV, KW, SINCE, limit=100)
+    assert len(calls) == 2
+    assert calls[0] != calls[1]  # a trace ID that never changes isn't tracing anything
+
+
 def test_fetch_paginates_until_total_count_reached(monkeypatch):
     monkeypatch.setattr(eprocurement, "AUTH_CLIENT_SECRET", "test-secret")
     monkeypatch.setattr(eprocurement, "REQUEST_DELAY_SECONDS", 0)
@@ -186,7 +233,17 @@ def test_normalize_eprocurement_pub_number_is_publication_level_reference(raw_ep
 
 def test_normalize_eprocurement_dedupes_main_and_additional_cpv(raw_eprocurement_supply):
     r = normalize.normalize_eprocurement(raw_eprocurement_supply)
-    assert r["cpv_codes"] == ["45261910-6", "45261210-9"]
+    assert r["cpv_codes"] == ["45261910", "45261210"]
+
+def test_normalize_eprocurement_strips_be_check_digit(raw_eprocurement_supply):
+    # Found in review (2026-10-15): BE's own codes carry a "-N" check-digit
+    # suffix (confirmed live against /api/loc/cpvs's full reference list);
+    # every other source and the tenant's own CPV config use the bare
+    # 8-digit code. Left un-stripped, run._tag's `cpv_codes & tenant cpv_set`
+    # match-classification intersection could never hit for ANY Belgian
+    # record — a correctness bug, not cosmetic.
+    r = normalize.normalize_eprocurement(raw_eprocurement_supply)
+    assert all("-" not in code for code in r["cpv_codes"])
 
 def test_normalize_eprocurement_place_is_nuts_codes(raw_eprocurement_supply):
     assert normalize.normalize_eprocurement(raw_eprocurement_supply)["place"] == "BE231"
