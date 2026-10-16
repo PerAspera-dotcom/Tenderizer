@@ -51,3 +51,18 @@ All five confirmed-green sources now have working, tested connectors — `connec
 - **Saudi — supplier.mod.gov.sa**: login-walled, unchanged from the CR's own premise. Etimad (above) is the one live alternative path, still unconfirmed in scope.
 - **Singapore — GeBIZ**: stateful JSF app, no data without a real session/JS client — not something to script around.
 - **Malaysia — ePerolehan**: confirmed WAF-blocked even to a real browser from this network. The business would need to check access from elsewhere, or contact ePerolehan directly, before this is worth revisiting.
+
+---
+
+# CR-012 §3 — Email-alert access path + registration eligibility
+
+No scraping workaround exists for any of the four sources above (confirmed again in this pass — no proxies/session-replay/WAF-evasion attempted, per the CR's own instruction). CR-012 §3's path instead: the client (WoT) registers as a supplier/bidder directly on each portal, points that portal's own tender-alert emails at a dedicated Tenderizer inbound address, and a generic email-alert adapter parses whatever arrives. Researched here (2026-10, via each portal's own registration guidance, not guessed): can a foreign (non-local) company actually complete that registration at all.
+
+| Portal | Registration verdict | What it actually takes |
+|---|---|---|
+| **Australia — AusTender** | 🟢 eligible | Free registration, open to all businesses (as of the July 2026 rollout). No bar on foreign suppliers — Australia's trade-agreement obligations require non-discrimination for covered procurement — but an overseas supplier needs an **ABN (Australian Business Number)** first, normally obtained before contract execution (not before registering to *watch* opportunities, per the CR's actual need here — alerts, not bidding). Some federal construction/low-value procurements are Australian-business-only, irrelevant to just receiving alert emails. |
+| **Singapore — GeBIZ** | 🟢 eligible | Explicitly open to foreign companies with **no Singapore entity required** — register via a Corppass Foreign Entity account (home-country business registration documents), then complete GeBIZ Trading Partner e-registration. Verification takes 2–4 weeks for overseas entities. The cleanest of the four. |
+| **Saudi Arabia — Etimad** | 🟡 eligible but heavier | A foreign company **without** Saudi commercial registration can still register, via the "Supplier with no registration" path — submit a home-country professional practice licence and appoint a **notarized local representative** (a real, ongoing obligation, not a one-time document). 4–8 weeks. Confirms CR-012 §3's own framing: usable, but needs a real local-representative relationship WoT would have to set up, not just paperwork. |
+| **Malaysia — ePerolehan** | 🔴 not eligible without a local partner | Requires **MOF registration**, which itself requires the applicant to be **incorporated in Malaysia** (a Sdn. Bhd., via SSM) with **a Malaysia-resident director** and a local business address/bank account. There's no foreign-entity-without-local-presence path at all, unlike the other three. Per the CR's own fallback: mark this one **paused: no eligible account** unless WoT already has (or is willing to set up) a Malaysian subsidiary or local partner — register under *that* entity's name, not WoT's own. |
+
+**Net: 3 of 4 are realistically reachable** (Australia, Singapore, and Saudi with caveats) once the client actually does the registration — none of that work can be done from here. Malaysia needs a genuine local-entity decision from the client before it's worth attempting at all.

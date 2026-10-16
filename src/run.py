@@ -39,6 +39,35 @@ def _tag(rec, full_keywords, cpv_set):
     return rec
 
 
+def process_record(conn, tenant_id, rec, full_keywords, cpv_set, exclusions, now, fx_rates, run_date):
+    """The per-record tag -> expiry-check -> FX -> filter -> classify -> store
+    sequence every connector's fetch loop runs below — factored out so
+    CR-012 §3's email-alert webhook (api._ingest_email_alert_record) can
+    feed one already-normalized record through the exact same pipeline the
+    instant it arrives, rather than waiting for the next scheduled
+    run_pipeline cycle. Returns True if the record was stored, False if its
+    deadline had already passed (skipped, same as the inline check below
+    used to do) — the caller doesn't need the record itself back, every
+    caller already has it.
+    """
+    rec = _tag(rec, full_keywords, cpv_set)
+    dl = (rec.get("deadline") or "")[:10]
+    if dl and dl < run_date:
+        return False  # expired deadline — skip ingest
+    rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
+        rec.get("value"), rec.get("value_currency"), fx_rates)
+    rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
+    # CR-002 A: additive, post-filter — tags what's already kept (or
+    # excluded), never changes it.
+    rec["notice_type"] = classification.classify(rec)
+    rec["awarded_to"], rec["awarded_value"], rec["awarded_currency"], rec["award_detail"] = (
+        classification.extract_award_info(rec)
+        if rec["notice_type"] == "past_tender" else (None, None, None, None)
+    )
+    store.upsert(conn, tenant_id, rec)
+    return True
+
+
 def _maybe_alert_consecutive_failures(conn, tenant_id, source):
     """CR-004 F4: escalate (Sentry + email, both inert if unconfigured) once
     a source hits SOURCE_FAILURE_ALERT_THRESHOLD consecutive failures — but
@@ -81,22 +110,9 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
             raws = src["fetch"]()
             normalize_fn = src["normalize"]
             for raw in raws:
-                rec = _tag(normalize_fn(raw), full_keywords, cpv_set)
-                dl = (rec.get("deadline") or "")[:10]
-                if dl and dl < run_date:
-                    continue  # expired deadline — skip ingest
-                rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
-                    rec.get("value"), rec.get("value_currency"), fx_rates)
-                rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
-                # CR-002 A: additive, post-filter — tags what's already kept
-                # (or excluded), never changes it.
-                rec["notice_type"] = classification.classify(rec)
-                rec["awarded_to"], rec["awarded_value"], rec["awarded_currency"], rec["award_detail"] = (
-                    classification.extract_award_info(rec)
-                    if rec["notice_type"] == "past_tender" else (None, None, None, None)
-                )
-                store.upsert(conn, tenant_id, rec)
-                this_run_records.append(rec)
+                rec = normalize_fn(raw)
+                if process_record(conn, tenant_id, rec, full_keywords, cpv_set, exclusions, now, fx_rates, run_date):
+                    this_run_records.append(rec)
             health[name] = f"ok ({len(raws)})"
             store.record_source_health(conn, tenant_id, name, run_date, "ok",
                                         notices_pulled=len(raws))

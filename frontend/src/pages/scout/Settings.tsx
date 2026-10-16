@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getSettingsConfig, putSettingsConfig } from '../../api';
+import { getSettingsConfig, putSettingsConfig, getEmailAlertsInboundAddress } from '../../api';
 import type { SettingsConfig } from '../../types';
 
 export default function Settings() {
@@ -8,12 +8,15 @@ export default function Settings() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [inboundAddress, setInboundAddress] = useState('');
+  const [addressCopied, setAddressCopied] = useState(false);
 
   useEffect(() => {
     getSettingsConfig()
       .then(setData)
       .catch(() => setError('Failed to load settings'))
       .finally(() => setLoading(false));
+    getEmailAlertsInboundAddress().then(r => setInboundAddress(r.address)).catch(() => {});
   }, []);
 
   function update<K extends keyof SettingsConfig>(key: K, value: SettingsConfig[K]) {
@@ -128,6 +131,43 @@ export default function Settings() {
           {saved && <span style={{ color: '#34d399', fontSize: 13 }}>Saved</span>}
         </div>
         {error && <div style={{ color: '#f87171', fontSize: 13 }}>{error}</div>}
+      </div>
+
+      {/* CR-012 §3: email-alert ingestion for AusTender/GeBIZ/Etimad/
+          ePerolehan — no scraping/API path exists for any of them (see
+          SOURCES_VIABILITY.md's CR-012 §3 section), so the client registers
+          a supplier/alert account directly on each portal and points that
+          portal's own tender-alert emails at this address. One address per
+          org, routed in code via its own +tag — see
+          api._resolve_tenant_from_inbound_address. */}
+      <div className="card" style={{ padding: '20px 24px', maxWidth: 520, marginTop: 20 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 10 }}>
+          Email alert ingestion
+        </div>
+        <p style={{ color: '#8892a4', fontSize: 12, marginBottom: 12 }}>
+          For sources with no public API (AusTender, GeBIZ, Etimad, ePerolehan): register as a
+          supplier on the portal, then point its own tender-alert notifications at this address.
+          Alerts land here automatically — no further setup needed on this end.
+        </p>
+        {inboundAddress && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <code className="mono" style={{ background: '#0f1623', border: '1px solid #1a2334', borderRadius: 6, padding: '7px 12px', fontSize: 13, color: '#2EE6D4' }}>
+              {inboundAddress}
+            </code>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 12 }}
+              onClick={() => {
+                navigator.clipboard.writeText(inboundAddress).then(() => {
+                  setAddressCopied(true);
+                  setTimeout(() => setAddressCopied(false), 2000);
+                });
+              }}
+            >
+              {addressCopied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -33,6 +33,7 @@ from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
 from schema import tenant_screening_questions, tender_screening_answers
+from schema import email_alerts
 from schema import (tender_history, vault_document_history, composer_document_history,
                      composer_requirement_history, tender_relevance_overrides,
                      tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence,
@@ -2289,3 +2290,48 @@ def get_source_health(conn, tenant_id, source, days=7, now=None):
     return {"source": source, "last_result": last_result, "streak_ok_days": streak_ok_days,
             "failures_7d": failures_7d, "last_failure": last_failure,
             "consecutive_failures": consecutive_failures}
+
+
+# ── CR-012 §3: inbound email alerts ─────────────────────────────────────────
+
+def create_email_alert(conn, tenant_id, source, from_address, to_address, subject,
+                        raw_text, raw_html, parse_status, error_message, records_created):
+    with conn.begin() as c:
+        result = c.execute(insert(email_alerts).values(
+            tenant_id=tenant_id, source=source, from_address=from_address, to_address=to_address,
+            subject=subject, raw_text=raw_text, raw_html=raw_html, parse_status=parse_status,
+            error_message=error_message, records_created=records_created,
+            received_at=datetime.now(timezone.utc).isoformat()))
+        return result.inserted_primary_key[0]
+
+
+_EMAIL_ALERT_COLUMNS = ["id", "tenant_id", "source", "from_address", "to_address", "subject",
+                         "raw_text", "raw_html", "parse_status", "error_message",
+                         "records_created", "received_at"]
+
+
+def list_email_alerts(conn, tenant_id, limit=100):
+    """Newest first — the raw ingest log a human reads to find the first
+    real alert email from a recognized-but-unparsed source (see
+    email_alerts.py's module docstring on why that's the expected state for
+    every source in this build, and how a parser gets added once one exists).
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(*[email_alerts.c[col] for col in _EMAIL_ALERT_COLUMNS]).where(
+            email_alerts.c.tenant_id == tenant_id
+        ).order_by(email_alerts.c.id.desc()).limit(limit)).fetchall()
+    return [dict(zip(_EMAIL_ALERT_COLUMNS, r)) for r in rows]
+
+
+def last_email_alert_received_at(conn, tenant_id, source):
+    """Most recent received_at for this (tenant, source) pair, or None if
+    none ever arrived — CR-012 §3's "flag if nothing arrives in N days"
+    health check (api._email_alert_health) reads this directly rather than
+    going through source_health, since alert arrival is event-driven, not a
+    once-a-day run source_health's streak/failure model was built around.
+    """
+    with conn.connect() as c:
+        row = c.execute(select(email_alerts.c.received_at).where(
+            (email_alerts.c.tenant_id == tenant_id) & (email_alerts.c.source == source)
+        ).order_by(email_alerts.c.id.desc()).limit(1)).fetchone()
+    return row[0] if row else None

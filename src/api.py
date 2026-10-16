@@ -3,7 +3,7 @@
 No matching, normalisation, or fetching logic lives here.
 Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
-import sys, pathlib, json, logging, os, uuid, hashlib, tempfile, time, io, zipfile
+import sys, pathlib, json, logging, os, uuid, hashlib, tempfile, time, io, zipfile, hmac
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -21,11 +21,12 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance, dedup, translate_document
+import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts
 import run as engine
+import currency
 from schema import RELEVANCE_REASON_CATEGORIES
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -1052,6 +1053,10 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
         # real. remaining_documents is None only if usage couldn't be read.
         "quota": translate_document.check_quota(0),
     })
+    # CR-012 §3: the four email-alert sources, alongside everything else —
+    # same "the Portal Health panel already renders any {name, region,
+    # status, detail} shape generically" reuse CR-011 §1 relied on for DeepL.
+    result.extend(_email_alert_health(conn, tenant_id))
     return result
 
 
@@ -1085,6 +1090,148 @@ def _do_run(tenant_id):
 def post_run(background: BackgroundTasks, tenant_id: int = Depends(get_current_tenant_id)):
     background.add_task(_do_run, tenant_id)
     return {"status": "started"}
+
+
+# ── CR-012 §3: inbound email alerts ─────────────────────────────────────────
+# Generic adapter for the four sources SOURCES_VIABILITY.md's CR-012 §3
+# section found no scraping/API path for — see email_alerts.py's own module
+# docstring for why no sender-specific parser ships in this build (no real
+# alert email exists yet to build/test one against) and what's needed to
+# add one later.
+
+EMAIL_ALERT_SILENCE_DAYS = int(os.getenv("EMAIL_ALERT_SILENCE_DAYS", "14"))
+
+
+def _resolve_tenant_from_inbound_address(to_field):
+    """"Alerts <alerts+t5@parse.tender-izer.com>, other@x.com" -> 5. Each
+    tenant's own unique inbound address is alerts+t{tenant_id}@<inbound
+    domain> — plus-addressing, so ONE SendGrid Inbound Parse hostname
+    serves every tenant with no per-org provider configuration (see
+    CHANGE_REQUEST_012.md §3's "inbound mailbox per org" — this is that,
+    just routed in code rather than N real mailboxes). `to` can carry
+    multiple comma-separated addresses (cc'd); the first one matching the
+    alerts+t<id> pattern wins. Returns None if nothing matches (a
+    misconfigured forward, or mail sent to the bare hostname with no tag).
+    """
+    import re
+    from email.utils import getaddresses
+    for _name, addr in getaddresses([to_field or ""]):
+        m = re.match(r"alerts\+t(\d+)@", addr.strip().lower())
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _ingest_email_alert_record(conn, tenant_id, rec, now, fx_rates):
+    """One already-normalized record (from an email_alerts.py parser) ->
+    the exact same tag/filter/classify/store pipeline run_pipeline's own
+    fetch loop uses (run.process_record) — see that function's docstring.
+    Assembles the same per-tenant inputs run_pipeline does, freshly, since
+    this is a cold call outside any run_pipeline invocation.
+    """
+    tenant_kw = store.get_tenant_keywords(conn, tenant_id)
+    full_keywords = [w for lang in tenant_kw["terms"].values() for w in lang]
+    cpv_set = set(store.get_tenant_cpv(conn, tenant_id))
+    exclusions = dict(config.exclusions())
+    exclusions["_distinctive_keywords"] = tenant_kw["distinctive"]
+    run_date = now.date().isoformat()
+    return engine.process_record(conn, tenant_id, rec, full_keywords, cpv_set, exclusions, now, fx_rates, run_date)
+
+
+def _process_inbound_email_alert(from_address, to_address, subject, text, html):
+    """The actual webhook logic, as a plain function taking already-extracted
+    form fields — called directly in tests (this repo's established
+    TestClient-free convention, see test_17_api.py's own docstring), with
+    inbound_email_alert below just a thin `await request.form()` wrapper.
+    """
+    tenant_id = _resolve_tenant_from_inbound_address(to_address)
+    source, records, parser_error = email_alerts.parse_email(from_address, subject, text, html)
+
+    records_created = 0
+    if tenant_id is not None and records:
+        conn = _db()
+        now = datetime.now(timezone.utc)
+        fx_rates = currency.fetch_ecb_rates_or_fallback()
+        for rec in records:
+            if _ingest_email_alert_record(conn, tenant_id, rec, now, fx_rates):
+                records_created += 1
+
+    parse_status = "error" if parser_error else ("parsed" if records else "unparsed")
+    conn = _db()
+    store.create_email_alert(
+        conn, tenant_id, source or "unknown", from_address, to_address, subject, text, html,
+        parse_status, parser_error, records_created)
+    return {"status": "received"}
+
+
+@app.post("/api/email-alerts/inbound/{secret}")
+async def inbound_email_alert(secret: str, request: Request):
+    """SendGrid Inbound Parse's own webhook target — see email_alerts.py's
+    module docstring. No Clerk auth (SendGrid isn't a logged-in user); `secret`
+    is this endpoint's only access control, since Inbound Parse has no
+    built-in request-signing (confirmed against SendGrid's own docs — unlike
+    their separate Event Webhook feature, which does sign). Always returns
+    200 once the webhook itself is reached (even on an unroutable `to` or a
+    parser error) — SendGrid retries a non-2xx response, and retrying a
+    malformed email forever would just repeat the same failure.
+    """
+    configured_secret = os.getenv("EMAIL_ALERTS_WEBHOOK_SECRET")
+    if not configured_secret or not hmac.compare_digest(secret, configured_secret):
+        raise HTTPException(404)  # 404, not 401/403 — don't confirm this path exists to a prober
+
+    form = await request.form()
+    return _process_inbound_email_alert(
+        str(form.get("from", "")), str(form.get("to", "")), str(form.get("subject", "")),
+        str(form.get("text", "")), str(form.get("html", "")))
+
+
+@app.get("/api/email-alerts")
+def list_email_alerts(limit: int = 100, tenant_id: int = Depends(get_current_tenant_id)):
+    return store.list_email_alerts(_db(), tenant_id, limit=limit)
+
+
+@app.get("/api/email-alerts/inbound-address")
+def get_email_alerts_inbound_address(tenant_id: int = Depends(get_current_tenant_id)):
+    """This org's own unique inbound alert address — what an admin pastes
+    into AusTender/GeBIZ/Etimad/ePerolehan's own alert-notification settings
+    once they've registered a supplier account (CR-012 §3). The domain is
+    configurable (EMAIL_ALERTS_INBOUND_DOMAIN) since it's wherever the
+    client points their SendGrid Inbound Parse MX record — not hardcoded
+    here, since that's an infra choice made at setup time, not a constant.
+    """
+    domain = os.getenv("EMAIL_ALERTS_INBOUND_DOMAIN", "parse.tender-izer.com")
+    return {"address": f"alerts+t{tenant_id}@{domain}"}
+
+
+def _email_alert_health(conn, tenant_id):
+    """One Portal Health-shaped entry per recognized source (see
+    email_alerts.SOURCE_DOMAINS) — CR-012 §3's own "last alert received per
+    source; flag if nothing arrives in N days". Distinct from source_health/
+    get_source_health: alert arrival is event-driven, not a once-a-day
+    pipeline run, so there's no "run that didn't happen" to mark failed —
+    this just compares the most recent received_at against EMAIL_ALERT_
+    SILENCE_DAYS. `paused` (not `failing`) when nothing has EVER arrived —
+    matches the CR's own "stay paused in Portals config with reason until
+    an access path is live", since for three of the four sources that's
+    still the real, current, expected state (no registration exists yet).
+    """
+    now = datetime.now(timezone.utc)
+    entries = []
+    for name in sorted(set(email_alerts.SOURCE_DOMAINS.values())):
+        last = store.last_email_alert_received_at(conn, tenant_id, name)
+        if last is None:
+            entries.append({"name": name, "region": "Email alert", "status": "paused",
+                             "detail": "No alert received yet — registration pending (CR-012 §3)"})
+            continue
+        days_since = (now - datetime.fromisoformat(last)).days
+        if days_since > EMAIL_ALERT_SILENCE_DAYS:
+            entries.append({"name": name, "region": "Email alert", "status": "failing",
+                             "detail": f"No alert received in {days_since} days (silence threshold "
+                                       f"{EMAIL_ALERT_SILENCE_DAYS})"})
+        else:
+            entries.append({"name": name, "region": "Email alert", "status": "live",
+                             "detail": f"Last alert {days_since} day(s) ago"})
+    return entries
 
 
 # ── Scheduled run (prod) ─────────────────────────────────────────────────────

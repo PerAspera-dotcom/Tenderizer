@@ -351,6 +351,12 @@ export function putSettingsConfig(body: Partial<SettingsConfig>): Promise<{ save
   });
 }
 
+// ── Email alerts (CR-012 §3) ────────────────────────────────────────────────
+
+export function getEmailAlertsInboundAddress(): Promise<{ address: string }> {
+  return apiFetch('/api/email-alerts/inbound-address');
+}
+
 // ── Screening questions (CR-011 §3) ─────────────────────────────────────────
 
 export function getScreeningQuestions(): Promise<{ questions: ScreeningQuestion[] }> {

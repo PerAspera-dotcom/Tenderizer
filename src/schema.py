@@ -758,3 +758,35 @@ source_health = Table(
 )
 Index("ix_source_health_tenant_source_date", source_health.c.tenant_id,
       source_health.c.source, source_health.c.run_date)
+
+# CR-012 §3 — raw log of every inbound SendGrid Inbound Parse webhook call,
+# one row per email. Kept even when email_alerts.py's parser registry can't
+# yet match the sender (`source` stays "unknown", `parse_status` stays
+# "unparsed") — deliberately NOT dropped, since the first real alert email
+# from any of the four target senders (AusTender/GeBIZ/Etimad/ePerolehan) is
+# exactly what's needed to build and test that sender's parser against real
+# data (see email_alerts.py's own module docstring: no parser ships in this
+# CR because no sample email exists yet). `tenant_id` is resolved from the
+# recipient address's +tag (see api._resolve_tenant_from_inbound_address);
+# nullable because a malformed/unroutable `to` address still gets logged
+# for debugging rather than silently dropped. `raw_text`/`raw_html` are the
+# email body as SendGrid's Inbound Parse hands them over — kept verbatim
+# (not just the parsed fields) so a later-written parser can be tested
+# against this exact historical row, not just future ones.
+email_alerts = Table(
+    "email_alerts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=True),
+    Column("source", Text, nullable=False, server_default="unknown"),
+    Column("from_address", Text, nullable=False, server_default=""),
+    Column("to_address", Text, nullable=False, server_default=""),
+    Column("subject", Text, nullable=False, server_default=""),
+    Column("raw_text", Text, nullable=False, server_default=""),
+    Column("raw_html", Text, nullable=False, server_default=""),
+    Column("parse_status", Text, nullable=False, server_default="unparsed"),  # unparsed|parsed|error
+    Column("error_message", Text, nullable=True),
+    Column("records_created", Integer, nullable=False, server_default="0"),
+    Column("received_at", Text, nullable=False, server_default=""),
+)
+Index("ix_email_alerts_tenant_source", email_alerts.c.tenant_id, email_alerts.c.source)
+Index("ix_email_alerts_received_at", email_alerts.c.received_at)
