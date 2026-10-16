@@ -6,7 +6,7 @@ import type { Stats, PortalHealth } from '../types';
 import { formatTime } from '../utils';
 import NotificationBell from './NotificationBell';
 
-type AppId = 'portal' | 'scout' | 'vault' | 'composer';
+type AppId = 'portal' | 'scout' | 'vault' | 'composer' | 'translate';
 
 const VAULT_NAV: NavItem[] = [
   { label: 'Library', path: '/vault/library' },
@@ -48,11 +48,16 @@ const SCOUT_NAV: NavItem[] = [
   { label: 'Past Tenders', path: '/scout/past-tenders' },
   { label: 'Review Queue', path: '/scout/review-queue', badgeKey: 'newCount' },
   { label: 'Dismissed', path: '/scout/dismissed' },
-  { label: 'Translated Documents', path: '/scout/translated-documents' },
   { label: 'Portals & Health', path: '/scout/portals', groupStart: 'Configuration' },
   { label: 'Matching Config', path: '/scout/matching' },
   { label: 'Settings', path: '/scout/settings' },
 ];
+
+// CR-012 §2: a top-level module, not a page inside Scout — "a drop one or
+// more documents... with one button" tool any org member reaches directly,
+// not something scoped under "monitor & match tenders". No sub-nav (one
+// page covers upload/queue/history), so TRANSLATE_NAV is intentionally empty.
+const TRANSLATE_NAV: NavItem[] = [];
 
 const STUB_PATHS: string[] = [];
 
@@ -61,11 +66,13 @@ const APP_INFO: Record<AppId, { name: string; subtitle: string; badge: string; c
   scout: { name: 'Scout', subtitle: 'Monitor & match tenders', badge: 'SCOUT', color: '#2EE6D4' },
   vault: { name: 'Vault', subtitle: 'Technical document library', badge: 'VAULT', color: '#60a5fa' },
   composer: { name: 'Composer', subtitle: 'Draft tender proposals', badge: 'COMPOSER', color: '#c084fc' },
+  translate: { name: 'Translate', subtitle: 'Translate documents to English', badge: 'TRANSLATE', color: '#f0b429' },
 };
 
 function appAccent(app: AppId): string {
   if (app === 'vault') return '#60a5fa';
   if (app === 'composer') return '#c084fc';
+  if (app === 'translate') return '#f0b429';
   return '#2EE6D4';
 }
 
@@ -73,6 +80,7 @@ function currentApp(path: string): AppId {
   if (path.startsWith('/scout')) return 'scout';
   if (path.startsWith('/vault')) return 'vault';
   if (path.startsWith('/composer')) return 'composer';
+  if (path.startsWith('/translate')) return 'translate';
   return 'portal';
 }
 
@@ -128,7 +136,7 @@ export default function Layout({ children }: Props) {
     if (searchVal.trim()) navigate(`/scout/tender-feed?q=${encodeURIComponent(searchVal.trim())}`);
   }
 
-  const nav = app === 'scout' ? SCOUT_NAV : app === 'portal' ? PORTAL_NAV : app === 'vault' ? VAULT_NAV : app === 'composer' ? COMPOSER_NAV : [];
+  const nav = app === 'scout' ? SCOUT_NAV : app === 'portal' ? PORTAL_NAV : app === 'vault' ? VAULT_NAV : app === 'composer' ? COMPOSER_NAV : TRANSLATE_NAV;
 
   const syncLabel = stats?.last_sync
     ? `Synced ${formatTime(stats.last_sync)}`
@@ -161,6 +169,7 @@ export default function Layout({ children }: Props) {
             {app === 'scout' && <span style={{ fontSize: 14, color: '#2EE6D4' }}>◎</span>}
             {app === 'vault' && <span style={{ fontSize: 14, color: '#60a5fa' }}>📁</span>}
             {app === 'composer' && <span style={{ fontSize: 14, color: '#c084fc' }}>✏️</span>}
+            {app === 'translate' && <span style={{ fontSize: 14, color: '#f0b429' }}>🌐</span>}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>{appInfo.name}</div>
@@ -177,6 +186,7 @@ export default function Layout({ children }: Props) {
               { id: 'scout', label: 'Scout', icon: '◎', sub: 'Monitor & match tenders', path: '/scout/dashboard', badge: null, iconColor: '#2EE6D4' },
               { id: 'vault', label: 'Vault', icon: '📁', sub: 'Technical documents', path: '/vault', badge: 'DEV', iconColor: '#60a5fa' },
               { id: 'composer', label: 'Composer', icon: '✏️', sub: 'Draft proposals', path: '/composer', badge: 'DEV', iconColor: '#c084fc' },
+              { id: 'translate', label: 'Translate', icon: '🌐', sub: 'Translate documents to English', path: '/translate', badge: null, iconColor: '#f0b429' },
             ] as const).map(item => (
               <Link
                 key={item.id}
@@ -207,7 +217,7 @@ export default function Layout({ children }: Props) {
         {/* Menu label */}
         {nav.length > 0 && (
           <div style={{ padding: '16px 16px 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: '#4c5a70', textTransform: 'uppercase' }}>
-            {app === 'portal' ? 'Portal Menu' : app === 'scout' ? 'Scout Menu' : app === 'vault' ? 'Vault Menu' : 'Composer Menu'}
+            {app === 'portal' ? 'Portal Menu' : app === 'scout' ? 'Scout Menu' : app === 'vault' ? 'Vault Menu' : app === 'composer' ? 'Composer Menu' : 'Translate Menu'}
           </div>
         )}
 

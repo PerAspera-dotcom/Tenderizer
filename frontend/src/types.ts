@@ -233,6 +233,10 @@ export interface PortalHealth {
   failures_7d: number;
   last_failure: string | null;
   consecutive_failures: number;
+  // CR-012 §2: present only on the DeepL entry — document-translation
+  // quota, same shape as TranslationQuota below (estimated_cost is always
+  // 0 here, a read-only usage snapshot, not priced against an upload).
+  quota?: TranslationQuota;
 }
 
 export interface PipelineEntry extends Tender {
@@ -276,7 +280,7 @@ export interface TranslatedDocument {
   size: number;
   source_lang: string | null;
   target_lang: string;
-  status: 'queued' | 'translating' | 'ready' | 'failed';
+  status: 'queued' | 'translating' | 'ready' | 'failed' | 'already_english';
   error_message: string | null;
   billed_characters: number | null;
   uploaded_by: string;

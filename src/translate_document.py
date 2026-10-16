@@ -19,15 +19,47 @@ Every function here degrades to a status/message rather than raising, same
 convention as translate.py's _deepl_call — a DeepL outage or a bad document
 should surface as a real error, not crash the caller.
 """
+import logging
 import os
 
 import requests
 from dotenv import load_dotenv
 
+import alerts
+import translate
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DOCUMENT_ENDPOINT = "https://api.deepl.com/v2/document"
 USAGE_ENDPOINT = "https://api.deepl.com/v2/usage"
+
+# CR-012 §2: English (EN-GB specifically, not bare "EN") is the only target —
+# confirmed as the client's own decision (CR-012's "Client decisions
+# (confirmed)" §3), not a default left unconfigured. No language picker.
+TARGET_LANG = "EN-GB"
+
+# CR-012 §2: confirmed live (2026, DeepL's own published API limits) — this
+# account is Pro/Growth tier (see translate.py's CR-012 §1 fix), which caps
+# at 30 MB / 1,000,000 characters per document; Free tier is lower (10 MB /
+# 500K) but this account isn't on it. Exposed for the frontend's drop-zone
+# copy and a server-side reject-before-upload check — never trust the
+# client-side check alone.
+MAX_DOCUMENT_SIZE_BYTES = 30 * 1024 * 1024
+
+# CR-012 §2's own accepted-format list (a deliberate subset of DeepL's wider
+# format support — XLIFF/SRT are optional per the CR, everything else DeepL
+# also accepts (IDML/XML/JSON/images-in-beta) isn't asked for here).
+ACCEPTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".html", ".htm", ".xlf", ".xliff", ".srt"}
+
+# Formats _sample_text_for_detection below can actually extract text from —
+# a narrower set than ACCEPTED_EXTENSIONS. PPTX/XLSX/XLF/SRT uploads always
+# go through DeepL normally (no already-English pre-check) rather than
+# adding new parsing dependencies (python-pptx, openpyxl text extraction)
+# for what CR-012 §2 treats as a cost-saving nicety, not a correctness
+# requirement.
+_TEXT_EXTRACTABLE_EXTENSIONS = {".pdf", ".docx", ".txt", ".html", ".htm"}
 
 # DeepL bills every submitted docx/pptx/xlsx/pdf a flat minimum regardless of
 # actual size or content (confirmed against DeepL's own best-practices docs,
@@ -57,11 +89,57 @@ def _error_message(resp):
         return f"DeepL returned HTTP {resp.status_code}"
 
 
+def _sample_text_for_detection(path, content_type, max_chars=2000):
+    """Best-effort text sample for the already-English pre-check below — PDF/
+    DOCX/TXT/HTML only, see _TEXT_EXTRACTABLE_EXTENSIONS. Reuses vault.py's
+    own PDF/DOCX extraction (vault.parse_document) rather than a second
+    implementation. Returns "" on any failure (corrupt file, scanned PDF
+    with no text layer, etc.) — detection simply can't run, same as an
+    unsupported format; never raises into the caller.
+    """
+    import pathlib
+
+    ext = pathlib.Path(path).suffix.lower()
+    if ext not in _TEXT_EXTRACTABLE_EXTENSIONS:
+        return ""
+    try:
+        if ext in (".pdf", ".docx"):
+            import vault
+            text = vault.parse_document(path, content_type)
+        else:
+            text = pathlib.Path(path).read_text(encoding="utf-8", errors="ignore")
+        return (text or "")[:max_chars]
+    except Exception:
+        return ""
+
+
+def detect_already_english(path, content_type, api_key=None):
+    """CR-012 §2: "files already in English: skip, mark 'already English'".
+    Runs a cheap DeepL *text* detection call (translate.translate_and_detect)
+    on a short sample rather than submitting the whole document, so an
+    already-English file never consumes a document-translation billing unit
+    at all. Returns True only when detection actually succeeded AND came
+    back "eng" — any failure/empty-sample/unsupported-format case returns
+    False (upload normally; never silently skip a file we couldn't verify).
+    """
+    sample = _sample_text_for_detection(path, content_type)
+    if not sample.strip():
+        return False
+    _, language, status = translate.translate_and_detect(sample, api_key=api_key)
+    return status == "ok" and language == "eng"
+
+
 def upload_document(file_bytes, filename, target_lang, source_lang=None, api_key=None, timeout=30):
     """POST /v2/document. Returns (document_id, document_key, error_message)
     — error_message is None on success, otherwise DeepL's own explanation
     when available (e.g. an unsupported format or a size-limit rejection)
     so the UI can show something better than "translation failed".
+
+    CR-012 §2: failures are logged + sent to Sentry here, same "never fail
+    silently" convention translate.py's _deepl_call uses — this module had
+    no such reporting before (it degrades to a status/message for its
+    caller, same as before, but a production failure needs to be visible
+    the same way a text-translation failure already is).
     """
     key = _api_key(api_key)
     if not key:
@@ -81,8 +159,13 @@ def upload_document(file_bytes, filename, target_lang, source_lang=None, api_key
         body = resp.json()
         return body["document_id"], body["document_key"], None
     except requests.HTTPError:
-        return None, None, _error_message(resp)
+        detail = _error_message(resp)
+        logger.warning("DeepL document upload failed: %s", detail)
+        alerts.capture_error(f"DeepL document upload failed: {detail}")
+        return None, None, detail
     except Exception as e:
+        logger.warning("DeepL document upload failed: %s: %s", type(e).__name__, e)
+        alerts.capture_error(f"DeepL document upload failed: {type(e).__name__}: {e}")
         return None, None, str(e)
 
 
@@ -113,6 +196,9 @@ def check_status(document_id, document_key, api_key=None, timeout=15):
         return {"status": body.get("status"), "seconds_remaining": body.get("seconds_remaining"),
                 "billed_characters": body.get("billed_characters"), "error_message": body.get("message")}
     except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+        logger.warning("DeepL document status check failed: %s", detail)
+        alerts.capture_error(f"DeepL document status check failed: {detail}")
         return {"status": "unavailable", "seconds_remaining": None,
                 "billed_characters": None, "error_message": str(e)}
 
@@ -135,8 +221,14 @@ def download_result(document_id, document_key, api_key=None, timeout=60):
         resp.raise_for_status()
         return resp.content, None
     except requests.HTTPError:
-        return None, _error_message(resp)
+        detail = _error_message(resp)
+        logger.warning("DeepL document download failed: %s", detail)
+        alerts.capture_error(f"DeepL document download failed: {detail}")
+        return None, detail
     except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+        logger.warning("DeepL document download failed: %s", detail)
+        alerts.capture_error(f"DeepL document download failed: {detail}")
         return None, str(e)
 
 
@@ -239,6 +331,17 @@ def download_from_s3(key):
         raise StorageNotConfigured("DOCUMENTS_S3_BUCKET (or BACKUP_S3_BUCKET) is not configured")
     obj = client.get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()
+
+
+def delete_from_s3(key):
+    """CR-012 §2 delete: removes our own stored copy. S3's DeleteObject is
+    idempotent (no error deleting an already-gone key), so this is safe to
+    call even if a prior delete partially completed.
+    """
+    client, bucket = _s3_client()
+    if client is None:
+        raise StorageNotConfigured("DOCUMENTS_S3_BUCKET (or BACKUP_S3_BUCKET) is not configured")
+    client.delete_object(Bucket=bucket, Key=key)
 
 
 def storage_key(tenant_id, key_id, version, filename):

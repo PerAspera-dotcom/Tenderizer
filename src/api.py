@@ -3,7 +3,7 @@
 No matching, normalisation, or fetching logic lives here.
 Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
-import sys, pathlib, json, logging, os, uuid, hashlib, tempfile, time
+import sys, pathlib, json, logging, os, uuid, hashlib, tempfile, time, io, zipfile
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -91,6 +91,11 @@ async def _lifespan(_app: FastAPI):
         # Notifications & workflow: daily digest, after the scrape + backup
         # so it reports the freshest data and doesn't compete with them.
         _scheduler.add_job(_run_daily_digest, "cron", hour=4, minute=0, id="daily_digest")
+        # CR-012 §2: translation-dropbox retention purge — after the backup
+        # job (so a purged document is still in that day's backup) but
+        # before nothing else depends on timing here.
+        _scheduler.add_job(_run_translation_retention_purge, "cron", hour=5, minute=0,
+                            id="translation_retention_purge")
         _scheduler.start()
     yield
     if _scheduler is not None and _scheduler.running:
@@ -1037,6 +1042,15 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
         "status": _deepl_status_label(deepl_health),
         "detail": _deepl_detail(deepl_health),
         **deepl_health,
+        # CR-012 §2: "feed the usage into the quota figure on Portal Health"
+        # — document_count=0 so estimated_cost is 0 (a read-only usage
+        # snapshot, not priced against a specific upload). Unlike translate.
+        # check_health's /v2/usage ping (CR-011 §1 found that endpoint's own
+        # character_limit field is a meaningless unlimited sentinel on this
+        # plan), translate_document.check_quota prices against the
+        # *configured* DEEPL_INCLUDED_ALLOWANCE instead, so this number is
+        # real. remaining_documents is None only if usage couldn't be read.
+        "quota": translate_document.check_quota(0),
     })
     return result
 
@@ -1101,6 +1115,34 @@ def _run_backup_job():
         backup.run_backup()
     except Exception:
         logging.exception("scheduled backup job crashed outside run_backup()'s own handling")
+
+
+DOCUMENT_RETENTION_DAYS = int(os.getenv("DOCUMENT_RETENTION_DAYS", "30"))
+
+
+def _run_translation_retention_purge():
+    """CR-012 §2: "originals + translations auto-deleted after 30 days
+    (configurable env var)". A single global job (not per-tenant, unlike
+    _run_all_tenants) since store.list_translated_documents_older_than
+    already reads across every tenant in one query. Reuses the exact same
+    delete path a user's own explicit Delete click takes (store.
+    delete_translated_document + translate_document.delete_from_s3), so
+    there's only one deletion code path to keep correct, not two.
+    """
+    conn = _db()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=DOCUMENT_RETENTION_DAYS)).isoformat()
+    for doc in store.list_translated_documents_older_than(conn, cutoff):
+        for key in (doc["original_storage_key"], doc["translated_storage_key"]):
+            if not key:
+                continue
+            try:
+                translate_document.delete_from_s3(key)
+            except Exception:
+                logging.exception(f"retention purge: failed to delete S3 key {key} for document {doc['id']}")
+        try:
+            store.delete_translated_document(conn, doc["tenant_id"], doc["id"])
+        except Exception:
+            logging.exception(f"retention purge: failed to delete document {doc['id']}")
 
 
 def _run_daily_digest():
@@ -1464,12 +1506,27 @@ def get_translation_quota(document_count: int = 1, tenant_id: int = Depends(get_
 
 @app.post("/api/translated-documents")
 async def upload_translated_document(background: BackgroundTasks, file: UploadFile = File(...),
-                                      target_lang: str = Form("EN"), source_lang: Optional[str] = Form(None),
+                                      source_lang: Optional[str] = Form(None),
                                       identity: Identity = Depends(get_current_identity)):
+    """CR-012 §2: target is always English (EN-GB) now — no client-supplied
+    target_lang any more (the "Out of scope: target languages other than
+    English" line in CR-012 §2, plus the client's own confirmed decision to
+    fix the target). `source_lang` stays an optional manual override of
+    DeepL's auto-detection, per the CR's own "optional manual override".
+
+    Sized against translate_document.MAX_DOCUMENT_SIZE_BYTES (DeepL's own
+    Pro-tier 30MB limit), not the generic MAX_UPLOAD_SIZE every other
+    upload endpoint here uses — that generic 20MB cap would silently reject
+    a file DeepL itself could accept.
+    """
     tenant_id = identity.tenant_id
     content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(413, "File too large")
+    if len(content) > translate_document.MAX_DOCUMENT_SIZE_BYTES:
+        raise HTTPException(413, "File too large — DeepL's limit on this plan is 30 MB per document")
+    ext = pathlib.Path(file.filename or "").suffix.lower()
+    if ext not in translate_document.ACCEPTED_EXTENSIONS:
+        raise HTTPException(422, f"Unsupported file type {ext or '(none)'} — "
+                             f"accepted: {', '.join(sorted(translate_document.ACCEPTED_EXTENSIONS))}")
 
     quota = translate_document.check_quota(1)
     if not quota["allowed"]:
@@ -1482,19 +1539,180 @@ async def upload_translated_document(background: BackgroundTasks, file: UploadFi
     except translate_document.StorageNotConfigured as e:
         raise HTTPException(503, str(e))
 
+    conn = _db()
+
+    # CR-012 §2: "files already in English: skip, mark 'already English'" —
+    # a short-lived temp file (not the S3 original, already uploaded above)
+    # just for the cheap text-sample detection call; always cleaned up.
+    already_english = False
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        already_english = translate_document.detect_already_english(tmp_path, file.content_type)
+    finally:
+        os.unlink(tmp_path)
+
+    if already_english:
+        doc_id = store.create_translated_document(
+            conn, tenant_id, file.filename or "document", file.content_type, len(content), original_key,
+            content_hash, "eng", translate_document.TARGET_LANG, None, None, identity.account_name)
+        store.update_translated_document_status(conn, tenant_id, doc_id, "already_english")
+        doc = store.get_translated_document(conn, tenant_id, doc_id)
+        return _public_translated_document(doc, attached_tenders=[])
+
     deepl_document_id, deepl_document_key, err = translate_document.upload_document(
-        content, file.filename or "document", target_lang, source_lang=source_lang)
+        content, file.filename or "document", translate_document.TARGET_LANG, source_lang=source_lang)
     if err:
         status_code = 503 if "not configured" in err else 422
         raise HTTPException(status_code, f"DeepL could not accept this document: {err}")
 
-    conn = _db()
     doc_id = store.create_translated_document(
         conn, tenant_id, file.filename or "document", file.content_type, len(content), original_key,
-        content_hash, source_lang, target_lang, deepl_document_id, deepl_document_key, identity.account_name)
+        content_hash, source_lang, translate_document.TARGET_LANG, deepl_document_id, deepl_document_key,
+        identity.account_name)
     background.add_task(_process_translation, tenant_id, doc_id)
     doc = store.get_translated_document(conn, tenant_id, doc_id)
     return _public_translated_document(doc, attached_tenders=[])
+
+
+@app.post("/api/translated-documents/{document_id}/retry")
+def retry_translated_document(document_id: int, background: BackgroundTasks,
+                               tenant_id: int = Depends(get_current_tenant_id)):
+    """CR-012 §2: "a forced DeepL failure shows on the file with Retry" — only
+    valid on a failed document; re-reads the ALREADY-STORED original from S3
+    (never re-uploaded by the caller) and resubmits it to DeepL fresh,
+    same as a first-time upload from that point on.
+    """
+    conn = _db()
+    doc = store.get_translated_document(conn, tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    if doc["status"] != "failed":
+        raise HTTPException(409, "Only a failed document can be retried")
+    try:
+        content = translate_document.download_from_s3(doc["original_storage_key"])
+    except translate_document.StorageNotConfigured as e:
+        raise HTTPException(503, str(e))
+    quota = translate_document.check_quota(1)
+    if not quota["allowed"]:
+        raise HTTPException(409, quota["reason"] or "This upload would breach the DeepL quota reserve")
+    deepl_document_id, deepl_document_key, err = translate_document.upload_document(
+        content, doc["filename"], translate_document.TARGET_LANG, source_lang=doc["source_lang"])
+    if err:
+        raise HTTPException(422, f"DeepL could not accept this document: {err}")
+    store.reset_translated_document_for_retry(conn, tenant_id, document_id, deepl_document_id, deepl_document_key)
+    background.add_task(_process_translation, tenant_id, document_id)
+    return _public_translated_document(store.get_translated_document(conn, tenant_id, document_id),
+                                        store.get_active_tender_links_for_document(conn, tenant_id, document_id))
+
+
+@app.delete("/api/translated-documents/{document_id}")
+def delete_translated_document(document_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    """CR-012 §2: "a user can delete any job immediately." A real delete, not
+    soft-state (see store.delete_translated_document's docstring) — removes
+    the DB row + any S3 objects it pointed to. DeepL's Document API has no
+    customer-facing delete endpoint (confirmed against its published API
+    reference) — a submitted document is purged automatically on DeepL's
+    own side after a short retention window regardless, so there's no DeepL-
+    side call to make here even for a document whose DeepL "handle" (the
+    document_id/document_key pair) is technically still open.
+    """
+    conn = _db()
+    doc = store.get_translated_document(conn, tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    for key in (doc["original_storage_key"], doc["translated_storage_key"]):
+        if not key:
+            continue
+        try:
+            translate_document.delete_from_s3(key)
+        except translate_document.StorageNotConfigured:
+            pass  # nothing to clean up if storage was never configured to begin with
+    store.delete_translated_document(conn, tenant_id, document_id)
+    return {"deleted": True}
+
+
+@app.get("/api/translated-documents/download-all")
+def download_all_translated_documents(ids: str, version: str = "translated",
+                                       tenant_id: int = Depends(get_current_tenant_id)):
+    """CR-012 §2: "Download all" (zip). `ids` is a comma-separated list of
+    document ids (query string, not a path — keeps this a plain GET the
+    frontend can drive from a button, same as the single-file download
+    endpoint). Silently skips an id that doesn't belong to this tenant or
+    whose requested version isn't ready yet, rather than 404ing the whole
+    batch over one missing file — the zip just won't contain it.
+    """
+    if version not in ("original", "translated"):
+        raise HTTPException(422, "version must be 'original' or 'translated'")
+    doc_ids = [int(x) for x in ids.split(",") if x.strip()]
+    if not doc_ids:
+        raise HTTPException(422, "ids must be a non-empty comma-separated list")
+    conn = _db()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for doc_id in doc_ids:
+            doc = store.get_translated_document(conn, tenant_id, doc_id)
+            if doc is None:
+                continue
+            key = doc["original_storage_key"] if version == "original" else doc["translated_storage_key"]
+            if not key:
+                continue
+            try:
+                content = translate_document.download_from_s3(key)
+            except translate_document.StorageNotConfigured:
+                continue
+            zf.writestr(doc["filename"], content)
+    buf.seek(0)
+    return Response(content=buf.read(), media_type="application/zip",
+                     headers={"Content-Disposition": 'attachment; filename="translated_documents.zip"'})
+
+
+@app.post("/api/translated-documents/{document_id}/save-to-vault")
+def save_translated_document_to_vault(document_id: int, background: BackgroundTasks,
+                                       identity: Identity = Depends(get_current_identity)):
+    """CR-012 §2: "Save to Vault" — reuses Vault's own upload/ingest path
+    (store.add_vault_document + _run_vault_processing), "tags left empty"
+    per the CR's own wording. Creates two Vault entries (original + EN copy)
+    named so a human can see they're related — CR-012 §2 doesn't ask for a
+    new Vault-level relational link, so none is invented here; "linked"
+    means "created together, named together", not a new schema concept.
+    Only valid once translation is actually done (ready/already_english) —
+    nothing to save from a queued/translating/failed job.
+    """
+    tenant_id = identity.tenant_id
+    conn = _db()
+    doc = store.get_translated_document(conn, tenant_id, document_id)
+    if doc is None:
+        raise HTTPException(404, "Document not found")
+    if doc["status"] not in ("ready", "already_english"):
+        raise HTTPException(409, "Only a finished translation can be saved to Vault")
+
+    try:
+        original_bytes = translate_document.download_from_s3(doc["original_storage_key"])
+    except translate_document.StorageNotConfigured as e:
+        raise HTTPException(503, str(e))
+
+    tenant_dir = VAULT_UPLOAD_DIR / str(tenant_id)
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    stem = pathlib.Path(doc["filename"]).stem
+    ext = pathlib.Path(doc["filename"]).suffix
+
+    def _save_one(filename, content):
+        stored_name = f"{uuid.uuid4().hex}{ext}"
+        storage_path = tenant_dir / stored_name
+        storage_path.write_bytes(content)
+        vault_doc_id = store.add_vault_document(conn, tenant_id, filename, doc["content_type"],
+                                                  len(content), str(storage_path))
+        background.add_task(_run_vault_processing, tenant_id, vault_doc_id, str(storage_path), doc["content_type"])
+        return vault_doc_id
+
+    saved_ids = [_save_one(doc["filename"], original_bytes)]
+    if doc["status"] == "ready" and doc["translated_storage_key"]:
+        translated_bytes = translate_document.download_from_s3(doc["translated_storage_key"])
+        saved_ids.append(_save_one(f"{stem} (EN){ext}", translated_bytes))
+
+    return {"saved_vault_document_ids": saved_ids}
 
 
 @app.get("/api/translated-documents")

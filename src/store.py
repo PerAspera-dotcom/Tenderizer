@@ -1600,6 +1600,55 @@ def get_translated_document_by_hash(conn, tenant_id, content_hash):
     return _translated_document_row(row) if row else None
 
 
+def reset_translated_document_for_retry(conn, tenant_id, document_id, deepl_document_id, deepl_document_key):
+    """CR-012 §2 Retry: re-arms a failed document for another poll/download
+    cycle against a FRESH DeepL submission (api.retry_translated_document
+    re-uploads the already-stored original and gets a new document_id/key
+    back — DeepL has no "retry this same submission" call). error_message
+    is explicitly cleared (unlike update_translated_document_status's
+    sticky None-means-untouched convention) since a stale failure reason
+    must not linger once a new attempt is underway.
+    """
+    with conn.begin() as c:
+        c.execute(update(translated_documents).where(
+            (translated_documents.c.tenant_id == tenant_id) & (translated_documents.c.id == document_id)
+        ).values(status="queued", error_message=None,
+                  deepl_document_id=deepl_document_id, deepl_document_key=deepl_document_key))
+
+
+def delete_translated_document(conn, tenant_id, document_id):
+    """CR-012 §2: a real, immediate delete (not soft-state like tender_
+    duplicates/document_tender_links) — this is the user's own uploaded
+    file, not shared org history worth preserving a trail for. Deletes any
+    (now-orphaned) document_tender_links rows too, same cascade the table's
+    own FK implies. Caller (api.delete_translated_document_endpoint) is
+    responsible for also removing the S3 objects this row pointed to —
+    kept out of this function since store.py has no S3 dependency anywhere
+    else and shouldn't gain one just for this.
+    """
+    with conn.begin() as c:
+        c.execute(document_tender_links.delete().where(
+            (document_tender_links.c.tenant_id == tenant_id) &
+            (document_tender_links.c.document_id == document_id)))
+        c.execute(translated_documents.delete().where(
+            (translated_documents.c.tenant_id == tenant_id) &
+            (translated_documents.c.id == document_id)))
+
+
+def list_translated_documents_older_than(conn, cutoff_iso):
+    """CR-012 §2 retention: every tenant's translated_documents row uploaded
+    before `cutoff_iso` (an ISO datetime string, same format uploaded_at is
+    stored in) — across ALL tenants, unlike list_translated_documents above,
+    since the retention purge is a single global scheduled job (api._run_
+    translation_retention_purge), not something run per-tenant.
+    """
+    with conn.connect() as c:
+        rows = c.execute(select(*[translated_documents.c[col] for col in TRANSLATED_DOCUMENTS_COLUMNS]).where(
+            translated_documents.c.uploaded_at < cutoff_iso
+        )).fetchall()
+    return [_translated_document_row(r) for r in rows]
+
+
 def list_translated_documents(conn, tenant_id, language=None, status=None, attached=None):
     """The library listing — org-shared, so no account filter. `attached`
     (True/False/None) filters on whether the document has at least one

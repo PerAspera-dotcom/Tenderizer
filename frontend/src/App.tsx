@@ -11,7 +11,6 @@ import TenderFeed from './pages/scout/TenderFeed';
 import PastTenders from './pages/scout/PastTenders';
 import ReviewQueue from './pages/scout/ReviewQueue';
 import DismissedTenders from './pages/scout/DismissedTenders';
-import TranslatedDocuments from './pages/scout/TranslatedDocuments';
 import PortalsHealth from './pages/scout/PortalsHealth';
 import MatchingConfig from './pages/scout/MatchingConfig';
 import Settings from './pages/scout/Settings';
@@ -24,6 +23,7 @@ import ProposalReview from './pages/composer/ProposalReview';
 import GapsReport from './pages/composer/GapsReport';
 import ComposerStyle from './pages/composer/ComposerStyle';
 import ComposerSettings from './pages/composer/ComposerSettings';
+import Translate from './pages/Translate';
 
 function Router() {
   const { pathname } = useLocation();
@@ -37,7 +37,6 @@ function Router() {
     '/scout/past-tenders': <Layout><PastTenders /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
     '/scout/dismissed': <Layout><DismissedTenders /></Layout>,
-    '/scout/translated-documents': <Layout><TranslatedDocuments /></Layout>,
     '/scout/portals': <Layout><PortalsHealth /></Layout>,
     '/scout/matching': <Layout><MatchingConfig /></Layout>,
     '/scout/settings': <Layout><Settings /></Layout>,
@@ -50,6 +49,7 @@ function Router() {
     '/composer/gaps': <Layout><GapsReport /></Layout>,
     '/composer/style': <Layout><ComposerStyle /></Layout>,
     '/composer/settings': <Layout><ComposerSettings /></Layout>,
+    '/translate': <Layout><Translate /></Layout>,
   };
 
   // CR-002 F/D-D: Calendar is now the Portal's default landing screen.

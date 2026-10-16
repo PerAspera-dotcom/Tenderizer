@@ -225,12 +225,35 @@ export function getTranslationQuota(documentCount = 1): Promise<TranslationQuota
   return apiFetch<TranslationQuota>(`/api/translated-documents/quota?document_count=${documentCount}`);
 }
 
-export function uploadTranslatedDocument(file: File, targetLang = 'EN', sourceLang?: string): Promise<TranslatedDocument> {
+// CR-012 §2: target is always English (EN-GB) now — no targetLang param,
+// matches api.upload_translated_document no longer accepting one.
+export function uploadTranslatedDocument(file: File, sourceLang?: string): Promise<TranslatedDocument> {
   const form = new FormData();
   form.append('file', file);
-  form.append('target_lang', targetLang);
   if (sourceLang) form.append('source_lang', sourceLang);
   return apiFetch<TranslatedDocument>('/api/translated-documents', { method: 'POST', body: form });
+}
+
+export function retryTranslatedDocument(id: number): Promise<TranslatedDocument> {
+  return apiFetch<TranslatedDocument>(`/api/translated-documents/${id}/retry`, { method: 'POST' });
+}
+
+export function deleteTranslatedDocument(id: number): Promise<{ deleted: boolean }> {
+  return apiFetch(`/api/translated-documents/${id}`, { method: 'DELETE' });
+}
+
+export function saveTranslatedDocumentToVault(id: number): Promise<{ saved_vault_document_ids: number[] }> {
+  return apiFetch(`/api/translated-documents/${id}/save-to-vault`, { method: 'POST' });
+}
+
+export async function downloadAllTranslatedDocumentsBlob(ids: number[], version: 'original' | 'translated' = 'translated'): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const url = `${BASE}/api/translated-documents/download-all?ids=${ids.join(',')}&version=${version}`;
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.blob();
 }
 
 export interface TranslatedDocumentFilters {
