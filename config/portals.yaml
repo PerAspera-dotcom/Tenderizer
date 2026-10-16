@@ -24,3 +24,24 @@
 - name: Bekanntmachungsservice
   type: api
   enabled: true
+# CR-011 §4: all four confirmed green/buildable (SOURCES_VIABILITY.md) — no
+# legal gate found for any of them (OGL/CC0, no ToS prohibition), same
+# "clean on the law, gated only on a manual business go-live decision" shape
+# as Bekanntmachungsservice. Ship paused (enabled:false) until that decision,
+# same precedent.
+- name: Find a Tender
+  type: api
+  enabled: false
+- name: Contracts Finder
+  type: api
+  enabled: false
+- name: CanadaBuys
+  type: api
+  enabled: false
+# TenderNed additionally needs nothing further code-wise (the confirmed-live
+# path needs no credentials — see connectors/tenderned.py's module
+# docstring), so this is the same pending-business-decision gate as the
+# other three, not a pending-credentials gate.
+- name: TenderNed
+  type: api
+  enabled: false

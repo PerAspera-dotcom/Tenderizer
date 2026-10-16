@@ -227,15 +227,19 @@ def _write_last_run(db_path, tenant_id, health, this_run_records):
 
 
 def _default_sources(conn, tenant_id, since):
-    """The TED + BOAMP + e-Procurement + Bekanntmachungsservice sources for a
+    """The TED + BOAMP + e-Procurement + Bekanntmachungsservice + (CR-011 §4)
+    Find a Tender + Contracts Finder + CanadaBuys + TenderNed sources for a
     scheduled run, scoped to this tenant's CPV/keyword config and filtered to
-    their enabled portals (step 5). e-Procurement and Bekanntmachungsservice
-    both ship `enabled: false` (CR-010 §4 legal gate — Germany's is clean CC0
-    but still gated on the business's own manual trial verdict per CR-010's
-    preamble) — present in the list so either runs the moment a tenant/
-    portal config enables it, same as any other source.
+    their enabled portals (step 5). All four CR-011 §4 sources ship
+    `enabled: false` (same "clean on the law, gated on a manual business
+    go-live decision" shape e-Procurement/Bekanntmachungsservice set in
+    CR-010 §4) — present in the list so any of them runs the moment a
+    tenant/portal config enables it, same as any other source.
     """
-    from connectors import ted, boamp, eprocurement, bekanntmachungsservice
+    from connectors import (
+        ted, boamp, eprocurement, bekanntmachungsservice,
+        find_a_tender, contracts_finder, canadabuys, tenderned,
+    )
     cpv_codes = store.get_tenant_cpv(conn, tenant_id)
     distinctive = store.get_tenant_keywords(conn, tenant_id)["distinctive"]
     enabled = store.get_enabled_portal_names(conn, tenant_id)
@@ -252,6 +256,18 @@ def _default_sources(conn, tenant_id, since):
         {"name": "Bekanntmachungsservice",
          "fetch": lambda: bekanntmachungsservice.fetch(cpv_codes, distinctive, since),
          "normalize": normalize.normalize_bekanntmachungsservice},
+        {"name": "Find a Tender",
+         "fetch": lambda: find_a_tender.fetch(cpv_codes, distinctive, since),
+         "normalize": normalize.normalize_find_a_tender},
+        {"name": "Contracts Finder",
+         "fetch": lambda: contracts_finder.fetch(cpv_codes, distinctive, since),
+         "normalize": normalize.normalize_contracts_finder},
+        {"name": "CanadaBuys",
+         "fetch": lambda: canadabuys.fetch(cpv_codes, distinctive, since),
+         "normalize": normalize.normalize_canadabuys},
+        {"name": "TenderNed",
+         "fetch": lambda: tenderned.fetch(cpv_codes, distinctive, since),
+         "normalize": normalize.normalize_tenderned},
     ]
     return [s for s in sources if s["name"] in enabled]
 

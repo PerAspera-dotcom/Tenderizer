@@ -784,3 +784,182 @@ def normalize_bekanntmachungsservice(raw):
         "raw_award_currency": raw.get("noticeValueCurrency") or None,
         "raw_award_detail": None,
     }
+
+
+# ── CR-011 §4: UK — Find a Tender Service ───────────────────────────────────
+# Raw shape produced by connectors/find_a_tender.py's own flattening of the
+# OCDS release object (NOT the raw OCDS structure 1:1 — see that connector's
+# docstring for the live-confirmed nested field paths this was assembled
+# from, same "connector flattens, normalize consumes flat" split
+# bekanntmachungsservice.py/normalize_bekanntmachungsservice already use).
+
+_UK_CATEGORY = {"goods": "Supply", "services": "Services", "works": "Works"}
+
+
+def normalize_find_a_tender(raw):
+    """CR-011 §4: no award fields — this connector only pulls `stages=tender`
+    releases (open opportunities, the Review Queue's actual use case), never
+    the `award` stage, so raw_award_* stay None/absent, same as any other
+    source's not-yet-awarded notices.
+    """
+    return {
+        "source": "Find a Tender",
+        "pub_number": raw.get("id", ""),
+        "tag_line": raw.get("title") or "",
+        "description": raw.get("description") or "",
+        "buyer": raw.get("buyerName") or "",
+        "country": "GBR",
+        "place": raw.get("place") or "",
+        "category": _UK_CATEGORY.get((raw.get("mainProcurementCategory") or "").lower(), "Other"),
+        "procedure": (raw.get("procurementMethodDetails") or "").lower(),
+        "pub_date": _trim_date(raw.get("date")) or "",
+        "deadline": _trim_date(raw.get("tenderPeriodEndDate")) or "",
+        "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
+        "matched_terms": [],
+        "match_source": None,
+        "url": f"https://www.find-tender.service.gov.uk/Notice/{raw['id']}" if raw.get("id") else "",
+        "first_seen": None,
+        "internal_identifier": None,
+        "value": str(raw["valueAmount"]) if raw.get("valueAmount") is not None else "",
+        "value_currency": raw.get("valueCurrency") or "",
+        # CR-011 §4: English-only source — see connectors/find_a_tender.py's
+        # module docstring. No per-notice detection needed, same stance
+        # bekanntmachungsservice.py takes for "always German".
+        "language": "eng",
+        "raw_award_winner": None,
+        "raw_award_value": None,
+        "raw_award_currency": None,
+        "raw_award_detail": None,
+    }
+
+
+# ── CR-011 §4: UK — Contracts Finder ────────────────────────────────────────
+# Raw shape produced by connectors/contracts_finder.py's own flattening —
+# see that connector's docstring for the confirmed-live field paths.
+
+def normalize_contracts_finder(raw):
+    """CR-011 §4: no `place` — confirmed live that this source's delivery-
+    location data sits under `tender.items[].deliveryAddresses[]` as a list
+    of partial address fragments (postal code, or just a bare country name
+    with no code), not the single clean `deliveryLocation.description`
+    string Find a Tender's items carry — assembling a place string from
+    that fragment shape wasn't confirmed worth guessing at, so left "" for
+    v1 rather than render a partial/misleading location.
+    """
+    return {
+        "source": "Contracts Finder",
+        "pub_number": raw.get("id", ""),
+        "tag_line": raw.get("title") or "",
+        "description": raw.get("description") or "",
+        "buyer": raw.get("buyerName") or "",
+        "country": "GBR",
+        "place": "",
+        "category": _UK_CATEGORY.get((raw.get("mainProcurementCategory") or "").lower(), "Other"),
+        "procedure": (raw.get("procurementMethodDetails") or "").lower(),
+        "pub_date": _trim_date(raw.get("date")) or "",
+        "deadline": _trim_date(raw.get("tenderPeriodEndDate")) or "",
+        "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
+        "matched_terms": [],
+        "match_source": None,
+        "url": raw.get("noticeUrl") or "",
+        "first_seen": None,
+        "internal_identifier": None,
+        "value": str(raw["valueAmount"]) if raw.get("valueAmount") is not None else "",
+        "value_currency": raw.get("valueCurrency") or "",
+        "language": "eng",
+        "raw_award_winner": None,
+        "raw_award_value": None,
+        "raw_award_currency": None,
+        "raw_award_detail": None,
+    }
+
+
+# ── CR-011 §4: Netherlands — TenderNed ──────────────────────────────────────
+# Raw shape produced by connectors/tenderned.py's own list+detail merge — see
+# that connector's docstring for the confirmed-live field names this was
+# read from.
+
+_NL_TYPE_OPDRACHT = {"L": "Supply", "D": "Services", "W": "Works"}  # typeOpdracht.code
+
+
+def normalize_tenderned(raw):
+    """CR-011 §4: no value/value_currency — confirmed absent from both
+    TenderNed endpoints this connector reads (see connectors/tenderned.py's
+    module docstring). No award fields — this is the open-notice list
+    endpoint, never award/result data.
+    """
+    return {
+        "source": "TenderNed",
+        "pub_number": str(raw["publicatieId"]) if raw.get("publicatieId") is not None else "",
+        "tag_line": raw.get("aanbestedingNaam") or "",
+        "description": raw.get("opdrachtBeschrijving") or "",
+        "buyer": raw.get("opdrachtgeverNaam") or "",
+        "country": "NLD",
+        "place": raw.get("nuts") or "",
+        "category": _NL_TYPE_OPDRACHT.get(raw.get("typeOpdracht") or "", "Other"),
+        "procedure": (raw.get("procedure") or "").lower(),
+        "pub_date": (raw.get("publicatieDatum") or "")[:10],
+        "deadline": (raw.get("sluitingsDatum") or "")[:10],
+        "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
+        "matched_terms": [],
+        "match_source": None,
+        "url": raw.get("url") or "",
+        "first_seen": None,
+        # The buyer's own procurement reference — see
+        # connectors/tenderned.py's _fetch_detail docstring.
+        "internal_identifier": raw.get("referentieNummer"),
+        "value": "",
+        "value_currency": "",
+        # CR-011 §4: Dutch-only source — see connectors/tenderned.py's module
+        # docstring. Goes through DeepL like BOAMP.
+        "language": "nld",
+        "raw_award_winner": None,
+        "raw_award_value": None,
+        "raw_award_currency": None,
+        "raw_award_detail": None,
+    }
+
+
+# ── CR-011 §4: Canada — CanadaBuys ──────────────────────────────────────────
+# Raw shape produced by connectors/canadabuys.py's own CSV row parsing — see
+# that connector's docstring for the exact confirmed-live CSV column names
+# this was read from.
+
+_CA_CATEGORY = {"*cnst": "Works"}  # see connectors/canadabuys.py — only this code confirmed live
+
+
+def normalize_canadabuys(raw):
+    """CR-011 §4: no `cpv_codes` — see connectors/canadabuys.py's module
+    docstring (GSIN/UNSPSC, no verified mapping to CPV built). No award
+    fields — this file is the open-tender-notice feed, never award data
+    (CanadaBuys publishes awards as a SEPARATE dataset this CR doesn't pull).
+    No `value`/`value_currency` — confirmed absent from the source entirely.
+    """
+    return {
+        "source": "CanadaBuys",
+        "pub_number": raw.get("referenceNumber") or "",
+        "tag_line": raw.get("title") or "",
+        "description": raw.get("description") or "",
+        "buyer": raw.get("contractingEntityName") or "",
+        "country": "CAN",
+        "place": raw.get("regionsOfDelivery") or "",
+        "category": _CA_CATEGORY.get((raw.get("procurementCategory") or "").lower(), "Other"),
+        "procedure": (raw.get("procurementMethod") or "").lower(),
+        "pub_date": (raw.get("publicationDate") or "")[:10],
+        "deadline": (raw.get("closingDate") or "")[:10],
+        "cpv_codes": [],
+        "matched_terms": [],
+        "match_source": None,
+        "url": raw.get("noticeURL") or "",
+        "first_seen": None,
+        "internal_identifier": None,
+        "value": "",
+        "value_currency": "",
+        # CR-011 §4: English-only read of a bilingual source — see
+        # connectors/canadabuys.py's module docstring.
+        "language": "eng",
+        "raw_award_winner": None,
+        "raw_award_value": None,
+        "raw_award_currency": None,
+        "raw_award_detail": None,
+    }

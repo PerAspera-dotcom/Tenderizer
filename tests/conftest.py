@@ -300,3 +300,81 @@ def raw_bekanntmachungsservice_below_threshold():
         "noticeValue": "",
         "noticeValueCurrency": "",
     }
+
+
+# ── CR-011 §4: new source fixtures ──────────────────────────────────────────
+# Each shaped the way its own connector's parse_response/_flatten produces it
+# (NOT the raw source API payload 1:1) — captured against real, live-fetched
+# responses on 2026-10-16 (see each connector's own module docstring for the
+# confirmed nested paths these were flattened from).
+
+@pytest.fixture
+def raw_find_a_tender_supply():
+    return {
+        "id": "098127-2026",
+        "date": "2026-10-16T15:52:30+01:00",
+        "title": "CVG Close & Cleaning Contract 2027 - 2029",
+        "description": "Close Cleaning along with an Office premises",
+        "mainProcurementCategory": "services",
+        "procurementMethodDetails": "Open procedure",
+        "tenderPeriodEndDate": "2026-11-16T12:00:00Z",
+        "cpvCodes": ["90910000"],
+        "place": "North Lanarkshire",
+        "buyerName": "Clyde Valley Housing Association Limited",
+        "valueAmount": None,
+        "valueCurrency": None,
+    }
+
+
+@pytest.fixture
+def raw_contracts_finder_supply():
+    return {
+        "id": "7eeb3a8e-8f79-46c3-92bf-a032bedc89d7-918207",
+        "date": "2026-10-16T15:24:18+01:00",
+        "title": "CA18576 - Electrical Maintenance. 4 Year Opportunity",
+        "description": "New College Swindon invites tenders for Electrical Maintenance Services.",
+        "mainProcurementCategory": "services",
+        "procurementMethodDetails": "Open procedure",
+        "tenderPeriodEndDate": "2026-11-19T10:00:00Z",
+        "cpvCodes": ["45310000", "50711000", "71314100"],
+        "buyerName": "New College Swindon",
+        "valueAmount": 400000,
+        "valueCurrency": "GBP",
+        "noticeUrl": "https://www.contractsfinder.service.gov.uk/Notice/7eeb3a8e-8f79-46c3-92bf-a032bedc89d7",
+    }
+
+
+@pytest.fixture
+def raw_canadabuys_supply():
+    return {
+        "title": "Open Construction Source List for CFB Halifax",
+        "description": "Construction source list for Canadian Forces Base Halifax.",
+        "referenceNumber": "MX-443841357513",
+        "publicationDate": "2026-01-23",
+        "closingDate": "2029-03-31T13:00:00",
+        "gsin": "",
+        "unspsc": "",
+        "procurementCategory": "*CNST",
+        "procurementMethod": "Competitive - Open bidding",
+        "regionsOfDelivery": "Nova Scotia",
+        "contractingEntityName": "Defence Construction Canada - Atlantic Region",
+        "noticeURL": "https://www.merx.com/public/solicitations/3776296409/abstract?language=EN",
+    }
+
+
+@pytest.fixture
+def raw_tenderned_supply():
+    return {
+        "publicatieId": 445074,
+        "publicatieDatum": "2026-10-16T16:18:00.558847",
+        "aanbestedingNaam": "Representatie artikelen",
+        "opdrachtBeschrijving": "De Opdracht betreft het leveren van representatieartikelen.",
+        "opdrachtgeverNaam": "Belastingdienst, IUC Belastingdienst",
+        "sluitingsDatum": "2026-11-20T12:00:00",
+        "typeOpdracht": "L",
+        "procedure": "Openbaar",
+        "cpvCodes": ["18530000"],
+        "nuts": "NL",
+        "referentieNummer": "IUC25-711",
+        "url": "https://www.tenderned.nl/aankondigingen/overzicht/445074",
+    }
