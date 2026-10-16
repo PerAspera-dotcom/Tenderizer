@@ -36,6 +36,20 @@ def _send_sentry(subject, message):
     sentry_sdk.capture_message(f"{subject}: {message}", level="error")
 
 
+def capture_error(message, level="error"):
+    """CR-011 §1: Sentry-only capture, no email/log — for a caller that
+    already does its own logging and fires often enough (e.g. translate.py's
+    per-call DeepL failures) that routing every instance through send_alert's
+    email path would spam rather than inform. Sentry's own dedup/fingerprint
+    handles the repeats; email escalation for a SUSTAINED failure still goes
+    through the existing source_health/_maybe_alert_consecutive_failures path.
+    """
+    if not os.getenv("SENTRY_DSN"):
+        return
+    import sentry_sdk
+    sentry_sdk.capture_message(message, level=level)
+
+
 def _send_email(subject, message, to_addr):
     host = os.getenv("SMTP_HOST")
     if not host or not to_addr:

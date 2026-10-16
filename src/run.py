@@ -127,6 +127,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     # in case DeepL is back up. translate_cached() itself dedupes by content
     # hash (and is deliberately NOT tenant-scoped — see schema.py), so identical
     # text across notices, or across tenants, is never sent twice either.
+    translated_this_run = 0
     for r in store.all_records(conn, tenant_id):
         if r.get("exclude_reason") or not r.get("language") or r["language"] == "eng":
             continue
@@ -136,6 +137,21 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
         desc_en, desc_status = translate.translate_cached(conn, r.get("description"))
         status = "ok" if tag_status == "ok" and desc_status == "ok" else "unavailable"
         store.set_translation(conn, tenant_id, r["pub_number"], tag_en or "", desc_en or "", status)
+        if status == "ok":
+            translated_this_run += 1
+
+    # CR-011 §1: DeepL's own health, independent of whether any record above
+    # actually needed translating today — a lightweight ping (see
+    # translate.check_health's docstring on why it's safe to call every run),
+    # recorded through the same source_health table/get_source_health shape
+    # TED/BOAMP/etc. already use, so /api/health surfaces it the same way
+    # with no new storage or API shape needed.
+    deepl_status, deepl_detail = translate.check_health()
+    store.record_source_health(
+        conn, tenant_id, "DeepL", run_date,
+        "ok" if deepl_status == "ok" else "failed",
+        notices_pulled=translated_this_run if deepl_status == "ok" else None,
+        error_detail=None if deepl_status == "ok" else (deepl_detail or deepl_status))
 
     # CR-007 Phase C: cross-portal duplicate detection (e.g. the same tender
     # on TED and BOAMP) — runs after translation, unlike the same-source pass

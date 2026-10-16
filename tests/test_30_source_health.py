@@ -83,6 +83,74 @@ def test_run_pipeline_records_source_health_on_failure(tmp_path):
     assert "portal down" in summary["last_result"]
 
 
+# ── CR-011 §1: DeepL's own health, recorded every run via translate.check_health ──
+
+def test_run_pipeline_records_deepl_health_ok(tmp_path, monkeypatch, raw_ted_supply):
+    monkeypatch.setattr("translate.check_health", lambda: ("ok", ""))
+    db = str(tmp_path / "t.db")
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, str(tmp_path / "r.xlsx"),
+                      tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    conn = store.init_db(db)
+    summary = store.get_source_health(conn, TEST_TENANT_ID, "DeepL")
+    assert summary["last_result"].startswith("ok")
+
+
+def test_run_pipeline_records_deepl_health_failing(tmp_path, monkeypatch, raw_ted_supply):
+    monkeypatch.setattr("translate.check_health", lambda: ("failing", "DeepL auth rejected (401)"))
+    db = str(tmp_path / "t.db")
+    run.run_pipeline([_src_ok(raw_ted_supply)], db, str(tmp_path / "r.xlsx"),
+                      tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    conn = store.init_db(db)
+    summary = store.get_source_health(conn, TEST_TENANT_ID, "DeepL")
+    assert summary["consecutive_failures"] == 1
+    assert "auth rejected" in summary["last_result"]
+
+
+def test_run_pipeline_records_deepl_health_runs_even_with_nothing_to_translate(tmp_path, monkeypatch):
+    # confirmed deliberate: check_health() pings regardless of whether any
+    # record needed translation this run (see translate.check_health's
+    # docstring) — an empty source list must still record DeepL's own status.
+    monkeypatch.setattr("translate.check_health", lambda: ("unavailable", "DEEPL_API_KEY is not set"))
+    db = str(tmp_path / "t.db")
+    run.run_pipeline([], db, str(tmp_path / "r.xlsx"), tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    conn = store.init_db(db)
+    summary = store.get_source_health(conn, TEST_TENANT_ID, "DeepL")
+    assert summary["last_result"] is not None
+
+
+# ── CR-011 §1: /api/health surfaces DeepL alongside the Scout portals ──────
+
+def test_get_health_includes_deepl_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    store.ensure_tenant(store.init_db(str(tmp_path / "t.db")), TEST_TENANT_ID)
+    result = api.get_health(tenant_id=TEST_TENANT_ID)
+    deepl = next(p for p in result if p["name"] == "DeepL")
+    assert deepl["region"] == "Translation"
+    assert deepl["status"] == "paused"  # never run yet in this fresh DB
+
+
+def test_get_health_deepl_status_live_after_ok_run(tmp_path, monkeypatch):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.ensure_tenant(conn, TEST_TENANT_ID)
+    store.record_source_health(conn, TEST_TENANT_ID, "DeepL", "2026-10-16", "ok", notices_pulled=3)
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    result = api.get_health(tenant_id=TEST_TENANT_ID)
+    deepl = next(p for p in result if p["name"] == "DeepL")
+    assert deepl["status"] == "live"
+
+
+def test_get_health_deepl_status_failing_surfaces_detail(tmp_path, monkeypatch):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.ensure_tenant(conn, TEST_TENANT_ID)
+    store.record_source_health(conn, TEST_TENANT_ID, "DeepL", "2026-10-16", "failed",
+                                error_detail="DeepL quota exceeded (456)")
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    result = api.get_health(tenant_id=TEST_TENANT_ID)
+    deepl = next(p for p in result if p["name"] == "DeepL")
+    assert deepl["status"] == "failing"
+    assert deepl["detail"] == "DeepL quota exceeded (456)"
+
+
 def test_consecutive_failures_triggers_alert_at_threshold(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr("alerts.send_alert", lambda subject, message: calls.append((subject, message)))

@@ -901,7 +901,35 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
         # yet, e.g. "planned"/"paused" ones that never actually fetch).
         entry.update(store.get_source_health(conn, tenant_id, portal["name"]))
         result.append(entry)
+    # CR-011 §1: DeepL isn't a Scout portal/connector (no CPV/region/enabled
+    # toggle), but "never fail silently again" means its health belongs on
+    # this same panel — reuses source_health (run.py pings it every run via
+    # translate.check_health) rather than a parallel mechanism. The Portal
+    # Health panel already renders any {name, region, status, detail} shape
+    # generically, so this needed no frontend change.
+    deepl_health = store.get_source_health(conn, tenant_id, "DeepL")
+    result.append({
+        "name": "DeepL", "region": "Translation",
+        "status": _deepl_status_label(deepl_health),
+        "detail": _deepl_detail(deepl_health),
+        **deepl_health,
+    })
     return result
+
+
+def _deepl_status_label(deepl_health):
+    last_result = deepl_health.get("last_result")
+    if last_result is None:
+        return "paused"  # never run yet (e.g. freshly seeded tenant)
+    return "failing" if last_result.startswith("error:") else "live"
+
+
+def _deepl_detail(deepl_health):
+    # get_source_health has no dedicated error_detail field — the reason
+    # lives inside last_result's own "error: {detail}" formatting (store.
+    # get_source_health), strip the prefix rather than duplicate it raw.
+    last_result = deepl_health.get("last_result") or ""
+    return last_result[len("error: "):] if last_result.startswith("error: ") else ""
 
 
 # ── Run now ───────────────────────────────────────────────────────────────────
