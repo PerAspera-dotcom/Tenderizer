@@ -1010,6 +1010,8 @@ _PORTAL_META = [
      "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
     {"name": "TenderNed", "region": "Netherlands", "status": "paused",
      "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
+    {"name": "PhilGEPS", "region": "Philippines", "status": "paused",
+     "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
 ]
 
 @app.get("/api/health")

@@ -45,3 +45,9 @@
 - name: TenderNed
   type: api
   enabled: false
+# PhilGEPS joined this pass after the first four — confirmed live/public via
+# a real-browser probe (not in the original SOURCES_VIABILITY.md pass), same
+# pending-business-decision gate as the rest.
+- name: PhilGEPS
+  type: api
+  enabled: false

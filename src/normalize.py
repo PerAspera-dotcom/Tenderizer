@@ -920,6 +920,53 @@ def normalize_tenderned(raw):
     }
 
 
+# ── CR-011 §4: Philippines — PhilGEPS ───────────────────────────────────────
+# Raw shape produced by connectors/philgeps.py's own regex row parsing — see
+# that connector's docstring for the confirmed-live HTML structure this was
+# read from.
+
+def normalize_philgeps(raw):
+    """CR-011 §4: no cpv_codes, value, place, or procedure — all confirmed
+    absent from the list view this connector reads (see connectors/
+    philgeps.py's module docstring). category stays "Other" — PhilGEPS' own
+    ~150-name free-text category vocabulary has no verified crosswalk to our
+    CPV-derived category enum, same honest-gap stance normalize_canadabuys
+    takes for its GSIN/UNSPSC codes. No award fields — this is the open-
+    opportunity list, never award data.
+    """
+    return {
+        "source": "PhilGEPS",
+        "pub_number": raw.get("refID") or "",
+        "tag_line": raw.get("title") or "",
+        "description": "",
+        "buyer": raw.get("agency") or "",
+        "country": "PHL",
+        "place": "",
+        "category": "Other",
+        "procedure": "",
+        "pub_date": raw.get("publicationDate") or "",
+        "deadline": raw.get("closingDate") or "",
+        "cpv_codes": [],
+        "matched_terms": [],
+        "match_source": None,
+        "url": (
+            f"https://notices.philgeps.gov.ph/GEPSNONPILOT/Tender/SplashBidNoticeAbstractUI.aspx"
+            f"?menuIndex=3&refID={raw['refID']}&Result=3"
+        ) if raw.get("refID") else "",
+        "first_seen": None,
+        "internal_identifier": None,
+        "value": "",
+        "value_currency": "",
+        # CR-011 §4: English-only source — see connectors/philgeps.py's
+        # module docstring.
+        "language": "eng",
+        "raw_award_winner": None,
+        "raw_award_value": None,
+        "raw_award_currency": None,
+        "raw_award_detail": None,
+    }
+
+
 # ── CR-011 §4: Canada — CanadaBuys ──────────────────────────────────────────
 # Raw shape produced by connectors/canadabuys.py's own CSV row parsing — see
 # that connector's docstring for the exact confirmed-live CSV column names

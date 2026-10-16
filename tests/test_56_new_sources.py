@@ -1,19 +1,22 @@
 """Step 56 — CR-011 §4: UK Find a Tender Service, UK Contracts Finder,
-CanadaBuys, TenderNed connectors + normalize.
+CanadaBuys, TenderNed, PhilGEPS connectors + normalize.
 
-Interface (all four match the shared connector signature):
+Interface (all five match the shared connector signature):
   connectors.<name>.fetch(cpv_codes, keywords, since, limit=100, max_records=2000) -> list[dict]
   normalize.normalize_<name>(raw) -> normalised record (SAME schema as every other source)
 
 fetch() HTTP calls are mocked (no @pytest.mark.network test) — same reasoning
 test_51_eprocurement.py/test_52_bekanntmachungsservice.py give: these are
-live government services, not something to hit on every CI run.
+live government services, not something to hit on every CI run. (PhilGEPS'
+own connector/normalize code WAS additionally verified against the real live
+site during development — see connectors/philgeps.py's module docstring —
+but that one-off verification isn't re-run here.)
 """
 import inspect
 from datetime import date
 
 import normalize
-from connectors import find_a_tender, contracts_finder, canadabuys, tenderned
+from connectors import find_a_tender, contracts_finder, canadabuys, tenderned, philgeps
 from connectors import ted, boamp, eprocurement, bekanntmachungsservice
 
 CPV = ["90910000"]
@@ -37,9 +40,9 @@ class _FakeResponse:
 
 # ── interface parity ─────────────────────────────────────────────────────────
 
-def test_all_eight_connectors_share_argument_order():
+def test_all_nine_connectors_share_argument_order():
     names = [ted, boamp, eprocurement, bekanntmachungsservice,
-             find_a_tender, contracts_finder, canadabuys, tenderned]
+             find_a_tender, contracts_finder, canadabuys, tenderned, philgeps]
     signatures = [list(inspect.signature(m.fetch).parameters)[:3] for m in names]
     assert all(sig == ["cpv_codes", "keywords", "since"] for sig in signatures)
 
@@ -320,11 +323,122 @@ def test_normalize_tenderned_fields(raw_tenderned_supply):
     assert r["pub_number"] == "445074"
 
 
-# ── schema parity — now across all eight sources ────────────────────────────
+# ── philgeps ─────────────────────────────────────────────────────────────────
 
-def test_all_eight_sources_share_identical_schema(
+_PHILGEPS_ROW_HTML = """
+<tr class="GridAltItem">
+    <td align="center" valign="middle" style="width:5%;">2</td><td class="GridItemTD" align="center" valign="middle" style="width:5%;">{pub}</td><td class="GridItemTD" align="center" valign="middle" style="width:10%;">{close}</td><td class="GridItemTD">
+        <a id="dgSearchResult_ctl03_hyLinkTitle" href="SplashBidNoticeAbstractUI.aspx?menuIndex=3&amp;refID={ref}&amp;Result=3">{title}</a>
+        <span id="dgSearchResult_ctl03_lblOrgAndBusCat">, {category} ,{agency}</span>
+    </td>
+</tr>
+"""
+
+
+def _philgeps_page(rows, viewstate="VS1", validation="EV1", generator="G1"):
+    body = "".join(
+        _PHILGEPS_ROW_HTML.format(
+            pub=r.get("pub", "16/10/2026"), close=r.get("close", "20/10/2026 09:00 AM"),
+            ref=r["ref"], title=r.get("title", "Test tender"),
+            category=r.get("category", "Catering Services"), agency=r["agency"],
+        )
+        for r in rows
+    )
+    return (
+        f'<input type="hidden" id="__VIEWSTATE" value="{viewstate}" />'
+        f'<input type="hidden" id="__VIEWSTATEGENERATOR" value="{generator}" />'
+        f'<input type="hidden" id="__EVENTVALIDATION" value="{validation}" />'
+        f"<table id=\"dgSearchResult\">{body}</table>"
+    )
+
+
+def test_philgeps_parse_response_splits_category_and_comma_in_agency():
+    html = _philgeps_page([{"ref": "1", "agency": "CITY OF MANDAUE, CEBU"}])
+    recs = philgeps.parse_response(html)
+    assert len(recs) == 1
+    assert recs[0]["category"] == "Catering Services"
+    assert recs[0]["agency"] == "CITY OF MANDAUE, CEBU"  # internal comma preserved
+    assert recs[0]["refID"] == "1"
+
+
+def test_philgeps_parse_response_converts_dates_to_iso():
+    html = _philgeps_page([{"ref": "1", "agency": "X", "pub": "16/10/2026", "close": "20/10/2026 09:00 AM"}])
+    recs = philgeps.parse_response(html)
+    assert recs[0]["publicationDate"] == "2026-10-16"
+    assert recs[0]["closingDate"] == "2026-10-20"
+
+
+class _FakeResponse2:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeSessionText:
+    """Mimics requests.Session closely enough for philgeps.fetch: .get/.post
+    return an object with a `.text` attribute (philgeps.py reads resp.text,
+    unlike the JSON-based connectors' resp.json())."""
+    def __init__(self, pages):
+        self._pages = iter(pages)
+
+    def get(self, url, headers=None, timeout=None):
+        return _FakeResponse2(next(self._pages))
+
+    def post(self, url, data=None, headers=None, timeout=None):
+        return _FakeResponse2(next(self._pages))
+
+
+def test_philgeps_fetch_pages_until_older_than_since(monkeypatch):
+    page1 = _philgeps_page([{"ref": "2", "agency": "X", "pub": "16/10/2026"}])
+    page2 = _philgeps_page([{"ref": "1", "agency": "Y", "pub": "09/01/2020"}])  # older than since
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _FakeSessionText([page1, page2]))
+    monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
+    recs = philgeps.fetch([], [], date(2026, 10, 1))
+    assert len(recs) == 1
+    assert recs[0]["refID"] == "2"
+
+
+def test_philgeps_fetch_stops_on_repeated_page(monkeypatch):
+    page = _philgeps_page([{"ref": "1", "agency": "X"}])
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _FakeSessionText([page, page, page]))
+    monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
+    recs = philgeps.fetch([], [], date(2026, 10, 1))
+    assert len(recs) == 1  # second page repeats refID "1" -> loop stops, no duplicate
+
+
+def test_philgeps_fetch_respects_max_records(monkeypatch):
+    page1 = _philgeps_page([{"ref": "1", "agency": "A"}, {"ref": "2", "agency": "B"}])
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _FakeSessionText([page1]))
+    monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
+    recs = philgeps.fetch([], [], date(2026, 10, 1), max_records=1)
+    assert len(recs) == 1
+
+
+def test_normalize_philgeps_fields(raw_philgeps_supply):
+    r = normalize.normalize_philgeps(raw_philgeps_supply)
+    assert r["source"] == "PhilGEPS"
+    assert r["country"] == "PHL"
+    assert r["language"] == "eng"
+    assert r["cpv_codes"] == []
+    assert r["category"] == "Other"
+    assert r["buyer"] == "MUNICIPALITY OF ESPERANZA, MASBATE"
+    assert r["pub_number"] == "13275928"
+    assert r["url"] == (
+        "https://notices.philgeps.gov.ph/GEPSNONPILOT/Tender/SplashBidNoticeAbstractUI.aspx"
+        "?menuIndex=3&refID=13275928&Result=3"
+    )
+    assert r["deadline"] == "2026-10-26"
+    assert r["value"] == ""
+
+
+# ── schema parity — now across all nine sources ─────────────────────────────
+
+def test_all_nine_sources_share_identical_schema(
     raw_ted_supply, raw_boamp_supply, raw_eprocurement_supply, raw_bekanntmachungsservice_supply,
     raw_find_a_tender_supply, raw_contracts_finder_supply, raw_canadabuys_supply, raw_tenderned_supply,
+    raw_philgeps_supply,
 ):
     keysets = {
         "TED": set(normalize.normalize_ted(raw_ted_supply)),
@@ -335,6 +449,7 @@ def test_all_eight_sources_share_identical_schema(
         "Contracts Finder": set(normalize.normalize_contracts_finder(raw_contracts_finder_supply)),
         "CanadaBuys": set(normalize.normalize_canadabuys(raw_canadabuys_supply)),
         "TenderNed": set(normalize.normalize_tenderned(raw_tenderned_supply)),
+        "PhilGEPS": set(normalize.normalize_philgeps(raw_philgeps_supply)),
     }
     canonical = keysets["TED"]
     for name, keys in keysets.items():

@@ -378,3 +378,18 @@ def raw_tenderned_supply():
         "referentieNummer": "IUC25-711",
         "url": "https://www.tenderned.nl/aankondigingen/overzicht/445074",
     }
+
+
+@pytest.fixture
+def raw_philgeps_supply():
+    # Real row, captured live 2026-10-17 (refID/dates/agency all genuine —
+    # see connectors/philgeps.py's module docstring for the HTML this was
+    # parsed from).
+    return {
+        "refID": "13275928",
+        "title": "Supply and Delivery of Materials for the Rehabilitation of Barangay Stage at Barangay Baras, Esperanza, Masbate",
+        "category": "Construction Materials and Supplies",
+        "agency": "MUNICIPALITY OF ESPERANZA, MASBATE",
+        "publicationDate": "2026-10-17",
+        "closingDate": "2026-10-26",
+    }

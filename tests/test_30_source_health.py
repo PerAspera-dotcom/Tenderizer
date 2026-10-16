@@ -218,7 +218,7 @@ def test_portals_active_is_computed_not_hardcoded(tmp_path, monkeypatch):
     stats = api.get_stats(tenant_id=TEST_TENANT_ID)
     live = sum(1 for p in api._PORTAL_META if p["status"] == "live")
     assert stats["portals_active"] == f"{live}/{len(api._PORTAL_META)}"
-    # TED, BOAMP, Bekanntmachungsservice live; e-Procurement + the four
+    # TED, BOAMP, Bekanntmachungsservice live; e-Procurement + the five
     # CR-011 §4 sources (Find a Tender, Contracts Finder, CanadaBuys,
-    # TenderNed) still paused pending their own go-live decisions.
-    assert stats["portals_active"] == "3/8"
+    # TenderNed, PhilGEPS) still paused pending their own go-live decisions.
+    assert stats["portals_active"] == "3/9"
