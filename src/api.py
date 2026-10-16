@@ -998,20 +998,14 @@ _PORTAL_META = [
     # 2026-10-16 (CR-010 preamble's manual-trial gate, not a legal one like
     # Belgium) — portals.yaml now ships enabled:true.
     {"name": "Bekanntmachungsservice", "region": "Germany", "status": "live"},
-    # CR-011 §4: all four confirmed green in SOURCES_VIABILITY.md (no legal
-    # gate — OGL/CC0, no ToS prohibition found) but still `paused` here,
-    # same as the portals.yaml comment explains: a manual business go-live
-    # decision, not a legal-review gate like Belgium's.
-    {"name": "Find a Tender", "region": "UK", "status": "paused",
-     "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
-    {"name": "Contracts Finder", "region": "UK", "status": "paused",
-     "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
-    {"name": "CanadaBuys", "region": "Canada", "status": "paused",
-     "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
-    {"name": "TenderNed", "region": "Netherlands", "status": "paused",
-     "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
-    {"name": "PhilGEPS", "region": "Philippines", "status": "paused",
-     "detail": "Connector built (CR-011 §4) — pending business go-live decision"},
+    # CR-011 §4: all five confirmed green in SOURCES_VIABILITY.md (no legal
+    # gate — OGL/CC0, no ToS prohibition found). Business green-lit go-live
+    # 2026-10-17 — portals.yaml now ships enabled:true for all five.
+    {"name": "Find a Tender", "region": "UK", "status": "live"},
+    {"name": "Contracts Finder", "region": "UK", "status": "live"},
+    {"name": "CanadaBuys", "region": "Canada", "status": "live"},
+    {"name": "TenderNed", "region": "Netherlands", "status": "live"},
+    {"name": "PhilGEPS", "region": "Philippines", "status": "live"},
 ]
 
 @app.get("/api/health")

@@ -24,30 +24,32 @@
 - name: Bekanntmachungsservice
   type: api
   enabled: true
-# CR-011 §4: all four confirmed green/buildable (SOURCES_VIABILITY.md) — no
+# CR-011 §4: all five confirmed green/buildable (SOURCES_VIABILITY.md) — no
 # legal gate found for any of them (OGL/CC0, no ToS prohibition), same
 # "clean on the law, gated only on a manual business go-live decision" shape
-# as Bekanntmachungsservice. Ship paused (enabled:false) until that decision,
-# same precedent.
+# as Bekanntmachungsservice. Business green-lit all five 2026-10-17 — live.
+# See store._sync_new_portals for how this reaches tenants that existed
+# before this flip (flipping this line alone only seeds NEW tenants going
+# forward — an existing tenant whose tenant_portals row for one of these
+# five was already backfilled `false` under the old default needs that row
+# corrected directly, not just this flip).
 - name: Find a Tender
   type: api
-  enabled: false
+  enabled: true
 - name: Contracts Finder
   type: api
-  enabled: false
+  enabled: true
 - name: CanadaBuys
   type: api
-  enabled: false
+  enabled: true
 # TenderNed additionally needs nothing further code-wise (the confirmed-live
 # path needs no credentials — see connectors/tenderned.py's module
-# docstring), so this is the same pending-business-decision gate as the
-# other three, not a pending-credentials gate.
+# docstring).
 - name: TenderNed
   type: api
-  enabled: false
+  enabled: true
 # PhilGEPS joined this pass after the first four — confirmed live/public via
-# a real-browser probe (not in the original SOURCES_VIABILITY.md pass), same
-# pending-business-decision gate as the rest.
+# a real-browser probe (not in the original SOURCES_VIABILITY.md pass).
 - name: PhilGEPS
   type: api
-  enabled: false
+  enabled: true
