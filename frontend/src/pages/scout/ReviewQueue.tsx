@@ -30,6 +30,20 @@ function activeSameSourceDuplicates(t: Tender): TenderDuplicate[] {
   return t.duplicates.filter(d => d.match_type === 'same_source' && !d.resolved_by);
 }
 
+function activeCrossPortalDuplicates(t: Tender): TenderDuplicate[] {
+  return t.duplicates.filter(d => d.match_type !== 'same_source' && !d.resolved_by);
+}
+
+// CR-011 §2: a tender is collapsible under "Unique only" when it's the
+// non-canonical member of EITHER an active group — same_source (unchanged
+// from the original follow-up) or the new cross_portal_group. One shared
+// predicate so collapsedDuplicateCount and the visibleTenders filter can't
+// drift out of sync on which rule applies where.
+function isNonCanonicalMember(t: Tender): boolean {
+  return (!!t.duplicate_group && t.duplicate_group.canonical_pub_number !== t.pub_number)
+    || (!!t.cross_portal_group && t.cross_portal_group.canonical_pub_number !== t.pub_number);
+}
+
 // CR-008 W4: undecided-first, then decided-positive, then decided-negative —
 // a more useful grouping than alphabetical when sorting "by decision".
 const STATUS_SORT_RANK: Record<string, number> = {
@@ -370,16 +384,16 @@ export default function ReviewQueue() {
   // Duplicate-resolution follow-up: how many rows "unique only" would
   // collapse away, for the pill's own count — computed against the full
   // `tenders` set so it doesn't shift as status/region filters change.
-  const collapsedDuplicateCount = tenders.filter(
-    t => t.duplicate_group && t.duplicate_group.canonical_pub_number !== t.pub_number
-  ).length;
+  // CR-011 §2: counts cross_portal_group collapses too now, not just
+  // same_source — isNonCanonicalMember below is the one shared rule.
+  const collapsedDuplicateCount = tenders.filter(isNonCanonicalMember).length;
   const visibleTenders = tenders
     .filter(t => statusFilter === 'all' || t.status === statusFilter)
     .filter(t => !regionFilter || t.country === regionFilter)
     // "unique" keeps every tender with no active group, plus exactly the
     // canonical member of each group that has one — never drops a tender
     // that isn't part of a group, and never drops more than one per group.
-    .filter(t => duplicateFilter === 'all' || !t.duplicate_group || t.duplicate_group.canonical_pub_number === t.pub_number);
+    .filter(t => duplicateFilter === 'all' || !isNonCanonicalMember(t));
 
   if (loading) return <div className="loading">Loading…</div>;
   if (error) return <div className="error">{error}</div>;
@@ -527,11 +541,28 @@ export default function ReviewQueue() {
                         {t.viewers.length > 0 && (
                           <span title={`${t.viewers.map(v => v.account_name).join(', ')} currently working this`} style={{ fontSize: 11 }}>👀</span>
                         )}
-                        {t.duplicate_group ? (
+                        {t.duplicate_group && (
                           <span title={`Possible duplicate group — ${t.duplicate_group.size} notices${t.pub_number === t.duplicate_group.canonical_pub_number ? ' (this is the representative notice)' : ''}`} style={{ fontSize: 11 }}>
                             🔗 {t.duplicate_group.size}
                           </span>
-                        ) : t.duplicates.length > 0 && (
+                        )}
+                        {/* CR-011 §2: a readable label on the LIST row, not
+                            just the detail pane — "⧉ also on BOAMP" rather
+                            than a bare icon, so a reviewer sees the link
+                            without opening the tender. */}
+                        {t.cross_portal_group && (() => {
+                          const otherSources = Array.from(new Set(
+                            t.cross_portal_group.members.filter(m => m.pub_number !== t.pub_number).map(m => m.source)
+                          ));
+                          const isCanonical = t.pub_number === t.cross_portal_group.canonical_pub_number;
+                          return (
+                            <span title={`Cross-portal match — ${t.cross_portal_group.size} notices${isCanonical ? ' (this is the representative notice)' : ''}`}
+                                  style={{ fontSize: 11, color: '#60a5fa' }}>
+                              ⧉ also on {otherSources.join(', ')}
+                            </span>
+                          );
+                        })()}
+                        {!t.duplicate_group && !t.cross_portal_group && t.duplicates.length > 0 && (
                           <span title={`Also listed on ${t.duplicates.map(d => d.source).join(', ')}`} style={{ fontSize: 11 }}>🔗</span>
                         )}
                         {t.status === 'needs_review' && t.assigned_to && (
@@ -604,20 +635,48 @@ export default function ReviewQueue() {
                     records (never hides either), with a direct link to the
                     counterpart's own portal (C2, falls out of storing `url`
                     on each side already — see api._attach_duplicates).
-                    same_source gets its own box below instead — it has
-                    ordering/group/resolve concepts this one doesn't. */}
+                    CR-011 §2: now has its own resolve/undo, same as the
+                    same_source box below — previously display-only, which
+                    was the actual gap behind "reviewer can unlink a false
+                    positive" not working for a cross-portal match. */}
                 {selected.duplicates.some(d => d.match_type !== 'same_source') && (
-                  <div style={{ marginBottom: 16, padding: 10, background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                    <span style={{ color: '#60a5fa', fontSize: 12 }}>🔗</span>
-                    {selected.duplicates.filter(d => d.match_type !== 'same_source').map(d => (
-                      <span key={d.pub_number} style={{ fontSize: 12, color: '#c8d0de' }}>
-                        Also listed on <strong>{d.source}</strong>
-                        {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}
-                        {d.url && (
-                          <> · <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>View ↗</a></>
-                        )}
-                      </span>
-                    ))}
+                  <div style={{ marginBottom: 16, padding: 10, background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8 }}>
+                    {selected.cross_portal_group && (
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#60a5fa', marginBottom: 8 }}>
+                        ⧉ Cross-portal match — {selected.cross_portal_group.size} notices
+                        {selected.pub_number === selected.cross_portal_group.canonical_pub_number && ' · this is the representative notice'}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {activeCrossPortalDuplicates(selected).map(d => (
+                        <div key={d.pub_number} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#c8d0de', flexWrap: 'wrap' }}>
+                          <span>
+                            Also listed on <strong>{d.source}</strong>
+                            {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}
+                            {d.url && (
+                              <> · <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>View ↗</a></>
+                            )}
+                          </span>
+                          <button className="btn btn-ghost" disabled={resolvingDuplicate}
+                                  style={{ fontSize: 11, padding: '2px 6px', color: '#60a5fa' }}
+                                  onClick={() => resolveDuplicatePair(d.pub_number)}>
+                            Not a duplicate
+                          </button>
+                        </div>
+                      ))}
+                      {selected.duplicates.filter(d => d.match_type !== 'same_source' && d.resolved_by).map(d => (
+                        <div key={d.pub_number} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#8892a4', flexWrap: 'wrap' }}>
+                          <span>
+                            Confirmed not a duplicate of {d.pub_number} — by {d.resolved_by}
+                            {d.resolved_at && ` · ${formatDate(d.resolved_at)}`}
+                          </span>
+                          <button className="btn btn-ghost" disabled={resolvingDuplicate} style={{ fontSize: 11, padding: '2px 6px' }}
+                                  onClick={() => undoResolveDuplicatePair(d.pub_number)}>
+                            Undo
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -870,6 +929,22 @@ export default function ReviewQueue() {
                     )}
                   </div>
                 )}
+
+                {/* CR-011 §2: "Triage once, apply to both" — shortlist/
+                    dismiss below propagates to every linked duplicate
+                    automatically (api._propagate_status_to_duplicates);
+                    this just says so before a reviewer clicks, since the
+                    effect isn't otherwise visible from this screen. */}
+                {(selected.duplicate_group || selected.cross_portal_group) && (() => {
+                  const linkedCount = (selected.duplicate_group ? selected.duplicate_group.size - 1 : 0)
+                    + (selected.cross_portal_group ? selected.cross_portal_group.size - 1 : 0);
+                  return (
+                    <div style={{ fontSize: 11, color: '#8892a4', marginBottom: 8 }}>
+                      ⚭ Shortlisting or dismissing will also apply to the {linkedCount} linked
+                      duplicate{linkedCount === 1 ? '' : 's'} above.
+                    </div>
+                  );
+                })()}
 
                 {/* Triage buttons */}
                 <div style={{ borderTop: '1px solid #1a2334', paddingTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>

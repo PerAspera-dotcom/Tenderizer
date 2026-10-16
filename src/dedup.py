@@ -267,19 +267,49 @@ def _pick_canonical(members):
     return sorted(pool, key=lambda m: m["pub_number"])[0]["pub_number"]
 
 
-def group_same_source_duplicates(records_by_pub, edges):
-    """Reconstructs same_source group membership from pairwise edges.
+# CR-011 §2: the national portal CR-011's own example prefers over TED as
+# the primary/representative row ("prefer the national listing"). Listed
+# explicitly (not "everything but TED") so a source added later must be
+# deliberately slotted in here rather than silently inheriting the
+# preference — same reasoning connectors.py modules give for never guessing.
+_NATIONAL_SOURCES = {"BOAMP", "e-Procurement", "Bekanntmachungsservice"}
+
+
+def _pick_cross_portal_canonical(members):
+    """CR-011 §2: prefer a national portal's own listing over TED's as the
+    group's representative — TED is the pan-EU record every above-threshold
+    notice can also reach, so it's never the more useful one to triage from.
+    Falls back to _pick_canonical's existing cascade (newest, then triage
+    status, then pub_number — same determinism guarantee CR-008 P0 required)
+    within whichever pool actually has a national member, or every member if
+    none does (an all-TED component shouldn't occur — find_cross_portal_
+    duplicates only pairs different sources — but a 3+-node component formed
+    by chaining two such pairs isn't impossible, so this doesn't assume it).
+    """
+    national = [m for m in members if m["source"] in _NATIONAL_SOURCES]
+    return _pick_canonical(national if national else members)
+
+
+def _walk_duplicate_components(records_by_pub, edges, pick_canonical):
+    """Shared connected-component walk behind group_same_source_duplicates
+    and group_cross_portal_duplicates below — identical graph-walking and
+    chronological member-ordering in both; only which record wins as
+    canonical differs (_pick_canonical's newest-wins cascade for a same-
+    source republish vs _pick_cross_portal_canonical's national-over-TED
+    preference for two portals' independent records of the same procurement
+    — "newest" doesn't carry the same meaning there, see that function's own
+    docstring). `pick_canonical` is one of those two.
 
     `records_by_pub`: {pub_number: record} for the tenant's full record set
     (records need pub_number/source/url/pub_date/first_seen/deadline/status).
-    `edges`: iterable of (pub_number_a, pub_number_b) — unresolved same_source
-    pairs only (a caller should filter out resolved_by-set rows before
-    calling; this function has no notion of "resolved").
+    `edges`: iterable of (pub_number_a, pub_number_b) — unresolved pairs of
+    the relevant match_type only (a caller filters out resolved_by-set rows
+    before calling; this function has no notion of "resolved").
 
-    run.py writes a star topology (the kept record paired with each
-    candidate, never candidate-to-candidate — see find_duplicate_groups'
-    docstring), so a >2-member group is only recoverable by walking the
-    edge graph, not by reading any single row. Returns {pub_number: group}
+    A >2-member group is only recoverable by walking the edge graph, not by
+    reading any single row (run.py writes a star topology for same_source —
+    see find_duplicate_groups' docstring — and a cross-portal chain can form
+    the same way via two pairs sharing a record). Returns {pub_number: group}
     for every pub_number that appears in >=1 edge; group is a dict shared by
     reference across every member of one connected component:
         {"size": int, "order_confident": bool,
@@ -317,7 +347,7 @@ def group_same_source_duplicates(records_by_pub, edges):
         group = {
             "size": len(members),
             "order_confident": ordering is not None,
-            "canonical_pub_number": _pick_canonical(members),
+            "canonical_pub_number": pick_canonical(members),
             "members": sorted(
                 [{"pub_number": m["pub_number"], "source": m["source"], "url": m.get("url", ""),
                   "rank": rank_by_pub.get(m["pub_number"])} for m in members],
@@ -327,3 +357,24 @@ def group_same_source_duplicates(records_by_pub, edges):
             if p in records_by_pub:
                 result[p] = group
     return result
+
+
+def group_same_source_duplicates(records_by_pub, edges):
+    """Reconstructs same_source group membership from pairwise edges — see
+    _walk_duplicate_components for the shared mechanics. Canonical selection
+    (_pick_canonical) picks the newest version, the convention a same-source
+    republish calls for (usually a deadline amendment/correction).
+    """
+    return _walk_duplicate_components(records_by_pub, edges, _pick_canonical)
+
+
+def group_cross_portal_duplicates(records_by_pub, edges):
+    """Reconstructs cross-portal (reference/similarity) group membership
+    from pairwise edges — CR-011 §2's "one primary row ... with the TED twin
+    collapsed under it". See _walk_duplicate_components for the shared
+    mechanics; canonical selection (_pick_cross_portal_canonical) prefers a
+    national portal over TED rather than chronological order — a cross-
+    portal pair isn't "the same listing republished," it's two portals' own
+    independent records of the same procurement.
+    """
+    return _walk_duplicate_components(records_by_pub, edges, _pick_cross_portal_canonical)

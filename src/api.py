@@ -344,13 +344,19 @@ def _attach_duplicates(conn, tenant_id, records):
     edge (a reviewer already confirmed "not a duplicate") no longer counts
     toward group membership, though the edge itself still shows in
     `duplicates` (with resolved_by/resolved_at) so the verdict stays visible
-    and reversible. Cross-portal 'reference'/'similarity' matches are
-    untouched by this — they're not what CR-008's "possible duplicate" label
-    or this follow-up are about.
+    and reversible.
+
+    CR-011 §2: same idea for cross-portal 'reference'/'similarity' matches,
+    attached as a SEPARATE `cross_portal_group` field rather than merged into
+    `duplicate_group` — a record could in principle carry both kinds of link
+    at once (a same-source republish that's also cross-matched to TED), and
+    the two mean different things to a reviewer (see dedup.
+    group_cross_portal_duplicates' docstring on why canonical selection
+    differs between them).
 
     A 'dismissed_final' member (the terminal dismiss stage — the one that
     actually leaves the Review Queue, see ReviewQueue.tsx/list_tenders'
-    identical status check) is also excluded from the *active* group: it's
+    identical status check) is also excluded from either *active* group: it's
     already been resolved one way or another (most commonly via "Confirm as
     duplicate", CR-006's dismiss flow with reason_category='duplicate'), so
     it should stop being counted toward group size or picked as canonical.
@@ -363,7 +369,9 @@ def _attach_duplicates(conn, tenant_id, records):
     for r in records:
         r["duplicates"] = []
         r["duplicate_group"] = None
+        r["cross_portal_group"] = None
     same_source_edges = []
+    cross_portal_edges = []
     for d in store.get_tender_duplicates_for_tenant(conn, tenant_id):
         rec_a, rec_b = by_pub.get(d["pub_number_a"]), by_pub.get(d["pub_number_b"])
         if rec_a is None or rec_b is None:
@@ -380,11 +388,16 @@ def _attach_duplicates(conn, tenant_id, records):
                                      "url": rec_a["url"], "match_type": d["match_type"],
                                      "similarity": d["similarity"],
                                      "resolved_by": d["resolved_by"], "resolved_at": d["resolved_at"]})
-        if (d["match_type"] == "same_source" and not d["resolved_by"]
-                and rec_a.get("status") != "dismissed_final" and rec_b.get("status") != "dismissed_final"):
+        if d["resolved_by"] or rec_a.get("status") == "dismissed_final" or rec_b.get("status") == "dismissed_final":
+            continue
+        if d["match_type"] == "same_source":
             same_source_edges.append((d["pub_number_a"], d["pub_number_b"]))
+        else:
+            cross_portal_edges.append((d["pub_number_a"], d["pub_number_b"]))
     for pub_number, group in dedup.group_same_source_duplicates(by_pub, same_source_edges).items():
         by_pub[pub_number]["duplicate_group"] = group
+    for pub_number, group in dedup.group_cross_portal_duplicates(by_pub, cross_portal_edges).items():
+        by_pub[pub_number]["cross_portal_group"] = group
     return records
 
 
@@ -633,7 +646,82 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
         if background is not None:
             background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
                                  assigned_to, body.note.strip(), identity.account_name)
+    if body.status in _PROPAGATE_TO_DUPLICATES:
+        _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity)
     return {"pub_number": pub_number, "status": body.status}
+
+
+# CR-011 §2: "Triage once, apply to both" — shortlisting/dismissing one
+# member of an unresolved duplicate link (same_source OR cross-portal — the
+# CR's own example is cross-portal, but the principle is the same for either)
+# applies to every other member too, not just the one patch_tender was
+# called on. Deliberately NOT "reviewed"/"needs_review": those are lighter/
+# delegation actions (reviewed is legacy and no longer settable from the UI;
+# needs_review hands ONE specific tender to a named colleague, which isn't a
+# verdict to silently clone onto a tender that colleague hasn't seen) rather
+# than the relevance judgment a shortlist/dismiss represents.
+_PROPAGATE_TO_DUPLICATES = {"shortlisted"} | _DISMISS_STATUSES
+
+
+def _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity):
+    """Applies `pub_number`'s just-set status to every OTHER member of its
+    unresolved duplicate group (same_source or cross-portal — whichever
+    `pub_number` is actually in; a tender can only be in one or the other's
+    *active* group per _attach_duplicates, since a resolved/dismissed_final
+    edge drops out of group membership the same way it does there).
+
+    Walks the full connected component via dedup.group_same_source_
+    duplicates / group_cross_portal_duplicates (same functions _attach_
+    duplicates uses for display) rather than only `pub_number`'s direct
+    edges — same_source groups are a star topology (see find_duplicate_
+    groups' docstring: the kept record paired with each candidate, never
+    candidate-to-candidate), so a >2-member group needs the full walk to
+    reach every member, not just the one patch_tender was called on. Single
+    pass, no recursion: propagating TO a counterpart never re-triggers
+    propagation FROM it, so a cycle in the (undirected, acyclic-by-
+    construction) duplicate graph can't loop.
+
+    Each propagated dismissal/shortlist reuses the primary's note/
+    reason_category but prefixes the note so tender_history and the
+    dismissal reason read as inherited, not independently decided on that
+    record — see schema.py's tender_history for why this distinction stays
+    visible rather than being indistinguishable from a reviewer opening that
+    exact tender themselves.
+    """
+    records = store.all_records(conn, tenant_id)
+    by_pub = {r["pub_number"]: r for r in records}
+    if pub_number not in by_pub:
+        return
+
+    same_source_edges, cross_portal_edges = [], []
+    for d in store.get_tender_duplicates_for_tenant(conn, tenant_id):
+        if d["resolved_by"]:
+            continue
+        a, b = by_pub.get(d["pub_number_a"]), by_pub.get(d["pub_number_b"])
+        if a is None or b is None or a.get("status") == "dismissed_final" or b.get("status") == "dismissed_final":
+            continue
+        edge = (d["pub_number_a"], d["pub_number_b"])
+        (same_source_edges if d["match_type"] == "same_source" else cross_portal_edges).append(edge)
+
+    group = (dedup.group_same_source_duplicates(by_pub, same_source_edges).get(pub_number)
+             or dedup.group_cross_portal_duplicates(by_pub, cross_portal_edges).get(pub_number))
+    if not group:
+        return
+
+    note = (body.note or "").strip()
+    inherited_note = f"[Linked duplicate of {pub_number}] {note}".strip() if note else f"Linked duplicate of {pub_number}"
+    now = datetime.now(timezone.utc).isoformat()
+    for member in group["members"]:
+        other = member["pub_number"]
+        if other == pub_number:
+            continue
+        store.set_status(
+            conn, tenant_id, other, body.status,
+            dismissal_reason=inherited_note if body.status in _NOTE_REQUIRED_STATUSES else None,
+            dismissed_by=identity.account_name if body.status in _DISMISS_STATUSES else None,
+            dismissed_at=now if body.status in _DISMISS_STATUSES else None,
+            reason_category=body.reason_category if body.status in _DISMISS_STATUSES else None,
+            assigned_to=None)
 
 
 # Duplicate-resolution follow-up: "Confirm as duplicate" reuses patch_tender

@@ -50,6 +50,13 @@ export interface Tender {
   // unresolved same_source group — see api._attach_duplicates /
   // dedup.group_same_source_duplicates.
   duplicate_group: DuplicateGroup | null;
+  // CR-011 §2: same idea for an unresolved cross-portal ('reference'/
+  // 'similarity') group — a SEPARATE field from duplicate_group above, since
+  // a tender could in principle carry both at once and the two mean
+  // different things (see dedup.group_cross_portal_duplicates' docstring).
+  // Same DuplicateGroup shape; canonical_pub_number here prefers a national
+  // portal over TED rather than the newest version.
+  cross_portal_group: DuplicateGroup | null;
   // CR-007 Phase D (D1): other accounts currently viewing this tender —
   // always present, empty when none, never includes yourself. See
   // api._attach_presence.

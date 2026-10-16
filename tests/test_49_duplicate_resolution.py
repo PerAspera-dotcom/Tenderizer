@@ -243,9 +243,11 @@ def test_tender_without_a_same_source_match_has_null_duplicate_group(tmp_path, m
     assert rec["duplicate_group"] is None
 
 
-def test_cross_portal_match_never_gets_a_duplicate_group(tmp_path, monkeypatch):
+def test_cross_portal_match_never_gets_a_same_source_duplicate_group(tmp_path, monkeypatch):
     # 'reference'/'similarity' matches are cross-portal (CR-007 Phase C) —
-    # this follow-up is scoped to same_source only, per the CR.
+    # this follow-up's own duplicate_group field is scoped to same_source
+    # only. CR-011 §2 adds the cross-portal equivalent as a SEPARATE field
+    # (cross_portal_group, tested below) rather than reusing this one.
     conn = _db(tmp_path, monkeypatch)
     store.upsert(conn, TEST_TENANT_ID, _tender("TED-1", source="TED"))
     store.upsert(conn, TEST_TENANT_ID, _tender("BOAMP-1", source="BOAMP"))
