@@ -86,13 +86,35 @@ only the missing Authorization header blamed at the time — never
 re-diagnosed once the fix below made the actual search call succeed in
 principle; worth re-probing the unpaired-date question now that both known
 header requirements are met.
+
+CPV CHECK-DIGIT TRANSLATION (found in review, fixed 2026-10-16): BE's own
+CPV codes carry an official check-digit suffix ("45000000-7") — confirmed
+against /api/loc/cpvs's full 9454-code reference list, every entry keyed
+this way, one-to-one with the bare 8-digit code (zero collisions). Every
+other source (TED, BOAMP) and the tenant's own configured CPV list
+(config/cpv.yaml) use the bare code with no suffix. normalize.py's
+_eprocurement_strip_checksum already fixes the INBOUND half (BE's response
+codes -> bare, so downstream matching/dedup/relevance scoring stays
+consistent); build_params below fixes the OUTBOUND half (the tenant's bare
+codes -> BE's hyphenated form) via config/cpv_be_checksums.json, a static
+table generated once from that same reference endpoint rather than either
+(a) reimplementing the official CPV check-digit algorithm from memory with
+no way to verify it's right, or (b) re-fetching 9454 reference entries on
+every pipeline run against a government service CR-010 §1 asks us to be "a
+good guest" toward. The CPV 2008 vocabulary is stable/rarely revised; see
+that file's own header for how to regenerate it if BE ever adds codes.
 """
 import datetime
+import json
 import os
 import time
 import uuid
+import warnings
+from pathlib import Path
 
 import requests
+
+_CPV_CHECKSUMS_PATH = Path(__file__).resolve().parents[2] / "config" / "cpv_be_checksums.json"
 
 AUTH_URL = os.getenv("EPROCUREMENT_AUTH_URL", "https://www.publicprocurement.be/auth")
 AUTH_REALM = os.getenv("EPROCUREMENT_AUTH_REALM", "supplier")
@@ -132,6 +154,43 @@ def _get_token():
     return resp.json()["access_token"]
 
 
+def _be_cpv_checksums():
+    """config/cpv_be_checksums.json's bare->hyphenated CPV code map — see
+    module docstring's CPV CHECK-DIGIT TRANSLATION section. Not cached: this
+    is only read from build_params() a handful of times per fetch() call
+    (once per page), and matches config.py's own cpv_reference() — also a
+    plain re-read-on-every-call loader for its own static JSON reference file.
+    """
+    with open(_CPV_CHECKSUMS_PATH, encoding="utf-8") as f:
+        return json.load(f)["codes"]
+
+
+def _to_be_cpv_codes(cpv_codes):
+    """Translate bare 8-digit CPV codes to BE's own check-digit-suffixed form.
+
+    A code absent from the table (not expected for the stable CPV 2008
+    vocabulary config/cpv_be_checksums.json was generated from, but not
+    impossible if BE's taxonomy ever moves past that generation date) is
+    dropped rather than sent bare — sending it bare wouldn't just miss that
+    one code, a malformed entry in `cpvCodes` could invalidate the whole
+    filter. A RuntimeWarning surfaces the gap instead of failing silently.
+    """
+    table = _be_cpv_checksums()
+    translated = []
+    for code in cpv_codes:
+        mapped = table.get(code)
+        if mapped:
+            translated.append(mapped)
+        else:
+            warnings.warn(
+                f"eprocurement: CPV code {code!r} has no BE check-digit "
+                "mapping (config/cpv_be_checksums.json may be stale) — "
+                "dropped from the server-side filter rather than sent bare.",
+                RuntimeWarning,
+            )
+    return translated
+
+
 def build_params(cpv_codes, keywords, since, limit=100, offset=0):
     """Build the search request body.
 
@@ -150,7 +209,15 @@ def build_params(cpv_codes, keywords, since, limit=100, offset=0):
         "pageSize": limit,
     }
     if cpv_codes:
-        body["cpvCodes"] = list(cpv_codes)
+        # cpv_codes arrives bare (TED/BOAMP/tenant-config convention) — BE's
+        # own filter needs its check-digit-suffixed form. See module
+        # docstring's CPV CHECK-DIGIT TRANSLATION section. If every code
+        # fails to translate, the filter is omitted entirely (falls back to
+        # an unfiltered pull) rather than sending an empty/garbage filter
+        # that would silently match nothing.
+        translated = _to_be_cpv_codes(cpv_codes)
+        if translated:
+            body["cpvCodes"] = translated
     return body
 
 

@@ -20,16 +20,20 @@ import pytest
 import normalize
 from connectors import eprocurement, ted, boamp
 
-CPV = ["45000000-7"]
+CPV = ["45000000"]  # bare — the tenant-config/TED/BOAMP convention, NOT BE's own "-7" suffixed form
 KW = ["tent", "Zelt"]
 SINCE = date(2026, 10, 1)
 
 
 # ── build_params / parse_response (pure logic, no network) ─────────────────
 
-def test_build_params_includes_cpv_codes():
+def test_build_params_translates_bare_cpv_to_bes_check_digit_form():
+    # Found in review (2026-10-16): cpv_codes arrives bare from tenant
+    # config, but BE's own search filter needs its check-digit-suffixed
+    # form — confirmed via config/cpv_be_checksums.json, generated from BE's
+    # own /api/loc/cpvs reference list.
     p = eprocurement.build_params(CPV, KW, SINCE)
-    assert p["cpvCodes"] == CPV
+    assert p["cpvCodes"] == ["45000000-7"]
 
 def test_build_params_omits_cpv_key_when_none_given():
     # confirmed live: an unfiltered search sends no `cpvCodes` key at all,
@@ -42,6 +46,29 @@ def test_build_params_never_sends_terms():
     # live, so keywords is accepted for interface parity but not sent.
     p = eprocurement.build_params(CPV, KW, SINCE)
     assert "terms" not in p
+
+
+def test_build_params_translates_multiple_real_cpv_codes():
+    # a handful of codes from the tenant's actual config/cpv.yaml, spanning
+    # different check digits — proves the table isn't just right for one code.
+    p = eprocurement.build_params(
+        ["39522530", "44112100", "37414300", "33163000"], KW, SINCE
+    )
+    assert p["cpvCodes"] == ["39522530-1", "44112100-9", "37414300-6", "33163000-0"]
+
+
+def test_build_params_drops_unknown_cpv_code_with_a_warning():
+    with pytest.warns(RuntimeWarning, match="99999999"):
+        p = eprocurement.build_params(["45000000", "99999999"], KW, SINCE)
+    assert p["cpvCodes"] == ["45000000-7"]
+
+
+def test_build_params_falls_back_to_unfiltered_when_every_code_is_unknown():
+    # degrades to "no filter" rather than sending a garbage/empty filter
+    # that would silently match nothing.
+    with pytest.warns(RuntimeWarning):
+        p = eprocurement.build_params(["99999999"], KW, SINCE)
+    assert "cpvCodes" not in p
 
 def test_build_params_sends_paired_date_range():
     p = eprocurement.build_params(CPV, KW, SINCE)
