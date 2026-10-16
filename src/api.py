@@ -34,7 +34,6 @@ from typing import Optional
 
 ROOT          = _HERE.parent
 DB_PATH       = str(ROOT / "data" / "tenders.db")
-LAST_RUN_PATH = str(ROOT / "data" / "last_run.json")
 
 
 def _report_path(tenant_id: int) -> str:
@@ -44,6 +43,17 @@ def _report_path(tenant_id: int) -> str:
     GET /api/reports/latest served whoever ran last, regardless of caller.
     """
     return str(ROOT / "reports" / f"tenders_{tenant_id}.xlsx")
+
+
+def _last_run_path(tenant_id: int) -> str:
+    """CR-011 §5: the same per-tenant fix as _report_path above, applied to
+    the OTHER shared-file leak that one's own docstring didn't catch at the
+    time — last_run.json fed get_stats' "last sync / notices scanned /
+    matched" Dashboard row from whichever tenant's pipeline ran most
+    recently, not the caller's own. See run._write_last_run's docstring for
+    the write side of this same fix.
+    """
+    return str(ROOT / "data" / f"last_run_{tenant_id}.json")
 
 # CR-002 E: per-tenant upload root, tenant_id in the path itself as a second
 # layer of isolation beyond the DB-row tenant check in get_document().
@@ -233,9 +243,10 @@ def require_ops_access(
     # uncaught -> FastAPI's default 500, same reasoning as get_current_tenant_id().
 
 
-def _last_run() -> dict:
-    if os.path.exists(LAST_RUN_PATH):
-        with open(LAST_RUN_PATH, encoding="utf-8") as f:
+def _last_run(tenant_id: int) -> dict:
+    path = _last_run_path(tenant_id)
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -896,7 +907,7 @@ def get_tender_history(pub_number: str, tenant_id: int = Depends(get_current_ten
 @app.get("/api/stats")
 def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
     records  = store.all_records(_db(), tenant_id)
-    last_run = _last_run()
+    last_run = _last_run(tenant_id)
     today    = date.today().isoformat()
 
     by_match = {"cpv": 0, "both": 0, "keyword": 0, "none": 0}

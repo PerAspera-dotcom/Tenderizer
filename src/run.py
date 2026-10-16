@@ -166,11 +166,21 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     records = store.all_records(conn, tenant_id)
     surfaced = [r for r in records if not r.get("exclude_reason")]
     build_report(surfaced, health, out_path)
-    _write_last_run(db_path, health, this_run_records)
+    _write_last_run(db_path, tenant_id, health, this_run_records)
     return health
 
 
-def _write_last_run(db_path, health, this_run_records):
+def _write_last_run(db_path, tenant_id, health, this_run_records):
+    """CR-011 §5: found while verifying a fresh empty tenant's dashboard
+    stays isolated — this used to be one shared data/last_run.json
+    regardless of which tenant's run wrote it, so EVERY tenant's Dashboard
+    "last sync / notices scanned / matched" row showed whichever tenant's
+    pipeline happened to run most recently, not their own. The exact same
+    bug class api._report_path's own docstring already documents being
+    fixed for reports/tenders.xlsx ("every tenant's /api/run overwrote the
+    same ... regardless of caller") — this file just never got the same
+    treatment. Per-tenant filename now, same convention.
+    """
     notices_scanned = 0
     for v in health.values():
         if v.startswith("ok ("):
@@ -189,7 +199,7 @@ def _write_last_run(db_path, health, this_run_records):
         "matched_total": matched_total,
     }
     data_dir = os.path.dirname(os.path.abspath(db_path))
-    with open(os.path.join(data_dir, "last_run.json"), "w") as f:
+    with open(os.path.join(data_dir, f"last_run_{tenant_id}.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
 

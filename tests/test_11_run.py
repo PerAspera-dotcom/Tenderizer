@@ -388,9 +388,13 @@ def test_default_sources_filters_by_enabled_portals(tmp_path):
 # stats-reconciliation bug: the dashboard's "N scanned / N matched" pairing
 # would otherwise drift further apart every run as the tenders table grows).
 
-def _last_run_json(tmp_path):
+def _last_run_json(tmp_path, tenant_id=TEST_TENANT_ID):
+    # CR-011 §5: per-tenant filename now (found via an empty-org isolation
+    # test — this file used to be shared across every tenant regardless of
+    # who ran the pipeline, the same bug class api._report_path's own
+    # docstring already documents being fixed for reports/tenders.xlsx).
     import json
-    with open(tmp_path / "last_run.json") as f:
+    with open(tmp_path / f"last_run_{tenant_id}.json") as f:
         return json.load(f)
 
 
