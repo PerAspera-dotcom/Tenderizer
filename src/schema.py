@@ -656,6 +656,48 @@ tenant_dedup_settings = Table(
     Column("similarity_threshold", Float, nullable=False, server_default="0.75"),
 )
 
+# CR-011 §3: per-organization configurable screening questions — the ~7 go/
+# no-go questions a reviewer sees answered on each Review Queue tender
+# without opening the documents. Multi-row (a tenant's whole ordered list),
+# unlike the single-row *_settings tables above — same id/autoincrement
+# shape as vault_documents, not the single-tenant_id-primary-key shape.
+tenant_screening_questions = Table(
+    "tenant_screening_questions", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("question_text", Text, nullable=False),
+    Column("display_order", Integer, nullable=False, server_default="0"),
+    Column("enabled", Boolean, nullable=False, server_default="1"),
+    Column("created_at", Text, nullable=False, server_default=""),
+)
+Index("ix_tenant_screening_questions_tenant", tenant_screening_questions.c.tenant_id)
+
+# CR-011 §3: cached per-tender answer to one screening question — computed
+# at ingest (run.py, after translation, same pipeline position as cross-
+# portal dedup) from notice text only (see screening.py's own module
+# docstring on why documents aren't pulled in for v1). Keyed by question_id
+# rather than question text, so editing a question's wording doesn't orphan
+# its old answers silently — store.update_screening_question deletes this
+# question's existing rows on a text change, making them "missing" again so
+# the next pipeline run recomputes them (the same "re-computed if questions
+# change" mechanism also naturally backfills a brand-new question across
+# every already-ingested tender, with no separate backfill script needed).
+# 'not_stated' is a real, distinct answer (never invent one, per the CR's
+# own words), not an absence — a row exists once computed either way.
+tender_screening_answers = Table(
+    "tender_screening_answers", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("pub_number", Text, nullable=False),
+    Column("question_id", Integer, ForeignKey("tenant_screening_questions.id"), nullable=False),
+    Column("answer_text", Text, nullable=False, server_default=""),
+    Column("source_snippet", Text, nullable=True),
+    Column("status", Text, nullable=False, server_default="not_stated"),  # 'answered' | 'not_stated'
+    Column("computed_at", Text, nullable=False, server_default=""),
+    PrimaryKeyConstraint("tenant_id", "pub_number", "question_id"),
+)
+Index("ix_tender_screening_answers_tenant_pub",
+      tender_screening_answers.c.tenant_id, tender_screening_answers.c.pub_number)
+
 # CR-007 Phase D (D2): the "too close to deadline to bother" window,
 # formerly filters.py's hard-coded DEADLINE_FLOOR = 72h — now tenant-
 # editable and, per the CR, no longer a hard exclude at all (see filters.py's

@@ -3,8 +3,9 @@ import CpvConfig from './CpvConfig';
 import KeywordsConfig from './KeywordsConfig';
 import DedupConfig from './DedupConfig';
 import DeadlineConfig from './DeadlineConfig';
+import ScreeningQuestions from './ScreeningQuestions';
 
-type Tab = 'cpv' | 'keywords' | 'dedup' | 'deadline';
+type Tab = 'cpv' | 'keywords' | 'dedup' | 'deadline' | 'screening';
 
 // CR-004/5 UX pass: CPV Config and Keywords were two separate nav items for
 // one concept — both feed the exact same match_source logic (CPV vs
@@ -12,6 +13,8 @@ type Tab = 'cpv' | 'keywords' | 'dedup' | 'deadline';
 // CR-007 Phase C: cross-portal dedup's similarity threshold joins them here
 // — same "detection tuning" theme, not a separate settings page.
 // CR-007 Phase D (D2): so does the deadline "closing soon" window.
+// CR-011 §3: so does the screening-question list — another per-tenant
+// "what decides what you see" tunable, not a separate settings page.
 export default function MatchingConfig() {
   const [tab, setTab] = useState<Tab>('cpv');
 
@@ -20,6 +23,7 @@ export default function MatchingConfig() {
     { key: 'keywords', label: 'Keywords' },
     { key: 'dedup', label: 'Cross-Portal Dedup' },
     { key: 'deadline', label: 'Deadline Window' },
+    { key: 'screening', label: 'Screening Questions' },
   ];
 
   return (
@@ -51,7 +55,8 @@ export default function MatchingConfig() {
 
       {tab === 'cpv' ? <CpvConfig /> :
        tab === 'keywords' ? <KeywordsConfig /> :
-       tab === 'dedup' ? <DedupConfig /> : <DeadlineConfig />}
+       tab === 'dedup' ? <DedupConfig /> :
+       tab === 'deadline' ? <DeadlineConfig /> : <ScreeningQuestions />}
     </div>
   );
 }

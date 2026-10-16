@@ -412,6 +412,21 @@ def _attach_duplicates(conn, tenant_id, records):
     return records
 
 
+def _attach_screening_answers(conn, tenant_id, records):
+    """CR-011 §3: attaches `screening_answers` (always a list, empty when
+    none cached yet) to every tender — same batch-then-distribute shape as
+    _attach_duplicates, one query for the whole tenant rather than N. Only
+    enabled questions' answers are included (store.
+    get_all_screening_answers_for_tenant's own join already filters this),
+    so disabling a question hides its old answers without needing to touch
+    them.
+    """
+    answers_by_pub = store.get_all_screening_answers_for_tenant(conn, tenant_id)
+    for r in records:
+        r["screening_answers"] = answers_by_pub.get(r["pub_number"], [])
+    return records
+
+
 # CR-007 Phase D (D1): how long a presence heartbeat counts as "currently
 # viewing" — long enough to survive one missed heartbeat (the frontend pings
 # every 20s), short enough that the warning disappears promptly once someone
@@ -479,6 +494,7 @@ def list_tenders(
     _attach_relevance(conn, tenant_id, records)
     _add_dismissal_reason_category(records)
     _attach_duplicates(conn, tenant_id, records)
+    _attach_screening_answers(conn, tenant_id, records)
     _attach_presence(conn, tenant_id, records, identity)
     _attach_notifications(conn, tenant_id, records)
 
@@ -552,6 +568,7 @@ def get_tender(pub_number: str, include_excluded: bool = False,
     _attach_relevance(conn, tenant_id, records)
     _add_dismissal_reason_category(records)
     _attach_duplicates(conn, tenant_id, records)
+    _attach_screening_answers(conn, tenant_id, records)
     _attach_presence(conn, tenant_id, records, identity)
     _attach_notifications(conn, tenant_id, records)
     for r in records:
@@ -1863,6 +1880,48 @@ def get_scout_settings_config(tenant_id: int = Depends(get_current_tenant_id)):
 def put_scout_settings_config(body: ScoutSettingsBody, tenant_id: int = Depends(get_current_tenant_id)):
     store.set_scout_settings(_db(), tenant_id, body.model_dump(exclude_none=True))
     return {"saved": True}
+
+
+# CR-011 §3: per-organization configurable screening questions ("add / edit
+# / reorder / disable"). Gated the same way every other settings endpoint in
+# this file already is — tenant membership via get_current_tenant_id, no
+# separate admin-role check — this codebase has never enforced a distinct
+# admin-vs-member permission tier anywhere else (Scout/Vault/Composer
+# settings are all editable by any org member today), so a one-off
+# admin-only restriction just for this page would be a new, inconsistent
+# pattern rather than matching "an org admin can edit" to how the rest of
+# the app actually models permissions.
+class ScreeningQuestionBody(BaseModel):
+    question_text: Optional[str] = None
+    enabled: Optional[bool] = None
+    display_order: Optional[int] = None
+
+class NewScreeningQuestionBody(BaseModel):
+    question_text: str
+
+@app.get("/api/screening/questions")
+def get_screening_questions(tenant_id: int = Depends(get_current_tenant_id)):
+    return {"questions": store.get_tenant_screening_questions(_db(), tenant_id)}
+
+@app.post("/api/screening/questions")
+def post_screening_question(body: NewScreeningQuestionBody, tenant_id: int = Depends(get_current_tenant_id)):
+    text = body.question_text.strip()
+    if not text:
+        raise HTTPException(422, "question_text must not be empty")
+    return store.add_screening_question(_db(), tenant_id, text)
+
+@app.put("/api/screening/questions/{question_id}")
+def put_screening_question(question_id: int, body: ScreeningQuestionBody,
+                            tenant_id: int = Depends(get_current_tenant_id)):
+    text = body.question_text.strip() if body.question_text is not None else None
+    if body.question_text is not None and not text:
+        raise HTTPException(422, "question_text must not be empty")
+    try:
+        store.update_screening_question(_db(), tenant_id, question_id, question_text=text,
+                                         enabled=body.enabled, display_order=body.display_order)
+    except ValueError:
+        raise HTTPException(404, "Screening question not found")
+    return {"id": question_id, "saved": True}
 
 
 # ── Composer — per-tender proposal drafting pipeline ────────────────────────

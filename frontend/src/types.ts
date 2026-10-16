@@ -65,6 +65,32 @@ export interface Tender {
   // there's never been one. See api._attach_notifications.
   forwarded_to: string | null;
   last_notification_at: string | null;
+  // CR-011 §3: the tenant's enabled screening questions, answered from
+  // notice text at ingest — always present, empty when none cached yet
+  // (not yet run through a pipeline pass since the question was added, or
+  // ANTHROPIC_API_KEY unset). See api._attach_screening_answers.
+  screening_answers: ScreeningAnswer[];
+}
+
+// CR-011 §3: one cached answer to one configured screening question, for
+// one tender — see api._attach_screening_answers / store.
+// get_all_screening_answers_for_tenant.
+export interface ScreeningAnswer {
+  question_id: number;
+  question_text: string;
+  answer_text: string;
+  source_snippet: string | null;
+  status: 'answered' | 'not_stated';
+}
+
+// CR-011 §3: one entry in the tenant's configurable question list (Settings
+// — add/edit/reorder/disable). See api.get_screening_questions/
+// post_screening_question/put_screening_question.
+export interface ScreeningQuestion {
+  id: number;
+  question_text: string;
+  display_order: number;
+  enabled: boolean;
 }
 
 // CR-008 W1: one entry in the caller's own in-app notification feed — see

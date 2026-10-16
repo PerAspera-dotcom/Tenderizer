@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -322,6 +322,30 @@ export function getSettingsConfig(): Promise<SettingsConfig> {
 
 export function putSettingsConfig(body: Partial<SettingsConfig>): Promise<{ saved: boolean }> {
   return apiFetch('/api/config/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// ── Screening questions (CR-011 §3) ─────────────────────────────────────────
+
+export function getScreeningQuestions(): Promise<{ questions: ScreeningQuestion[] }> {
+  return apiFetch('/api/screening/questions');
+}
+
+export function addScreeningQuestion(question_text: string): Promise<ScreeningQuestion> {
+  return apiFetch('/api/screening/questions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question_text }),
+  });
+}
+
+export function updateScreeningQuestion(
+  id: number, body: { question_text?: string; enabled?: boolean; display_order?: number },
+): Promise<{ id: number; saved: boolean }> {
+  return apiFetch(`/api/screening/questions/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

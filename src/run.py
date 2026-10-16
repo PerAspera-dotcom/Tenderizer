@@ -20,6 +20,7 @@ import currency
 import dedup
 import translate
 import alerts
+import screening
 from schema import DEFAULT_TENANT_ID
 from report import build_report
 import json, os
@@ -162,6 +163,28 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     for pub_a, pub_b, match_type, similarity in dedup.find_cross_portal_duplicates(
             store.all_records(conn, tenant_id), dedup_settings["similarity_threshold"]):
         store.upsert_tender_duplicate(conn, tenant_id, pub_a, pub_b, match_type, similarity)
+
+    # CR-011 §3: screening questions — after translation (same requirement
+    # as cross-portal dedup above: operates on tag_line_en/description_en).
+    # Backfills whatever's MISSING for every surfaced tender, not just this
+    # run's own fetches — the same mechanism that answers a brand-new
+    # tender's questions also answers an already-ingested tender's newly-
+    # added/edited question, with no separate backfill script needed (an
+    # edited question's stale answers were already deleted by store.
+    # update_screening_question, making them "missing" again here).
+    questions = store.get_tenant_screening_questions(conn, tenant_id, enabled_only=True)
+    if questions:
+        question_ids = [q["id"] for q in questions]
+        by_id = {q["id"]: q for q in questions}
+        for r in store.all_records(conn, tenant_id):
+            if r.get("exclude_reason"):
+                continue
+            missing_ids = store.missing_screening_question_ids(conn, tenant_id, r["pub_number"], question_ids)
+            if not missing_ids:
+                continue
+            answers = screening.answer_questions(r, [by_id[q_id] for q_id in missing_ids])
+            for q_id, (answer_text, snippet, status) in answers.items():
+                store.set_screening_answer(conn, tenant_id, r["pub_number"], q_id, answer_text, snippet, status)
 
     records = store.all_records(conn, tenant_id)
     surfaced = [r for r in records if not r.get("exclude_reason")]

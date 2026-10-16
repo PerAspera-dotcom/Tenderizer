@@ -32,6 +32,7 @@ from schema import composer_style_examples, tenant_composer_settings, tenant_sty
 from schema import tenant_vault_rules, tenant_vault_settings
 from schema import documents, metadata, pipeline, pipeline_history, source_health, tenant_cpv, tenant_keywords
 from schema import tenant_portals, tenant_settings, tenants, tenders, translations, vault_documents
+from schema import tenant_screening_questions, tender_screening_answers
 from schema import (tender_history, vault_document_history, composer_document_history,
                      composer_requirement_history, tender_relevance_overrides,
                      tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence,
@@ -268,27 +269,30 @@ def _seed_tenant_config(conn, tenant_id):
     zero after a tenant customises them down to nothing, which must not look
     like "never seeded" and trigger a reset back to the YAML defaults).
 
-    A tenant already seeded still gets _sync_new_portals below — see its own
-    docstring for why a portal added to config/portals.yaml after this
-    tenant's first seed otherwise never reaches them at all.
+    A tenant already seeded still gets _sync_new_portals/_sync_screening_
+    questions below — see their own docstrings for why a portal added to
+    config/portals.yaml, or the CR-011 §3 screening-questions feature
+    itself, shipped after this tenant's first seed otherwise never reaches
+    them at all. Both run unconditionally (every ensure_tenant call, not
+    just first-seed), each a no-op once already backfilled.
     """
     with conn.connect() as c:
         already_seeded = c.execute(select(tenant_keywords.c.tenant_id).where(
             tenant_keywords.c.tenant_id == tenant_id)).first()
-    if already_seeded:
-        _sync_new_portals(conn, tenant_id)
-        return
+    if not already_seeded:
+        set_tenant_cpv(conn, tenant_id, config.cpv_codes())
+        kw = config._load("keywords.yaml")
+        set_tenant_keywords(conn, tenant_id,
+                             {"terms": kw.get("terms", {}), "distinctive": kw.get("distinctive", [])})
+        with conn.begin() as c:
+            for portal in config.portals():
+                c.execute(insert(tenant_portals).values(
+                    tenant_id=tenant_id, name=portal["name"],
+                    type=portal.get("type", "api"), enabled=bool(portal.get("enabled", True))))
+        set_tenant_settings(conn, tenant_id, {})
 
-    set_tenant_cpv(conn, tenant_id, config.cpv_codes())
-    kw = config._load("keywords.yaml")
-    set_tenant_keywords(conn, tenant_id,
-                         {"terms": kw.get("terms", {}), "distinctive": kw.get("distinctive", [])})
-    with conn.begin() as c:
-        for portal in config.portals():
-            c.execute(insert(tenant_portals).values(
-                tenant_id=tenant_id, name=portal["name"],
-                type=portal.get("type", "api"), enabled=bool(portal.get("enabled", True))))
-    set_tenant_settings(conn, tenant_id, {})
+    _sync_new_portals(conn, tenant_id)
+    _sync_screening_questions(conn, tenant_id)
 
 
 def _sync_new_portals(conn, tenant_id):
@@ -546,6 +550,186 @@ def set_dedup_settings(conn, tenant_id, data):
                 tenant_dedup_settings.c.tenant_id == tenant_id).values(**current))
         else:
             c.execute(insert(tenant_dedup_settings).values(tenant_id=tenant_id, **current))
+
+
+# CR-011 §3: per-organization configurable screening questions. Soft-state
+# only — "disable" (enabled=False), never a hard delete, matching this
+# module's usual auditable convention AND, more specifically, making "this
+# tenant has zero rows" an honest, stable signal for "never seeded yet"
+# (see _sync_screening_questions below) rather than something a deliberate
+# "turn every question off" action could produce too, which would otherwise
+# risk a later ensure_tenant call re-seeding the defaults right back.
+
+_DEFAULT_SCREENING_QUESTIONS = [
+    "What is the delivery location / place of performance?",
+    "What quantities or lots are specified?",
+    "What certifications or standards are required (e.g. fire rating, ISO, NATO)?",
+    "What eligibility or qualification criteria apply (e.g. turnover, references)?",
+    "What is the contract duration, and is this a framework agreement or a one-off contract?",
+]
+
+
+def _sync_screening_questions(conn, tenant_id):
+    """Seeds CR-011 §3's 5 default questions the first time this tenant is
+    ever seen with zero screening-question rows at all — called from
+    ensure_tenant on EVERY call (not just first-seed), same pattern as
+    _sync_new_portals, so a tenant that existed before this feature shipped
+    gets backfilled automatically on its next pipeline run/request rather
+    than needing a separate migration script. Never touches a tenant that
+    already has at least one row (including an org that has disabled every
+    question down to functionally "none active" — soft-state keeps that row
+    count above zero, see this section's own header comment).
+    """
+    with conn.connect() as c:
+        already_seeded = c.execute(select(tenant_screening_questions.c.id).where(
+            tenant_screening_questions.c.tenant_id == tenant_id)).first()
+    if already_seeded:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    with conn.begin() as c:
+        for i, text in enumerate(_DEFAULT_SCREENING_QUESTIONS):
+            c.execute(insert(tenant_screening_questions).values(
+                tenant_id=tenant_id, question_text=text, display_order=i,
+                enabled=True, created_at=now))
+
+
+def get_tenant_screening_questions(conn, tenant_id, enabled_only=False):
+    with conn.connect() as c:
+        stmt = select(
+            tenant_screening_questions.c.id, tenant_screening_questions.c.question_text,
+            tenant_screening_questions.c.display_order, tenant_screening_questions.c.enabled,
+        ).where(tenant_screening_questions.c.tenant_id == tenant_id)
+        if enabled_only:
+            stmt = stmt.where(tenant_screening_questions.c.enabled.is_(True))
+        rows = c.execute(stmt.order_by(tenant_screening_questions.c.display_order,
+                                        tenant_screening_questions.c.id)).fetchall()
+    return [{"id": r[0], "question_text": r[1], "display_order": r[2], "enabled": bool(r[3])} for r in rows]
+
+
+def add_screening_question(conn, tenant_id, question_text, display_order=None):
+    now = datetime.now(timezone.utc).isoformat()
+    if display_order is None:
+        with conn.connect() as c:
+            maxrow = c.execute(select(func.max(tenant_screening_questions.c.display_order)).where(
+                tenant_screening_questions.c.tenant_id == tenant_id)).fetchone()
+        display_order = (maxrow[0] + 1) if maxrow and maxrow[0] is not None else 0
+    with conn.begin() as c:
+        result = c.execute(insert(tenant_screening_questions).values(
+            tenant_id=tenant_id, question_text=question_text, display_order=display_order,
+            enabled=True, created_at=now))
+        new_id = result.inserted_primary_key[0]
+    return {"id": new_id, "question_text": question_text, "display_order": display_order, "enabled": True}
+
+
+def update_screening_question(conn, tenant_id, question_id, question_text=None,
+                               enabled=None, display_order=None):
+    """Editing question_text invalidates every cached answer for this
+    question (deleted, not just flagged) — the next pipeline run's "backfill
+    whatever's missing" pass (run.py) recomputes them against the new
+    wording. Reordering/enabling alone leaves existing answers untouched —
+    the question itself hasn't changed, only how/whether it's shown.
+    Raises ValueError if no such question exists for this tenant.
+    """
+    key = ((tenant_screening_questions.c.tenant_id == tenant_id)
+           & (tenant_screening_questions.c.id == question_id))
+    with conn.begin() as c:
+        exists = c.execute(select(tenant_screening_questions.c.id).where(key)).fetchone()
+        if exists is None:
+            raise ValueError(f"No screening question {question_id} for this tenant")
+        values = {}
+        if question_text is not None:
+            values["question_text"] = question_text
+        if enabled is not None:
+            values["enabled"] = enabled
+        if display_order is not None:
+            values["display_order"] = display_order
+        if values:
+            c.execute(update(tenant_screening_questions).where(key).values(**values))
+        if question_text is not None:
+            c.execute(tender_screening_answers.delete().where(
+                (tender_screening_answers.c.tenant_id == tenant_id)
+                & (tender_screening_answers.c.question_id == question_id)))
+
+
+def get_screening_answers_for_tender(conn, tenant_id, pub_number):
+    """Joined with the question's own text/order, enabled-only and ordered
+    for direct display — a disabled question's old answers stay cached (so
+    re-enabling it doesn't need a recompute) but aren't shown while off.
+    """
+    with conn.connect() as c:
+        rows = c.execute(
+            select(tender_screening_answers.c.question_id, tenant_screening_questions.c.question_text,
+                   tender_screening_answers.c.answer_text, tender_screening_answers.c.source_snippet,
+                   tender_screening_answers.c.status)
+            .join(tenant_screening_questions,
+                  tenant_screening_questions.c.id == tender_screening_answers.c.question_id)
+            .where((tender_screening_answers.c.tenant_id == tenant_id)
+                   & (tender_screening_answers.c.pub_number == pub_number)
+                   & (tenant_screening_questions.c.enabled.is_(True)))
+            .order_by(tenant_screening_questions.c.display_order, tenant_screening_questions.c.id)
+        ).fetchall()
+    return [{"question_id": r[0], "question_text": r[1], "answer_text": r[2],
+             "source_snippet": r[3], "status": r[4]} for r in rows]
+
+
+def get_all_screening_answers_for_tenant(conn, tenant_id):
+    """Every cached, enabled-question answer for this tenant in one query —
+    api._attach_screening_answers' batch source, same reasoning as
+    get_tender_duplicates_for_tenant: N tenders shouldn't mean N queries.
+    Returns {pub_number: [{"question_id", "question_text", "answer_text",
+    "source_snippet", "status"}, ...]}, ordered by display_order within
+    each tender's list.
+    """
+    with conn.connect() as c:
+        rows = c.execute(
+            select(tender_screening_answers.c.pub_number, tender_screening_answers.c.question_id,
+                   tenant_screening_questions.c.question_text, tender_screening_answers.c.answer_text,
+                   tender_screening_answers.c.source_snippet, tender_screening_answers.c.status)
+            .join(tenant_screening_questions,
+                  tenant_screening_questions.c.id == tender_screening_answers.c.question_id)
+            .where((tender_screening_answers.c.tenant_id == tenant_id)
+                   & (tenant_screening_questions.c.enabled.is_(True)))
+            .order_by(tenant_screening_questions.c.display_order, tenant_screening_questions.c.id)
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r[0], []).append({"question_id": r[1], "question_text": r[2],
+                                          "answer_text": r[3], "source_snippet": r[4], "status": r[5]})
+    return out
+
+
+def missing_screening_question_ids(conn, tenant_id, pub_number, question_ids):
+    """Which of `question_ids` this tender has no cached answer row for yet
+    — run.py's ingest step only pays for an LLM call on these, never a
+    question already answered. Covers both a brand-new tender (every
+    enabled question is "missing") and an existing tender after a question
+    was added/edited (only that one question is).
+    """
+    if not question_ids:
+        return []
+    with conn.connect() as c:
+        answered = {r[0] for r in c.execute(select(tender_screening_answers.c.question_id).where(
+            (tender_screening_answers.c.tenant_id == tenant_id)
+            & (tender_screening_answers.c.pub_number == pub_number)
+            & (tender_screening_answers.c.question_id.in_(question_ids))
+        )).fetchall()}
+    return [q for q in question_ids if q not in answered]
+
+
+def set_screening_answer(conn, tenant_id, pub_number, question_id, answer_text, source_snippet, status):
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((tender_screening_answers.c.tenant_id == tenant_id)
+           & (tender_screening_answers.c.pub_number == pub_number)
+           & (tender_screening_answers.c.question_id == question_id))
+    values = {"answer_text": answer_text, "source_snippet": source_snippet,
+              "status": status, "computed_at": now}
+    with conn.begin() as c:
+        exists = c.execute(select(tender_screening_answers.c.tenant_id).where(key)).fetchone()
+        if exists:
+            c.execute(update(tender_screening_answers).where(key).values(**values))
+        else:
+            c.execute(insert(tender_screening_answers).values(
+                tenant_id=tenant_id, pub_number=pub_number, question_id=question_id, **values))
 
 
 # CR-007 Phase D (D2): same single-row-per-tenant, lazy-default, merge-on-set

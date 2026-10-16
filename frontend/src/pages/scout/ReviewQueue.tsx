@@ -851,6 +851,33 @@ export default function ReviewQueue() {
                       </div>
                     </div>
                   )}
+
+                  {/* CR-011 §3: configured screening questions, answered from
+                      notice text at ingest — empty until the tenant adds
+                      questions (Matching Config → Screening Questions), or
+                      until the next pipeline run picks up a brand-new
+                      question. "Not stated" shown plainly, same as a missing
+                      value — never a blank or an omitted row. */}
+                  {selected.screening_answers?.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#4c5a70', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Screening Questions</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {selected.screening_answers.map(a => (
+                          <div key={a.question_id}>
+                            <div style={{ fontSize: 12, color: '#8892a4', marginBottom: 2 }}>{a.question_text}</div>
+                            <div style={{ fontSize: 13, color: a.status === 'answered' ? '#cdd6e3' : '#5a6680', fontStyle: a.status === 'answered' ? 'normal' : 'italic' }}>
+                              {a.answer_text}
+                            </div>
+                            {a.source_snippet && (
+                              <div style={{ fontSize: 11, color: '#4c5a70', marginTop: 2, borderLeft: '2px solid #1a2334', paddingLeft: 8 }}>
+                                "{a.source_snippet}"
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Confidence & Signals */}
