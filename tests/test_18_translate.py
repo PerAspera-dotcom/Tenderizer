@@ -93,6 +93,87 @@ def test_pro_key_uses_pro_endpoint(monkeypatch):
     assert captured["url"] == translate.PRO_ENDPOINT
 
 
+# ── CR-012 §1: key cleaning — a trailing newline/space or wrapping quotes on
+# Railway's env var editor, confirmed as the production 403's real root
+# cause. Covers both the header value AND endpoint selection, since a dirty
+# ":fx" suffix silently misroutes free-tier keys to the Pro endpoint too
+# (see translate._clean_key's docstring).
+
+def test_free_key_with_trailing_whitespace_still_uses_free_endpoint_and_clean_header(monkeypatch):
+    captured = {}
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["auth"] = kwargs["headers"]["Authorization"]
+        return _ok_response()
+    monkeypatch.setattr(requests, "post", fake_post)
+    translate.translate_to_english("Bonjour", api_key="fakekey:fx\n")
+    assert captured["url"] == translate.FREE_ENDPOINT
+    assert captured["auth"] == "DeepL-Auth-Key fakekey:fx"
+
+
+def test_key_with_leading_and_trailing_whitespace_is_stripped(monkeypatch):
+    captured = {}
+    def fake_post(url, **kwargs):
+        captured["auth"] = kwargs["headers"]["Authorization"]
+        return _ok_response()
+    monkeypatch.setattr(requests, "post", fake_post)
+    translate.translate_to_english("Bonjour", api_key="  fakekey:fx  ")
+    assert captured["auth"] == "DeepL-Auth-Key fakekey:fx"
+
+
+def test_key_wrapped_in_double_quotes_is_unwrapped(monkeypatch):
+    captured = {}
+    def fake_post(url, **kwargs):
+        captured["auth"] = kwargs["headers"]["Authorization"]
+        return _ok_response()
+    monkeypatch.setattr(requests, "post", fake_post)
+    translate.translate_to_english("Bonjour", api_key='"fakekey:fx"')
+    assert captured["auth"] == "DeepL-Auth-Key fakekey:fx"
+
+
+def test_key_wrapped_in_single_quotes_is_unwrapped(monkeypatch):
+    captured = {}
+    def fake_post(url, **kwargs):
+        captured["auth"] = kwargs["headers"]["Authorization"]
+        return _ok_response()
+    monkeypatch.setattr(requests, "post", fake_post)
+    translate.translate_to_english("Bonjour", api_key="'fakekey:fx'")
+    assert captured["auth"] == "DeepL-Auth-Key fakekey:fx"
+
+
+def test_key_from_env_var_is_also_cleaned(monkeypatch):
+    captured = {}
+    def fake_post(url, **kwargs):
+        captured["auth"] = kwargs["headers"]["Authorization"]
+        return _ok_response()
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("DEEPL_API_KEY", " fakekey:fx\n")
+    translate.translate_to_english("Bonjour", api_key=None)
+    assert captured["auth"] == "DeepL-Auth-Key fakekey:fx"
+
+
+def test_check_health_cleans_key_too(monkeypatch):
+    captured = {}
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["auth"] = kwargs["headers"]["Authorization"]
+        return _FakeResponse(200, {})
+    monkeypatch.setattr(requests, "get", fake_get)
+    translate.check_health(api_key=" fakekey:fx \n")
+    assert captured["url"] == translate.FREE_USAGE_ENDPOINT
+    assert captured["auth"] == "DeepL-Auth-Key fakekey:fx"
+
+
+def test_clean_key_none_stays_none():
+    assert translate._clean_key(None) is None
+
+
+def test_clean_key_lone_quote_character_not_stripped_as_pair():
+    # a single leading/trailing quote with no matching partner must not be
+    # mistaken for a wrapping pair and chewed into the key itself.
+    assert translate._clean_key('"fakekey') == '"fakekey'
+
+
 # ── translate_cached (content-hash cache via store) ──────────────────────────
 
 def test_cache_miss_calls_api_and_caches(tmp_path, monkeypatch):

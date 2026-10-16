@@ -52,6 +52,27 @@ def _usage_endpoint(api_key):
     return FREE_USAGE_ENDPOINT if api_key.endswith(":fx") else PRO_USAGE_ENDPOINT
 
 
+def _clean_key(api_key):
+    """CR-012 §1: strip stray whitespace/newlines and a wrapping pair of
+    quote characters — a real, production-confirmed failure mode on Railway,
+    where copy-pasting a key into the dashboard's env var editor can leave a
+    trailing newline or carry its surrounding quotes along. Matters for more
+    than just the Authorization header: `:fx` is checked with .endswith(),
+    so a trailing-whitespace key would also silently misclassify a free-tier
+    key as Pro (or vice versa) in _endpoint()/_usage_endpoint() — routing to
+    the wrong host is itself enough to produce a 401/403, not only a
+    malformed header value. Applied once, as early as possible, so every
+    downstream use (endpoint selection AND the header) sees the same clean
+    value. None-safe (a missing key stays None, callers already handle that).
+    """
+    if api_key is None:
+        return None
+    cleaned = api_key.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "\"'":
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
 def _describe_failure(exc, resp=None):
     """A short, human-readable reason for a failed DeepL call — distinguishing
     quota (456) and rate-limit (429) from an outright auth/network failure is
@@ -104,7 +125,7 @@ def _deepl_call(text, api_key, timeout):
     """
     if not text or not text.strip():
         return "", None, "ok"
-    api_key = api_key or os.getenv("DEEPL_API_KEY")
+    api_key = _clean_key(api_key or os.getenv("DEEPL_API_KEY"))
     if not api_key:
         return None, None, "unavailable"
     try:
@@ -187,7 +208,7 @@ def check_health(api_key=None, timeout=10):
     configured at all) | 'failing' (key present but the call itself failed).
     detail is '' for 'ok', a short human-readable reason otherwise.
     """
-    api_key = api_key or os.getenv("DEEPL_API_KEY")
+    api_key = _clean_key(api_key or os.getenv("DEEPL_API_KEY"))
     if not api_key:
         return "unavailable", "DEEPL_API_KEY is not set"
     try:
