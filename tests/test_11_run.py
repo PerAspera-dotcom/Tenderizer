@@ -369,13 +369,18 @@ def test_tenant_cpv_customization_affects_matching(tmp_path, raw_ted_supply):
 
 
 def test_default_sources_filters_by_enabled_portals(tmp_path):
+    import config
     import store
     conn = store.init_db(str(tmp_path/"t.db"))
     store.ensure_tenant(conn, TEST_TENANT_ID)
     store.set_tenant_portal_enabled(conn, TEST_TENANT_ID, "BOAMP", False)
 
     sources = run._default_sources(conn, TEST_TENANT_ID, since=None)
-    assert [s["name"] for s in sources] == ["TED"]
+    # computed from config.portals() rather than hardcoded, so this doesn't
+    # need updating every time a portal's shipped default enabled state
+    # changes (e.g. CR-010's Bekanntmachungsservice go-live, 2026-10-16).
+    expected = {p["name"] for p in config.portals() if p["enabled"]} - {"BOAMP"}
+    assert {s["name"] for s in sources} == expected
 
 
 # ── last_run.json: matched_total must stay scoped to "this run", matching

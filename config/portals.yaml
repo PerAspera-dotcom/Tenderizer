@@ -16,9 +16,11 @@
   type: api
   enabled: false
 # CR-010 §4: licence is clean (CC0 1.0, explicitly published for reuse) —
-# unlike e-Procurement above, this isn't a legal-review gate. Stays false
-# because the business is trialling the source manually; go-live is gated on
-# their verdict, not on this build (CR-010's own preamble).
+# never a legal-review gate like e-Procurement above, only the business's own
+# manual trial verdict (CR-010's own preamble). Business green-lit it
+# 2026-10-16 — live. See store._sync_new_portals for how this actually
+# reaches tenants that existed before this flip (flipping this line alone
+# only seeds NEW tenants going forward).
 - name: Bekanntmachungsservice
   type: api
-  enabled: false
+  enabled: true

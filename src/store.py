@@ -267,11 +267,16 @@ def _seed_tenant_config(conn, tenant_id):
     (unlike tenant_cpv/tenant_portals, whose *row count* can legitimately hit
     zero after a tenant customises them down to nothing, which must not look
     like "never seeded" and trigger a reset back to the YAML defaults).
+
+    A tenant already seeded still gets _sync_new_portals below — see its own
+    docstring for why a portal added to config/portals.yaml after this
+    tenant's first seed otherwise never reaches them at all.
     """
     with conn.connect() as c:
         already_seeded = c.execute(select(tenant_keywords.c.tenant_id).where(
             tenant_keywords.c.tenant_id == tenant_id)).first()
     if already_seeded:
+        _sync_new_portals(conn, tenant_id)
         return
 
     set_tenant_cpv(conn, tenant_id, config.cpv_codes())
@@ -284,6 +289,35 @@ def _seed_tenant_config(conn, tenant_id):
                 tenant_id=tenant_id, name=portal["name"],
                 type=portal.get("type", "api"), enabled=bool(portal.get("enabled", True))))
     set_tenant_settings(conn, tenant_id, {})
+
+
+def _sync_new_portals(conn, tenant_id):
+    """Backfill tenant_portals rows for any portal in config/portals.yaml this
+    (already-seeded) tenant doesn't have a row for yet — found 2026-10-16
+    turning on Bekanntmachungsservice: portals.yaml's own `enabled: true`
+    only reaches a tenant at first-seed time (_seed_tenant_config above,
+    gated on tenant_keywords never having run before), so a portal added in
+    a later CR was otherwise invisible to every tenant that existed before
+    that CR shipped — flipping portals.yaml alone would have been a silent
+    no-op for them. Insert-only, same as first-seed: never touches a row
+    that already exists, so a tenant's own enable/disable choice on an
+    existing portal is never overwritten — only a portal this tenant has
+    literally never seen gets added, using portals.yaml's current default.
+    Cheap to call on every ensure_tenant (one SELECT, INSERT only when
+    something's actually missing), so no separate migration step is needed
+    when the next portal gets added either.
+    """
+    with conn.connect() as c:
+        existing = {r[0] for r in c.execute(
+            select(tenant_portals.c.name).where(tenant_portals.c.tenant_id == tenant_id))}
+    missing = [p for p in config.portals() if p["name"] not in existing]
+    if not missing:
+        return
+    with conn.begin() as c:
+        for portal in missing:
+            c.execute(insert(tenant_portals).values(
+                tenant_id=tenant_id, name=portal["name"],
+                type=portal.get("type", "api"), enabled=bool(portal.get("enabled", True))))
 
 
 # ── Per-tenant config (step 5) ───────────────────────────────────────────────

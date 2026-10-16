@@ -138,3 +138,16 @@ def test_get_stats_returns_real_next_run(tmp_path, monkeypatch):
     stats = api.get_stats(tenant_id=TEST_TENANT_ID)
     assert stats["next_run"] is not None
     datetime.fromisoformat(stats["next_run"])  # must be a real, parseable ISO timestamp
+
+
+def test_portals_active_is_computed_not_hardcoded(tmp_path, monkeypatch):
+    # found stale 2026-10-16 (still read "2/4" after Bekanntmachungsservice's
+    # go-live went into _PORTAL_META but this KPI wasn't updated alongside
+    # it) -- now derived from _PORTAL_META itself so a future status change
+    # can't silently leave this behind again.
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    store.ensure_tenant(store.init_db(str(tmp_path / "t.db")), TEST_TENANT_ID)
+    stats = api.get_stats(tenant_id=TEST_TENANT_ID)
+    live = sum(1 for p in api._PORTAL_META if p["status"] == "live")
+    assert stats["portals_active"] == f"{live}/{len(api._PORTAL_META)}"
+    assert stats["portals_active"] == "3/4"  # TED, BOAMP, Bekanntmachungsservice live; BE still paused

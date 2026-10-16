@@ -847,7 +847,11 @@ def get_stats(tenant_id: int = Depends(get_current_tenant_id)):
         "new_today":       new_today,
         "by_match":        by_match,
         "by_category":     by_cat,
-        "portals_active":  "2/4",
+        # Computed from _PORTAL_META rather than hardcoded — found stale
+        # 2026-10-16 (still read "2/4" after Bekanntmachungsservice's
+        # go-live went into _PORTAL_META but not here), the same staleness
+        # class _PORTAL_META itself was fixed for the day before.
+        "portals_active":  f"{sum(1 for p in _PORTAL_META if p['status'] == 'live')}/{len(_PORTAL_META)}",
         "past_tenders":    past_tenders,
     }
 
@@ -874,11 +878,10 @@ _PORTAL_META = [
     # never a connector to build against it (CR-010 doesn't reopen it).
     # Bekanntmachungsservice (oeffentlichevergabe.de) replaces it outright:
     # the official CC0 open-data service, connector built
-    # (connectors/bekanntmachungsservice.py), licence question already
-    # settled. `paused`, not `live`: enabled:false pending the business's own
-    # manual trial verdict (CR-010 preamble), not a legal gate like Belgium.
-    {"name": "Bekanntmachungsservice", "region": "Germany", "status": "paused",
-     "detail": "Connector built (CR-010), CC0 licensed — pending the business's manual trial verdict before go-live"},
+    # (connectors/bekanntmachungsservice.py). Business green-lit go-live
+    # 2026-10-16 (CR-010 preamble's manual-trial gate, not a legal one like
+    # Belgium) — portals.yaml now ships enabled:true.
+    {"name": "Bekanntmachungsservice", "region": "Germany", "status": "live"},
 ]
 
 @app.get("/api/health")

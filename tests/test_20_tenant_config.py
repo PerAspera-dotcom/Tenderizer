@@ -71,11 +71,48 @@ def test_set_tenant_keywords_merges_only_provided_keys(tmp_path):
 
 
 def test_two_tenants_have_independent_enabled_portals(tmp_path):
+    # computed from config.portals() rather than hardcoded, so this doesn't
+    # need updating every time a portal's shipped default enabled state
+    # changes (e.g. CR-010's Bekanntmachungsservice go-live, 2026-10-16).
+    default_enabled = {p["name"] for p in config.portals() if p["enabled"]}
     conn = store.init_db(str(tmp_path / "t.db"))
     store.ensure_tenant(conn, 2)
     store.set_tenant_portal_enabled(conn, 2, "BOAMP", False)
-    assert store.get_enabled_portal_names(conn, 2) == {"TED"}
-    assert store.get_enabled_portal_names(conn, 1) == {"TED", "BOAMP"}  # tenant 1 untouched
+    assert store.get_enabled_portal_names(conn, 2) == default_enabled - {"BOAMP"}
+    assert store.get_enabled_portal_names(conn, 1) == default_enabled  # tenant 1 untouched
+
+
+# ── _sync_new_portals (2026-10-16, Bekanntmachungsservice go-live) ─────────
+# A portal added to config/portals.yaml after a tenant's first seed was
+# otherwise invisible to that tenant forever — _seed_tenant_config only runs
+# once, gated on tenant_keywords. ensure_tenant now backfills any missing
+# portal row on every call (insert-only), so flipping a portal on in
+# portals.yaml actually reaches tenants that existed before that flip.
+
+def test_ensure_tenant_backfills_a_portal_added_after_first_seed(tmp_path, monkeypatch):
+    conn = store.init_db(str(tmp_path / "t.db"))  # seeds tenant 1 from the CURRENT portals.yaml
+    # simulate tenant 1 having been seeded before some portal existed at all
+    store.set_tenant_portal_enabled(conn, 1, "BOAMP", False)  # a real customisation, must survive
+    from sqlalchemy import delete
+    from schema import tenant_portals
+    with conn.begin() as c:
+        c.execute(delete(tenant_portals).where(
+            (tenant_portals.c.tenant_id == 1) & (tenant_portals.c.name == "Bekanntmachungsservice")))
+    assert "Bekanntmachungsservice" not in {p["name"] for p in store.get_tenant_portals(conn, 1)}
+
+    store.ensure_tenant(conn, 1)  # called again, e.g. the next pipeline run
+
+    names = {p["name"]: p["enabled"] for p in store.get_tenant_portals(conn, 1)}
+    assert names["Bekanntmachungsservice"] == True  # backfilled from portals.yaml's current default
+    assert names["BOAMP"] == False  # the tenant's own customisation was NOT clobbered
+
+
+def test_sync_new_portals_is_a_noop_when_nothing_is_missing(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    before = sorted(store.get_tenant_portals(conn, 1), key=lambda p: p["name"])
+    store.ensure_tenant(conn, 1)  # second call, nothing new to backfill
+    after = sorted(store.get_tenant_portals(conn, 1), key=lambda p: p["name"])
+    assert before == after
 
 
 def test_ensure_tenant_seeds_settings_defaults(tmp_path):
