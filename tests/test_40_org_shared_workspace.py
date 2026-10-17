@@ -8,6 +8,7 @@ attribution.py has that layer's dedicated coverage) — this file's remaining
 job is two different orgs staying as fully isolated as two different
 pre-Phase-A tenants always were.
 """
+import pytest
 import store
 import api
 from conftest import TEST_TENANT_ID, TEST_ACCOUNT_NAME_B, TEST_CLERK_USER_ID_B, make_identity
@@ -106,10 +107,13 @@ def test_resolve_tenant_id_different_orgs_get_different_tenants(tmp_path, monkey
     assert tenant_a != tenant_b
 
 
-def test_resolve_tenant_id_falls_back_to_per_user_when_no_org_claim(tmp_path, monkeypatch):
+def test_resolve_tenant_id_without_org_claim_is_refused_and_creates_no_tenant(tmp_path, monkeypatch):
+    # No more per-user fallback tenants (they were scraped nightly for nobody).
     monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
-    tenant_id = api._resolve_tenant_id({"sub": "user_solo"})
-    assert tenant_id == api._resolve_tenant_id({"sub": "user_solo"})
+    with pytest.raises(Exception) as exc:
+        api._resolve_tenant_id({"sub": "user_solo"})
+    assert getattr(exc.value, "status_code", None) == 403
+    assert store.get_tenant_id_by_clerk_user_id(api._db(), "user_solo") is None
 
 
 # ── Cross-org isolation — two different orgs stay as isolated as two

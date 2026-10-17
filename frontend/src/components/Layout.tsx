@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { UserButton, OrganizationSwitcher, useOrganization, CreateOrganization } from '@clerk/clerk-react';
+import { UserButton, OrganizationSwitcher, useOrganization, useOrganizationList, CreateOrganization } from '@clerk/clerk-react';
 import { useNavigate, useLocation, Link } from '../router';
 import { getStats, getHealth, postRun, listTenders } from '../api';
 import type { Stats, PortalHealth } from '../types';
@@ -95,6 +95,16 @@ export default function Layout({ children }: Props) {
   // exists — isLoaded guards against a flash of the "create an org" prompt
   // before Clerk has resolved the membership it already has.
   const { organization, isLoaded: orgIsLoaded } = useOrganization();
+  // The API requires an active org (no per-user fallback tenants any more),
+  // so a member whose session has none gets their first org activated
+  // automatically instead of a wall of 403s.
+  const { isLoaded: orgListIsLoaded, userMemberships, setActive } = useOrganizationList({ userMemberships: true });
+  const firstMembershipOrgId = userMemberships?.data?.[0]?.organization.id;
+  useEffect(() => {
+    if (orgIsLoaded && orgListIsLoaded && !organization && firstMembershipOrgId && setActive) {
+      setActive({ organization: firstMembershipOrgId }).catch(() => {});
+    }
+  }, [orgIsLoaded, orgListIsLoaded, organization, firstMembershipOrgId, setActive]);
   const app = currentApp(location.pathname);
   const appInfo = APP_INFO[app];
 
@@ -327,16 +337,14 @@ export default function Layout({ children }: Props) {
           </div>
         </header>
 
-        {/* CR-007 Phase A: nudge to create/select an org — doesn't hard-block
-            the rest of the app, so a user mid-transition (Organizations just
-            enabled, hasn't created one yet) isn't locked out; the backend's
-            _resolve_tenant_id falls back to their existing per-user tenant
-            until they do. */}
-        {orgIsLoaded && !organization && (
+        {/* Shown only to a user with no org at all (members get theirs
+            activated above). The backend refuses requests without an active
+            org, so this is the way in. */}
+        {orgIsLoaded && orgListIsLoaded && !organization && !firstMembershipOrgId && (
           <div style={{ background: '#151d2c', borderBottom: '1px solid #1a2334', padding: '16px 24px' }}>
             <div style={{ color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>
-              Create an organization to share your pipeline, shortlist and results with colleagues.
-              You can keep working solo until then.
+              You're not in an organization yet. Ask your admin for an invite, or create an organization
+              to start using Tenderizer.
             </div>
             <CreateOrganization
               afterCreateOrganizationUrl={location.pathname}

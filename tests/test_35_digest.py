@@ -83,7 +83,7 @@ def _seed_provisioned(tmp_path, monkeypatch, notify_on_complete=True, notify_ema
     db_path = str(tmp_path / "t.db")
     monkeypatch.setattr(api, "DB_PATH", db_path)
     conn = store.init_db(db_path)
-    tenant_id = store.create_tenant_for_clerk_user(conn, "user_1")
+    tenant_id = store.link_or_create_tenant_for_clerk_org(conn, "org_1", "user_1")
     store.set_tenant_settings(conn, tenant_id,
                                {"notify_on_complete": notify_on_complete, "notify_email": notify_email})
     return conn, tenant_id
@@ -139,7 +139,7 @@ def test_run_daily_digest_skips_empty_digest(tmp_path, monkeypatch):
 def test_run_daily_digest_one_tenant_failure_does_not_stop_others(tmp_path, monkeypatch):
     conn, tenant_id = _seed_provisioned(tmp_path, monkeypatch)
     store.upsert(conn, tenant_id, _tender("P-1", first_seen=TODAY))
-    other_id = store.create_tenant_for_clerk_user(conn, "user_2")
+    other_id = store.link_or_create_tenant_for_clerk_org(conn, "org_2", "user_2")
     store.set_tenant_settings(conn, other_id, {"notify_on_complete": True, "notify_email": "c@d.com"})
     store.upsert(conn, other_id, _tender("P-2", first_seen=TODAY))
 

@@ -139,16 +139,18 @@ def get_tenant_id_by_clerk_user_id(conn, clerk_user_id):
 
 
 def list_provisioned_tenant_ids(conn):
-    """Tenant ids with a real Clerk user attached — excludes DEFAULT_TENANT_ID's
-    seed/pre-multi-tenancy row (clerk_user_id is empty/None there), which
-    nobody is actually logged into. Used by the in-process daily scheduler
-    (prod) to know which tenants to run — it must not re-scrape on behalf of
-    a tenant no customer owns.
+    """Tenant ids linked to a Clerk organization — the in-process daily
+    scheduler (prod) runs exactly these. Keyed on clerk_org_id, not
+    clerk_user_id: a brand-new org's tenant is created with clerk_user_id
+    unset (see link_or_create_tenant_for_clerk_org), so the old user-based
+    check would never have scheduled Alpinter, while it did schedule leftover
+    per-user tenants nobody used (2026-10-17). Excludes DEFAULT_TENANT_ID's
+    seed row too (no org).
     """
     with conn.connect() as c:
         rows = c.execute(select(tenants.c.id).where(
-            (tenants.c.clerk_user_id.isnot(None)) & (tenants.c.clerk_user_id != "")
-        )).fetchall()
+            (tenants.c.clerk_org_id.isnot(None)) & (tenants.c.clerk_org_id != "")
+        ).order_by(tenants.c.id)).fetchall()
     return [r[0] for r in rows]
 
 

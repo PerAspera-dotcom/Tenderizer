@@ -149,15 +149,17 @@ def test_ensure_tenant_does_not_clobber_customised_settings(tmp_path):
 
 
 def test_list_provisioned_tenant_ids_excludes_the_seed_tenant(tmp_path):
-    # DEFAULT_TENANT_ID (1) has no clerk_user_id — nobody is logged into it,
+    # DEFAULT_TENANT_ID (1) has no Clerk org — nobody is logged into it,
     # so the prod scheduler must not run a scrape on its behalf.
     conn = store.init_db(str(tmp_path / "t.db"))
     assert store.list_provisioned_tenant_ids(conn) == []
 
 
-def test_list_provisioned_tenant_ids_returns_real_clerk_tenants(tmp_path):
+def test_list_provisioned_tenant_ids_returns_org_tenants_only(tmp_path):
     conn = store.init_db(str(tmp_path / "t.db"))
-    store.create_tenant_for_clerk_user(conn, "user_abc123")
+    legacy_personal = store.create_tenant_for_clerk_user(conn, "user_abc123")
+    # a fresh org tenant has clerk_user_id unset — it must still be scheduled
+    fresh_org = store.link_or_create_tenant_for_clerk_org(conn, "org_new", "user_other")
     ids = store.list_provisioned_tenant_ids(conn)
-    assert len(ids) == 1
-    assert ids[0] != 1
+    assert ids == [fresh_org]
+    assert legacy_personal not in ids

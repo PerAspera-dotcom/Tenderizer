@@ -169,13 +169,13 @@ def _resolve_tenant_id(claims: dict) -> int:
         # than needing a bulk data migration (see its docstring).
         return store.link_or_create_tenant_for_clerk_org(
             conn, org_id, clerk_user_id, claims.get("email"))
-    # No active org selected (not yet created/joined one, or Organizations
-    # isn't enabled on this instance) — fall back to the pre-Phase-A
-    # per-Clerk-user tenant so nothing breaks mid-rollout.
-    tenant_id = store.get_tenant_id_by_clerk_user_id(conn, clerk_user_id)
-    if tenant_id is None:
-        tenant_id = store.create_tenant_for_clerk_user(conn, clerk_user_id, claims.get("email"))
-    return tenant_id
+    # No active org. This used to fall back to a per-user tenant (pre-Phase-A
+    # rollout), auto-creating one on first contact — leftover personal tenants
+    # were being scraped and translated nightly alongside the real org (found
+    # 2026-10-17, removed at the client's request: only WoT and Alpinter are
+    # tenants). The frontend activates the user's org automatically when they
+    # have one, so this only blocks a user who belongs to no org at all.
+    raise HTTPException(403, "Select or create an organization to use Tenderizer")
 
 
 def get_current_tenant_id(

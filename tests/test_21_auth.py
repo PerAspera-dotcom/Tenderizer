@@ -132,39 +132,51 @@ def test_invalid_token_is_401(monkeypatch):
     assert exc.value.status_code == 401
 
 
-def test_valid_token_for_existing_clerk_user_resolves_its_tenant(tmp_path, monkeypatch):
+def test_valid_token_for_existing_org_resolves_its_tenant(tmp_path, monkeypatch):
     db_path = str(tmp_path / "t.db")
     monkeypatch.setattr(api, "DB_PATH", db_path)
     conn = store.init_db(db_path)
-    tenant_id = store.create_tenant_for_clerk_user(conn, "user_existing")
+    tenant_id = store.link_or_create_tenant_for_clerk_org(conn, "org_existing", "user_existing")
 
-    monkeypatch.setattr(auth, "verify_token", lambda token: {"sub": "user_existing"})
+    monkeypatch.setattr(auth, "verify_token", lambda token: {"sub": "user_other", "org_id": "org_existing"})
     assert api.get_current_tenant_id(creds=_creds()) == tenant_id
 
 
-def test_valid_token_for_a_new_clerk_user_auto_provisions_a_tenant(tmp_path, monkeypatch):
+def test_valid_token_for_a_new_org_auto_provisions_a_tenant(tmp_path, monkeypatch):
     db_path = str(tmp_path / "t.db")
     monkeypatch.setattr(api, "DB_PATH", db_path)
-    store.init_db(db_path)  # seeds the default tenant (id 1), not "user_new"
+    store.init_db(db_path)  # seeds the default tenant (id 1) only
 
     monkeypatch.setattr(auth, "verify_token",
-                         lambda token: {"sub": "user_new", "email": "new@example.com"})
+                         lambda token: {"sub": "user_new", "email": "new@example.com", "org_id": "org_new"})
     resolved = api.get_current_tenant_id(creds=_creds())
 
     conn = store.init_db(db_path)
     assert resolved != 1
-    assert store.get_tenant_id_by_clerk_user_id(conn, "user_new") == resolved
+    assert store.get_tenant_id_by_clerk_org_id(conn, "org_new") == resolved
 
 
-def test_same_clerk_user_resolves_to_the_same_tenant_every_time(tmp_path, monkeypatch):
+def test_same_org_resolves_to_the_same_tenant_every_time(tmp_path, monkeypatch):
     db_path = str(tmp_path / "t.db")
     monkeypatch.setattr(api, "DB_PATH", db_path)
     store.init_db(db_path)
 
-    monkeypatch.setattr(auth, "verify_token", lambda token: {"sub": "user_repeat"})
+    monkeypatch.setattr(auth, "verify_token", lambda token: {"sub": "user_repeat", "org_id": "org_repeat"})
     first = api.get_current_tenant_id(creds=_creds())
     second = api.get_current_tenant_id(creds=_creds())
     assert first == second
+
+
+def test_valid_token_without_an_org_is_403_and_provisions_nothing(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setattr(api, "DB_PATH", db_path)
+    store.init_db(db_path)
+
+    monkeypatch.setattr(auth, "verify_token", lambda token: {"sub": "user_solo"})
+    with pytest.raises(HTTPException) as exc:
+        api.get_current_tenant_id(creds=_creds())
+    assert exc.value.status_code == 403
+    assert store.get_tenant_id_by_clerk_user_id(store.init_db(db_path), "user_solo") is None
 
 
 def test_concurrent_first_requests_for_a_new_clerk_user_dont_500(tmp_path):
