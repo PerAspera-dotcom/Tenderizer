@@ -28,6 +28,16 @@ def map_category(value):
     """Map a nature-of-contract value to a report section."""
     return _CAT.get((value or "").strip().lower(), "Other")
 
+def _ted_pub_date(value):
+    """TED returns publication-date as "2026-10-07+02:00" (confirmed live
+    2026-10-17); the query syntax and older fixtures use "20260603". Both
+    normalize to the ISO "YYYY-MM-DD" every other source stores."""
+    value = (_first(value) or "").strip()
+    if len(value) >= 8 and value[:8].isdigit():
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    return value[:10]
+
+
 def _first(v):
     if isinstance(v, list):
         return v[0] if v else ""
@@ -228,7 +238,7 @@ def normalize_ted(raw):
         "place": _place(raw),
         "category": map_category(_first(raw.get("contract-nature"))),
         "procedure": _first(raw.get("procedure-type")),
-        "pub_date": raw.get("publication-date", ""),
+        "pub_date": _ted_pub_date(raw.get("publication-date")),
         "deadline": _first(raw.get("deadline-receipt-request")),
         "cpv_codes": _dedupe(raw.get("classification-cpv", [])),
         "matched_terms": [],

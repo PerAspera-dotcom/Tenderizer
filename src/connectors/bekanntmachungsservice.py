@@ -243,33 +243,35 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
 
     start = max(since, HISTORICAL_FLOOR)
     headers = {"User-Agent": USER_AGENT}
-    latest_by_id = {}  # noticeIdentifier -> (int(version), raw dict)
+    cpv_filter = set(cpv_codes) if cpv_codes else None
+    max_version = {}  # noticeIdentifier -> highest int(version) seen, matching or not
+    matched = {}      # noticeIdentifier -> (int(version), raw dict), CPV-matching versions only
 
-    day = start
-    while day <= yesterday:
+    # Newest day first, CPV-filtered as we go, capped on MATCHES. This used to
+    # walk oldest-first with a 2000 cap on RAW notices — at ~1000 notices/day
+    # that stopped after ~2 days, so a 30-day window only ever saw its two
+    # oldest days and never anything recent (found 2026-10-17: one stored
+    # notice in total since go-live, published exactly 30 days earlier).
+    day = yesterday
+    while day >= start:
         params = build_params(cpv_codes, keywords, day)
         resp = requests.get(EXPORT_ENDPOINT, params=params, headers=headers, timeout=60)
         resp.raise_for_status()
         for raw in parse_response(resp.content):
             notice_id = raw["noticeIdentifier"]
             version = int(raw["noticeVersion"])  # see module docstring: never compare as strings
-            current = latest_by_id.get(notice_id)
+            if version > max_version.get(notice_id, -1):
+                max_version[notice_id] = version
+            if cpv_filter is not None and cpv_filter.isdisjoint(raw["cpvCodes"]):
+                continue
+            current = matched.get(notice_id)
             if current is None or version > current[0]:
-                latest_by_id[notice_id] = (version, raw)
-        day += datetime.timedelta(days=1)
-        # Safety cap on RAW pulled volume (same spirit as ted.py/boamp.py's
-        # own max_records, a ceiling on fetched material, not a promise that
-        # exactly max_records survive the CPV filter below — a long `since`
-        # span with no match could otherwise walk years of empty days).
-        if len(latest_by_id) >= max_records:
+                matched[notice_id] = (version, raw)
+        if len(matched) >= max_records:
             break
+        day -= datetime.timedelta(days=1)
 
-    cpv_filter = set(cpv_codes) if cpv_codes else None
-    out = []
-    for _version, raw in latest_by_id.values():
-        if cpv_filter is not None and cpv_filter.isdisjoint(raw["cpvCodes"]):
-            continue
-        out.append(raw)
-        if len(out) >= max_records:
-            break
-    return out
+    # Keep a notice only if its latest version is the one that matched — a
+    # newer version whose CPV no longer matches supersedes the older match.
+    out = [raw for notice_id, (version, raw) in matched.items() if version == max_version[notice_id]]
+    return out[:max_records]

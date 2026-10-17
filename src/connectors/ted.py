@@ -50,6 +50,9 @@ FIELDS = [
     "publication-number", "notice-title", "description-proc",
     "buyer-name", "buyer-country", "contract-nature", "procedure-type", "notice-type",
     "deadline-receipt-request", "place-of-performance", "classification-cpv", "links",
+    # Was missing, so every TED tender stored an empty pub_date (normalize_ted
+    # read a field that was never requested). Confirmed live 2026-10-17.
+    "publication-date",
     # CR-007 Phase C — the buyer's own procurement reference (BT-22-Procedure).
     # Confirmed live (2026-08) against 5 real French notices, always populated
     # (e.g. "2026-036", "26IMT007M") — the closest thing to a cross-portal join

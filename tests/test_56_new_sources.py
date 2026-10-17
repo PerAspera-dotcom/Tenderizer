@@ -283,6 +283,38 @@ def test_tenderned_fetch_pages_until_older_than_since(monkeypatch):
     assert recs[0]["publicatieId"] == 2
 
 
+def test_tenderned_parse_list_accepts_wrapped_page_shape():
+    # Live shape since at least 2026-10-17 — the bare-array-only parser
+    # silently returned [] for it, so every run reported "ok, 0".
+    item = {"publicatieId": 1, "publicatieDatum": "2026-10-17"}
+    assert tenderned.parse_list_response({"content": [item], "last": False}) == [item]
+    assert tenderned.parse_list_response([item]) == [item]
+    assert tenderned.parse_list_response({"unexpected": True}) == []
+
+
+def test_tenderned_fetch_handles_wrapped_pages_and_stops_on_last(monkeypatch):
+    pages = iter([
+        {"content": [{"publicatieId": 2, "publicatieDatum": "2026-10-16", "link": {"href": "u2"}}], "last": False},
+        {"content": [{"publicatieId": 1, "publicatieDatum": "2026-10-15", "link": {"href": "u1"}}], "last": True},
+    ])
+    list_calls = []
+
+    class _Sess:
+        headers = {}
+
+        def get(self, url, params=None, timeout=None):
+            if url == tenderned.LIST_ENDPOINT:
+                list_calls.append(params["page"])
+                return _FakeResponse(json_data=next(pages))
+            return _FakeResponse(json_data={"cpvCodes": [], "nutsCodes": []})
+
+    monkeypatch.setattr(tenderned.requests, "Session", lambda: _Sess())
+    monkeypatch.setattr(tenderned.time, "sleep", lambda *_: None)
+    recs = tenderned.fetch([], KW, date(2026, 10, 1))
+    assert [r["publicatieId"] for r in recs] == [2, 1]
+    assert list_calls == [0, 1]  # no request past the page marked last
+
+
 def test_tenderned_fetch_merges_detail_cpv_and_filters(monkeypatch):
     list_page = [{"publicatieId": 445074, "publicatieDatum": "2026-10-16",
                   "aanbestedingNaam": "Representatie artikelen",

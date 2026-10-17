@@ -60,10 +60,15 @@ def _strip_checksum(code):
 
 
 def parse_list_response(json_data):
-    """Return the list of raw summary dicts; [] if none. Shape confirmed
-    live — this endpoint returns a bare JSON array, not a {"content": [...]}
-    wrapper some Spring-style APIs use elsewhere.
+    """Return the list of raw summary dicts; [] if none. Re-confirmed live
+    2026-10-17: the endpoint now wraps results in a Spring-style page object
+    ({"content": [...], "last": bool, "totalPages": ...}). It returned a bare
+    array when this connector was built, and the unhandled change made every
+    run silently report "ok, 0 notices" — so both shapes are accepted.
     """
+    if isinstance(json_data, dict):
+        content = json_data.get("content")
+        return content if isinstance(content, list) else []
     return json_data if isinstance(json_data, list) else []
 
 
@@ -103,7 +108,8 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     while True:
         resp = session.get(LIST_ENDPOINT, params={"page": page, "size": limit}, timeout=30)
         resp.raise_for_status()
-        batch = parse_list_response(resp.json())
+        data = resp.json()
+        batch = parse_list_response(data)
         if not batch:
             break
         stop = False
@@ -115,6 +121,8 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
             candidates.append(item)
         if stop or len(candidates) >= max_records:
             break
+        if isinstance(data, dict) and data.get("last"):
+            break  # final page of the wrapped shape
         page += 1
 
     out = []

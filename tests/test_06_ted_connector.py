@@ -46,3 +46,20 @@ def test_fetch_live_returns_records():
     assert isinstance(recs, list)
     if recs:
         assert "publication-number" in recs[0]
+
+
+def test_fields_request_publication_date():
+    # normalize_ted reads publication-date; it was never requested, so every
+    # TED tender stored an empty pub_date (found 2026-10-17).
+    assert "publication-date" in ted.FIELDS
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("2026-10-07+02:00", "2026-10-07"),   # live API shape
+    (["2026-10-07+02:00"], "2026-10-07"),
+    ("20260603", "2026-06-03"),           # query/fixture shape
+    (None, ""),
+])
+def test_normalize_ted_pub_date_is_iso(raw, expected):
+    import normalize
+    assert normalize._ted_pub_date(raw) == expected

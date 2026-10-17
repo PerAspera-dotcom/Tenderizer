@@ -186,18 +186,17 @@ def test_fetch_since_in_the_future_returns_empty_without_a_request(monkeypatch):
 
 
 def test_fetch_clamps_since_to_historical_floor(monkeypatch):
-    # a `since` well before 2022-12-01 must not be sent as-is (would 400 live).
-    # Returns one notice on the very first call so max_records=1 stops the
-    # loop immediately — otherwise this would walk ~1400 real empty days.
+    # a `since` well before 2022-12-01 must not be sent as-is (would 400 live):
+    # the walk (newest-first) stops at the floor, never earlier.
     requested_days = []
 
     def fake_get(url, params=None, **kw):
         requested_days.append(params["pubDay"])
-        return _FakeResponse(_make_zip(_minimal_tables()))
+        return _FakeResponse(_make_zip({"notice.csv": []}))
 
     monkeypatch.setattr(bms.requests, "get", fake_get)
-    bms.fetch(CPV, KW, date(2020, 1, 1), max_records=1)
-    assert requested_days == [bms.HISTORICAL_FLOOR.isoformat()]
+    bms.fetch(CPV, KW, date(2020, 1, 1))
+    assert min(requested_days) == bms.HISTORICAL_FLOOR.isoformat()
 
 
 def test_fetch_iterates_one_request_per_day(monkeypatch):
@@ -213,10 +212,10 @@ def test_fetch_iterates_one_request_per_day(monkeypatch):
     bms.fetch(CPV, KW, since)
     yesterday = today - bms.datetime.timedelta(days=1)
     expected = []
-    d = since
-    while d <= yesterday:
+    d = yesterday
+    while d >= since:  # newest day first
         expected.append(d.isoformat())
-        d += bms.datetime.timedelta(days=1)
+        d -= bms.datetime.timedelta(days=1)
     assert requested_days == expected
 
 
@@ -286,6 +285,41 @@ def test_fetch_respects_max_records(monkeypatch):
     since = today - bms.datetime.timedelta(days=2)
     recs = bms.fetch([], KW, since, max_records=1)
     assert len(recs) == 1
+
+
+def test_fetch_cap_counts_matches_not_raw_volume_and_reaches_recent_days(monkeypatch):
+    # Regression: a raw-volume cap walked oldest-first stopped after ~2 days
+    # and never reached recent ones. Every day returns one distinct notice
+    # matching on its lot-level CPV; the walk must start at yesterday and stop
+    # once the match cap is hit — and scan the whole window when nothing matches.
+    requested_days = []
+
+    def fake_get(url, params=None, **kw):
+        requested_days.append(params["pubDay"])
+        tables = _minimal_tables(notice_id=f"X-{params['pubDay']}", lots=["LOT-0001"])
+        return _FakeResponse(_make_zip(tables))
+
+    monkeypatch.setattr(bms.requests, "get", fake_get)
+    today = bms.datetime.date.today()
+    since = today - bms.datetime.timedelta(days=30)
+    recs = bms.fetch(["45111000-8"], KW, since, max_records=2)  # lot-level code every day matches
+    assert len(recs) == 2
+    assert requested_days[0] == (today - bms.datetime.timedelta(days=1)).isoformat()
+    assert len(requested_days) == 2  # stopped on matches, not after scanning the oldest days
+
+    requested_days.clear()
+    assert bms.fetch(["99999999-9"], KW, since, max_records=2) == []
+    assert len(requested_days) == 30  # no matches: the whole window is scanned, not cut short
+
+
+def test_fetch_drops_an_older_match_superseded_by_a_non_matching_newer_version(monkeypatch):
+    newer = _minimal_tables(notice_id="N1", version="02", lots=[])  # notice-level CPV only — no lot match
+    older = _minimal_tables(notice_id="N1", version="01", lots=["LOT-0001"])  # matches on lot CPV
+    responses = iter([_make_zip(newer), _make_zip(older)])  # newest day is requested first
+    monkeypatch.setattr(bms.requests, "get", lambda url, params=None, **kw: _FakeResponse(next(responses)))
+    today = bms.datetime.date.today()
+    recs = bms.fetch(["45111000-8"], KW, today - bms.datetime.timedelta(days=2))
+    assert recs == []
 
 
 # ── normalize_bekanntmachungsservice ────────────────────────────────────────
