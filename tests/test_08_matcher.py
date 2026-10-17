@@ -84,22 +84,28 @@ def test_compound_head_with_inflection():
 def test_compound_modifier():
     assert match_relevance("Zeltplanen und Zeltheizungen", ["Zelt"]) == ["Zelt"]
 
-def test_compound_dutch_tent_and_zeil():
-    assert match_relevance("Levering van legertenten", ["tent"]) == ["tent"]
+def test_compound_dutch_zeil():
     assert match_relevance("Afdekzeilen voor vrachtwagens", ["dekzeil"]) == ["dekzeil"]
 
-def test_compound_not_list_blocks_false_positives():
-    text = "Table of contents; patent assistent; consistent extent of the intent"
+def test_tent_is_not_a_compound_stem():
+    # production check 2026-10-17: "tent" as a word ending hit Spanish/French/English
+    # words (consistente, attente, intermittent), so it stays whole-word
+    text = "vestuario consistente; en attente; road (intermittent section)"
     assert match_relevance(text, ["tent"]) == []
+
+def test_compound_not_list_blocks_listed_words():
+    compounds = {"head": ["tent"], "modifier": [], "not": ["contents", "patent"]}
+    assert match_keywords("contents and patent", ["tent"], compounds=compounds) == []
+    assert match_keywords("legertent", ["tent"], compounds=compounds) == ["tent"]
 
 def test_compound_only_for_listed_stems():
     # "decke" isn't a compound stem — "Zwischendecke" (ceiling) must not match
     assert match_relevance("Einbau einer Zwischendecke", ["Decke"]) == []
 
 def test_compound_head_only_stem_does_not_match_as_prefix():
-    # "tent" is head-only: "tentoonstelling" (exhibition) must not match
-    assert match_relevance("Inrichting tentoonstelling", ["tent"]) == []
+    # "markise" is head-only: a word starting with it isn't a match
+    assert match_relevance("Markisenstoff", ["Markise"]) == []
 
 def test_compound_config_shape():
     cfg = config.compound_keywords()
-    assert "zelt" in cfg["head"] and "zelt" in cfg["modifier"] and "content" in cfg["not"]
+    assert "zelt" in cfg["head"] and "zelt" in cfg["modifier"] and "tent" not in cfg["head"]

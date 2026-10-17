@@ -54,14 +54,13 @@ distinctive: [tent, tents, tente, tentes, chapiteau, chapiteaux, marquee, Zelt, 
 compounds:
   # stem at the END of a word (the compound's head noun), plus an optional inflection
   # (-e/-en/-er/-es/-n/-s): Festzelt, Sanitätszelte, Fahrzeugtarnung, afdekzeil.
+  # "tent" is deliberately absent: checked against the production queue (2026-10-17) it
+  # matched consistente/existente/attente/intermittent far more often than Dutch
+  # compounds like legertent — add specific Dutch compounds as tenant keywords instead.
   head: [zelt, zelte, zelten, tarnnetz, tarnung, sonnensegel, markise, markisen,
-         dekzeil, dekzeilen, tent, tenten]
+         dekzeil, dekzeilen]
   # stem at the START of a word: Zeltplane, Zeltheizung, Zeltboden.
   modifier: [zelt]
-  # whole words never treated as compounds — "tent" ends a lot of English and Dutch
-  # words that have nothing to do with tents.
-  not: [content, contents, discontent, malcontent, extent, extents, intent, intents,
-        latent, patent, patents, patenten, potent, impotent, omnipotent, portent,
-        competent, incompetent, consistent, inconsistent, persistent, insistent,
-        existent, nonexistent, subsistent, resistent, assistent, assistenten, attent,
-        penitent]
+  # whole words never treated as compounds, for a stem that turns out to end
+  # unrelated words.
+  not: []
