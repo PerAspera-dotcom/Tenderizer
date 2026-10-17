@@ -49,6 +49,7 @@ Empty for notices posted on CanadaBuys itself — see NOTICE_PAGE_URL.
 import csv
 import datetime
 import io
+import re
 
 import requests
 
@@ -56,20 +57,24 @@ import config
 
 CSV_URL = "https://canadabuys.canada.ca/opendata/pub/openTenderNotice-ouvertAvisAppelOffres.csv"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
-# Notices posted on CanadaBuys itself (reference "cb-...") have an empty
-# noticeURL column in the CSV — only notices hosted elsewhere (MERX, "MX-...")
-# carry one. Their own page is at this address, keyed on the reference number
-# (confirmed live 2026-10-17: real references return the notice, made-up
-# ones 404).
+# Notices posted on CanadaBuys itself ("cb-...") and Shared Services Canada
+# notices ("SSC-26-00035079:T") have an empty noticeURL column in the CSV —
+# only notices hosted elsewhere (MERX "MX-...", SAP Ariba "WS...-Doc...")
+# carry one. Their CanadaBuys page is keyed on the reference lowercased with
+# anything but letters, digits and hyphens dropped ("ssc-26-00035079t") —
+# confirmed live 2026-10-17: real references return the notice, made-up ones
+# 404. Older Ariba references without the "-Doc..." part have no page here.
+_OWN_PAGE_PREFIXES = ("cb-", "ssc-")
 NOTICE_PAGE_URL = "https://canadabuys.canada.ca/en/tender-opportunities/tender-notice/{ref}"
 
 
 def notice_url(notice_url_column, reference):
-    """The CSV's own noticeURL, else the CanadaBuys page for a "cb-" reference."""
+    """The CSV's own noticeURL, else the CanadaBuys page for a cb-/SSC- reference."""
     if notice_url_column:
         return notice_url_column
-    if reference.lower().startswith("cb-"):
-        return NOTICE_PAGE_URL.format(ref=reference)
+    slug = re.sub(r"[^a-z0-9-]", "", reference.lower())
+    if slug.startswith(_OWN_PAGE_PREFIXES):
+        return NOTICE_PAGE_URL.format(ref=slug)
     return ""
 
 
