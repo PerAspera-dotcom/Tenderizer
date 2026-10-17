@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { listTenders } from '../../api';
 import type { Tender, AwardDetail } from '../../types';
-import { formatDate, countryFlag, formatValue, hasTranslatedTagLine, displayTagLine } from '../../utils';
+import { formatDate, countryFlag, formatValue, hasTranslatedTagLine, displayTagLine, PORTAL_OPTS } from '../../utils';
 
 function DetailField({ label, value }: { label: string; value?: string | null }) {
   if (!value) return null;
@@ -43,12 +43,6 @@ function AwardDetailPanel({ detail }: { detail: AwardDetail }) {
     </div>
   );
 }
-
-const PORTAL_OPTS = [
-  { value: '', label: 'All portals' },
-  { value: 'TED', label: 'TED' },
-  { value: 'BOAMP', label: 'BOAMP' },
-];
 
 // CR-002 B1: past_tender notices get their own aggregated view — table,
 // filters, counts, same shape as the Tender Feed — but never mixed with

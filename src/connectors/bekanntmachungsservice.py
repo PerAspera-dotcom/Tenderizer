@@ -90,9 +90,13 @@ separate pipeline run still upserts the same stored record via the existing
 import csv
 import datetime
 import io
+import logging
+import re
 import zipfile
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 EXPORT_ENDPOINT = "https://oeffentlichevergabe.de/api/notice-exports"
 # Note: the public notice detail page URL (confirmed live via the site's own
@@ -103,6 +107,49 @@ EXPORT_ENDPOINT = "https://oeffentlichevergabe.de/api/notice-exports"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
 
 HISTORICAL_FLOOR = datetime.date(2022, 12, 1)
+
+_DEADLINE_BLOCK_RE = re.compile(
+    r"<cac:TenderSubmissionDeadlinePeriod>(.*?)</cac:TenderSubmissionDeadlinePeriod>", re.S)
+_END_DATE_RE = re.compile(r"<cbc:EndDate>\s*(\d{4}-\d{2}-\d{2})")
+
+
+def deadline_from_eforms(xml_text):
+    """Earliest cac:TenderSubmissionDeadlinePeriod/cbc:EndDate in one eForms
+    notice (multi-lot notices carry one per lot), as "YYYY-MM-DD"; "" if none.
+    """
+    dates = [m.group(1) for block in _DEADLINE_BLOCK_RE.findall(xml_text or "")
+             for m in _END_DATE_RE.finditer(block)]
+    return min(dates) if dates else ""
+
+
+def _fill_deadlines(raws_by_day, headers):
+    """Best-effort submission deadlines, which the CSV/OCDS exports drop (see
+    the module docstring). Downloads the same day's eForms export once per day
+    that has a matching notice and reads each notice's XML
+    (`<noticeIdentifier>-<version>.xml`). Confirmed live 2026-10-17: that
+    export is CAPPED AT 1000 FILES per day with no paging parameter and no
+    per-notice endpoint (2026-10-15: 1301 notices, 1000 files), so a notice
+    outside the cap keeps deadline "". Never raises — a missing deadline is
+    the pre-existing behaviour, not a reason to fail the source.
+    """
+    for day, raws in raws_by_day.items():
+        try:
+            resp = requests.get(EXPORT_ENDPOINT, params={"pubDay": day.isoformat(), "format": "eforms.zip"},
+                                headers=headers, timeout=120)
+            resp.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                names = set(zf.namelist())
+                for raw in raws:
+                    version = raw["noticeVersion"]
+                    candidates = [f"{raw['noticeIdentifier']}-{version}.xml"]
+                    if version.isdigit():
+                        candidates.append(f"{raw['noticeIdentifier']}-{int(version):02d}.xml")
+                    name = next((n for n in candidates if n in names), None)
+                    if name:
+                        raw["deadline"] = deadline_from_eforms(zf.read(name).decode("utf-8", "ignore"))
+        except Exception as e:
+            logger.warning("Bekanntmachungsservice: deadline lookup failed for %s: %s: %s",
+                           day, type(e).__name__, e)
 
 # Winner-naming role priority — organisation.csv's organisationRole is one of
 # several values (buyer/reviewer/tenderer/serv-prov/mediator/winner/...);
@@ -246,6 +293,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     cpv_filter = set(cpv_codes) if cpv_codes else None
     max_version = {}  # noticeIdentifier -> highest int(version) seen, matching or not
     matched = {}      # noticeIdentifier -> (int(version), raw dict), CPV-matching versions only
+    day_of = {}       # noticeIdentifier -> pubDay its matched version came from (for _fill_deadlines)
 
     # Newest day first, CPV-filtered as we go, capped on MATCHES. This used to
     # walk oldest-first with a 2000 cap on RAW notices — at ~1000 notices/day
@@ -267,6 +315,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
             current = matched.get(notice_id)
             if current is None or version > current[0]:
                 matched[notice_id] = (version, raw)
+                day_of[notice_id] = day
         if len(matched) >= max_records:
             break
         day -= datetime.timedelta(days=1)
@@ -274,4 +323,9 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     # Keep a notice only if its latest version is the one that matched — a
     # newer version whose CPV no longer matches supersedes the older match.
     out = [raw for notice_id, (version, raw) in matched.items() if version == max_version[notice_id]]
-    return out[:max_records]
+    out = out[:max_records]
+    raws_by_day = {}
+    for raw in out:
+        raws_by_day.setdefault(day_of[raw["noticeIdentifier"]], []).append(raw)
+    _fill_deadlines(raws_by_day, headers)
+    return out

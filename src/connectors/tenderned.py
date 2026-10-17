@@ -54,6 +54,14 @@ USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tende
 REQUEST_DELAY_SECONDS = 0.5
 
 
+# typePublicatie codes that only amend or close a notice published earlier:
+# rectification, early termination, contract modification (~22% of the feed,
+# tallied live 2026-10-17). Each candidate costs one detail request, which
+# made this source ~30 min per org per run. Tender (AAO), award (AGO — feeds
+# Past Tenders), prior information (VAK) and market consultation (MAC) stay.
+SKIPPED_PUBLICATION_TYPES = {"REC", "VBE", "AAW"}
+
+
 def _strip_checksum(code):
     """"18530000-3" -> "18530000" — see module docstring's CPV section."""
     return code.split("-")[0] if code else code
@@ -118,6 +126,8 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
             if pub_date and pub_date < since_str:
                 stop = True
                 break
+            if (item.get("typePublicatie") or {}).get("code") in SKIPPED_PUBLICATION_TYPES:
+                continue  # never an opportunity — skip before the per-notice detail call
             candidates.append(item)
         if stop or len(candidates) >= max_records:
             break

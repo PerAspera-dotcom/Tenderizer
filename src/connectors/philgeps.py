@@ -140,8 +140,12 @@ def _next_page(session, html):
     return resp.text
 
 
-def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
-    """Page the nationwide, newest-first open-opportunities list until a row
+def fetch(cpv_codes, keywords, since, limit=100, max_records=4000):
+    """`max_records` is 4000, not the shared 2000: production hit 2000 on every
+    run (2026-10-17), which is only ~2 days of PhilGEPS volume — one missed
+    nightly run would lose notices. 4000 (~4 days) costs ~7 more minutes.
+
+    Page the nationwide, newest-first open-opportunities list until a row
     older than `since` is seen (same "stop once past the cutoff" stance
     tenderned.py/bekanntmachungsservice.py take), or a page repeats/returns
     no rows (safe termination — see module docstring on the untested "last

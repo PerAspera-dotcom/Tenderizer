@@ -295,7 +295,8 @@ def test_fetch_cap_counts_matches_not_raw_volume_and_reaches_recent_days(monkeyp
     requested_days = []
 
     def fake_get(url, params=None, **kw):
-        requested_days.append(params["pubDay"])
+        if params["format"] == "csv.zip":  # eForms deadline lookups are counted separately
+            requested_days.append(params["pubDay"])
         tables = _minimal_tables(notice_id=f"X-{params['pubDay']}", lots=["LOT-0001"])
         return _FakeResponse(_make_zip(tables))
 
@@ -334,10 +335,15 @@ def test_normalize_language_always_german(raw_bekanntmachungsservice_supply, raw
 def test_normalize_source_string(raw_bekanntmachungsservice_supply):
     assert normalize.normalize_bekanntmachungsservice(raw_bekanntmachungsservice_supply)["source"] == "Bekanntmachungsservice"
 
-def test_normalize_deadline_always_empty(raw_bekanntmachungsservice_supply, raw_bekanntmachungsservice_below_threshold):
-    # CR-010 §2: confirmed absent from both CSV and OCDS — deferred, not a bug.
+def test_normalize_deadline_empty_without_eforms_lookup(raw_bekanntmachungsservice_supply, raw_bekanntmachungsservice_below_threshold):
+    # absent from both CSV and OCDS; only filled by the connector's eForms lookup
     assert normalize.normalize_bekanntmachungsservice(raw_bekanntmachungsservice_supply)["deadline"] == ""
     assert normalize.normalize_bekanntmachungsservice(raw_bekanntmachungsservice_below_threshold)["deadline"] == ""
+
+
+def test_normalize_deadline_passes_through_eforms_value(raw_bekanntmachungsservice_supply):
+    raw = dict(raw_bekanntmachungsservice_supply, deadline="2026-11-05")
+    assert normalize.normalize_bekanntmachungsservice(raw)["deadline"] == "2026-11-05"
 
 def test_normalize_award_fields_populated_unlike_belgium(raw_bekanntmachungsservice_supply):
     # CR-010 §2: unlike eprocurement.py, this source's CSV has plain
@@ -409,3 +415,71 @@ def test_all_four_sources_share_identical_schema(
     canonical = keysets["TED"]
     for name, keys in keysets.items():
         assert keys == canonical, f"{name} schema diverges: {keys ^ canonical}"
+
+
+# ── best-effort deadlines from the eForms export ────────────────────────────
+
+_EFORMS_XML = """<ContractNotice><cac:ProcurementProjectLot><cac:TenderingProcess>
+<cac:TenderSubmissionDeadlinePeriod><cbc:EndDate>2026-11-20+01:00</cbc:EndDate><cbc:EndTime>10:00:00+01:00</cbc:EndTime></cac:TenderSubmissionDeadlinePeriod>
+</cac:TenderingProcess></cac:ProcurementProjectLot><cac:ProcurementProjectLot><cac:TenderingProcess>
+<cac:TenderSubmissionDeadlinePeriod><cbc:EndDate>2026-11-05+01:00</cbc:EndDate></cac:TenderSubmissionDeadlinePeriod>
+</cac:TenderingProcess></cac:ProcurementProjectLot></ContractNotice>"""
+
+
+def test_deadline_from_eforms_takes_earliest_lot_deadline():
+    assert bms.deadline_from_eforms(_EFORMS_XML) == "2026-11-05"
+    assert bms.deadline_from_eforms("<ContractNotice/>") == ""
+    assert bms.deadline_from_eforms(None) == ""
+
+
+def _eforms_zip(files):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, xml in files.items():
+            zf.writestr(name, xml)
+    return buf.getvalue()
+
+
+def test_fetch_fills_deadline_from_same_days_eforms_export(monkeypatch):
+    csv_zip = _make_zip(_minimal_tables(notice_id="N1", version="01"))
+    calls = []
+
+    def fake_get(url, params=None, **kw):
+        calls.append(params["format"])
+        if params["format"] == "eforms.zip":
+            return _FakeResponse(_eforms_zip({"N1-01.xml": _EFORMS_XML}))
+        return _FakeResponse(csv_zip)
+
+    monkeypatch.setattr(bms.requests, "get", fake_get)
+    today = bms.datetime.date.today()
+    recs = bms.fetch([], KW, today - bms.datetime.timedelta(days=1))
+    assert recs[0]["deadline"] == "2026-11-05"
+    assert calls == ["csv.zip", "eforms.zip"]  # one eForms download per matching day
+
+
+def test_fetch_keeps_empty_deadline_when_notice_is_outside_the_eforms_cap(monkeypatch):
+    csv_zip = _make_zip(_minimal_tables(notice_id="N1", version="01"))
+
+    def fake_get(url, params=None, **kw):
+        if params["format"] == "eforms.zip":
+            return _FakeResponse(_eforms_zip({"OTHER-01.xml": _EFORMS_XML}))
+        return _FakeResponse(csv_zip)
+
+    monkeypatch.setattr(bms.requests, "get", fake_get)
+    today = bms.datetime.date.today()
+    recs = bms.fetch([], KW, today - bms.datetime.timedelta(days=1))
+    assert len(recs) == 1
+    assert recs[0].get("deadline", "") == ""
+
+
+def test_fetch_survives_eforms_download_failure(monkeypatch):
+    csv_zip = _make_zip(_minimal_tables(notice_id="N1", version="01"))
+
+    def fake_get(url, params=None, **kw):
+        if params["format"] == "eforms.zip":
+            raise ConnectionError("boom")
+        return _FakeResponse(csv_zip)
+
+    monkeypatch.setattr(bms.requests, "get", fake_get)
+    today = bms.datetime.date.today()
+    assert len(bms.fetch([], KW, today - bms.datetime.timedelta(days=1))) == 1

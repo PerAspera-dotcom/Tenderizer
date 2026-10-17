@@ -315,6 +315,31 @@ def test_tenderned_fetch_handles_wrapped_pages_and_stops_on_last(monkeypatch):
     assert list_calls == [0, 1]  # no request past the page marked last
 
 
+def test_tenderned_fetch_skips_amendment_types_without_a_detail_call(monkeypatch):
+    page = {"content": [
+        {"publicatieId": 1, "publicatieDatum": "2026-10-16", "typePublicatie": {"code": "AAO"}, "link": {"href": "u1"}},
+        {"publicatieId": 2, "publicatieDatum": "2026-10-16", "typePublicatie": {"code": "REC"}, "link": {"href": "u2"}},
+        {"publicatieId": 3, "publicatieDatum": "2026-10-16", "typePublicatie": {"code": "VBE"}, "link": {"href": "u3"}},
+        {"publicatieId": 4, "publicatieDatum": "2026-10-16", "typePublicatie": {"code": "AGO"}, "link": {"href": "u4"}},
+    ], "last": True}
+    detail_calls = []
+
+    class _Sess:
+        headers = {}
+
+        def get(self, url, params=None, timeout=None):
+            if url == tenderned.LIST_ENDPOINT:
+                return _FakeResponse(json_data=page)
+            detail_calls.append(url)
+            return _FakeResponse(json_data={"cpvCodes": [], "nutsCodes": []})
+
+    monkeypatch.setattr(tenderned.requests, "Session", lambda: _Sess())
+    monkeypatch.setattr(tenderned.time, "sleep", lambda *_: None)
+    recs = tenderned.fetch([], KW, date(2026, 10, 1))
+    assert [r["publicatieId"] for r in recs] == [1, 4]
+    assert len(detail_calls) == 2
+
+
 def test_tenderned_fetch_merges_detail_cpv_and_filters(monkeypatch):
     list_page = [{"publicatieId": 445074, "publicatieDatum": "2026-10-16",
                   "aanbestedingNaam": "Representatie artikelen",

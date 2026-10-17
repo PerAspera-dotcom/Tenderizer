@@ -89,7 +89,26 @@ const ISO3_FLAGS: Record<string, string> = {
   SVK: '🇸🇰', SVN: '🇸🇮', HRV: '🇭🇷', BGR: '🇧🇬',
   LTU: '🇱🇹', LVA: '🇱🇻', EST: '🇪🇪', LUX: '🇱🇺',
   CYP: '🇨🇾', MLT: '🇲🇹', IRL: '🇮🇪', EU: '🇪🇺',
+  // Non-EU sources (CR-011 §4) + the 2-letter codes the Belgium/Germany
+  // connectors store ("BE"/"DE", like BOAMP's "FR").
+  CAN: '🇨🇦', PHL: '🇵🇭', DE: '🇩🇪', BE: '🇧🇪',
 };
+
+// Scout portal filter options. `value` must be the exact `source` string the
+// connector stores (GET /api/tenders?source= matches it, case-insensitively).
+// e-Procurement (Belgium) is left out while it's paused pending BOSA's legal
+// review — add it back here when it goes live.
+export const PORTAL_OPTS: { value: string; label: string }[] = [
+  { value: '', label: 'All portals' },
+  { value: 'TED', label: 'TED (EU)' },
+  { value: 'BOAMP', label: 'BOAMP (France)' },
+  { value: 'Bekanntmachungsservice', label: 'Bekanntmachungsservice (Germany)' },
+  { value: 'TenderNed', label: 'TenderNed (Netherlands)' },
+  { value: 'Find a Tender', label: 'Find a Tender (UK)' },
+  { value: 'Contracts Finder', label: 'Contracts Finder (UK)' },
+  { value: 'CanadaBuys', label: 'CanadaBuys (Canada)' },
+  { value: 'PhilGEPS', label: 'PhilGEPS (Philippines)' },
+];
 
 export function countryFlag(code: string | null | undefined): string {
   if (!code) return '';

@@ -739,10 +739,10 @@ def normalize_bekanntmachungsservice(raw):
     """Normalise a Bekanntmachungsservice (Germany) record into the SAME
     schema as normalize_ted/normalize_boamp/normalize_eprocurement.
 
-    CR-010 §2: `deadline` is always "" — confirmed absent from BOTH this
-    source's structured exports (CSV and OCDS alike), present only in the
-    raw eForms XML this connector doesn't parse (deferred, same call as
-    Belgium's award-XML deferral). Unlike Belgium, award fields (raw_award_
+    `deadline` is absent from BOTH this source's structured exports (CSV and
+    OCDS alike); the connector fills it best-effort from the raw eForms XML
+    (raw["deadline"]), which is capped at 1000 notices per day, so it can
+    still be "". Unlike Belgium, award fields (raw_award_
     winner/-value/-currency) ARE populated here — this source's CSV export
     already has them as plain columns, no XML parsing needed. raw_award_detail
     is still None (not asked for here the way CR-010 §1 discusses Belgium's
@@ -765,8 +765,9 @@ def normalize_bekanntmachungsservice(raw):
         # convention (new normalization work this CR didn't ask for).
         "procedure": (raw.get("procedureType") or "").lower(),
         "pub_date": _trim_date(raw.get("publicationDate")) or "",
-        # CR-010 §2: deliberately absent — see docstring above.
-        "deadline": "",
+        # Best-effort from the eForms export (connector's _fill_deadlines);
+        # "" when the notice fell outside that export's 1000-file cap.
+        "deadline": raw.get("deadline") or "",
         "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
         "matched_terms": [],
         "match_source": None,

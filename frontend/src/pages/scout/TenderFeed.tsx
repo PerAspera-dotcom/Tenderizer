@@ -2,14 +2,8 @@ import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from '../../router';
 import { listTenders, getScoutSettings } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine, hoursLeft } from '../../utils';
+import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine, hoursLeft, PORTAL_OPTS } from '../../utils';
 import MatchChip from '../../components/MatchChip';
-
-const PORTAL_OPTS = [
-  { value: '', label: 'All portals' },
-  { value: 'TED', label: 'TED' },
-  { value: 'BOAMP', label: 'BOAMP' },
-];
 
 const MATCH_OPTS = [
   { value: '', label: 'All match types' },
