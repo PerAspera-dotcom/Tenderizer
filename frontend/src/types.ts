@@ -228,6 +228,8 @@ export interface PortalHealth {
   status: string;
   last_result?: string;
   detail?: string;
+  // One-line portal descriptor: what it is, what data, how it's targeted.
+  description?: string;
   // CR-004 F4 — source_health-derived streak/failure history.
   streak_ok_days: number;
   failures_7d: number;

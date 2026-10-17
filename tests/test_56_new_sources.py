@@ -243,6 +243,16 @@ def test_canadabuys_parse_response_reads_english_columns():
     assert recs[0]["referenceNumber"] == "MX-123"
 
 
+def test_canadabuys_notice_url_falls_back_to_canadabuys_page_for_cb_references():
+    own = dict(_ca_row(), **{"referenceNumber-numeroReference": "cb-395-95380568", "noticeURL-URLavis-eng": ""})
+    merx = _ca_row()
+    unknown = dict(_ca_row(), **{"referenceNumber-numeroReference": "XX-1", "noticeURL-URLavis-eng": ""})
+    recs = canadabuys.parse_response(_csv_bytes([own, merx, unknown]))
+    assert recs[0]["noticeURL"] == "https://canadabuys.canada.ca/en/tender-opportunities/tender-notice/cb-395-95380568"
+    assert recs[1]["noticeURL"] == "https://www.merx.com/x"
+    assert recs[2]["noticeURL"] == ""
+
+
 def test_canadabuys_fetch_filters_locally_by_publication_date(monkeypatch):
     rows = [_ca_row(pub_date="2026-09-01", title="Too old"),
             _ca_row(pub_date="2026-10-10", title="In range")]

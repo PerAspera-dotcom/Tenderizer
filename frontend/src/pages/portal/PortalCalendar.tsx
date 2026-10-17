@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from '../../router';
 import { listTenders, getPipeline } from '../../api';
 import type { Tender, PipelineEntry } from '../../types';
-import { daysLeft, displayTagLine } from '../../utils';
+import { daysLeft, displayTagLine, tenderLink } from '../../utils';
 
 interface Tile {
   pub_number: string;
@@ -232,7 +232,7 @@ export default function PortalCalendar() {
         const { color, label } = tileColor(t.status, effective);
         return {
           pub_number: t.pub_number, title: displayTagLine(t), buyer: t.buyer, source: t.source,
-          url: t.url, status: t.status, date: effective.slice(0, 10), color, label,
+          url: tenderLink(t)?.href ?? '', status: t.status, date: effective.slice(0, 10), color, label,
         };
       });
   }, [tenders, pipeline]);

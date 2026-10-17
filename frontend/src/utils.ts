@@ -110,6 +110,33 @@ export const PORTAL_OPTS: { value: string; label: string }[] = [
   { value: 'PhilGEPS', label: 'PhilGEPS (Philippines)' },
 ];
 
+// Home page per source — the link shown when a notice has no page of its own
+// (e.g. a CanadaBuys row with no notice URL), so there's always somewhere to go.
+export const PORTAL_HOME: Record<string, string> = {
+  'TED': 'https://ted.europa.eu/',
+  'BOAMP': 'https://www.boamp.fr/',
+  'e-Procurement': 'https://www.publicprocurement.be/',
+  'Bekanntmachungsservice': 'https://www.oeffentlichevergabe.de/',
+  'Find a Tender': 'https://www.find-tender.service.gov.uk/',
+  'Contracts Finder': 'https://www.contractsfinder.service.gov.uk/',
+  'CanadaBuys': 'https://canadabuys.canada.ca/en/tender-opportunities',
+  'TenderNed': 'https://www.tenderned.nl/',
+  'PhilGEPS': 'https://notices.philgeps.gov.ph/',
+  'AusTender': 'https://www.tenders.gov.au/',
+  'GeBIZ': 'https://www.gebiz.gov.sg/',
+  'Etimad': 'https://tenders.etimad.sa/',
+  'ePerolehan': 'https://www.eperolehan.gov.my/',
+};
+
+export const PORTAL_FALLBACK_TITLE = 'No page for this notice — opens the portal home page';
+
+// The notice's own page, else its portal's home page (fallback: true), else null.
+export function tenderLink(t: { url?: string | null; source?: string | null }): { href: string; fallback: boolean } | null {
+  if (t.url) return { href: t.url, fallback: false };
+  const home = t.source ? PORTAL_HOME[t.source] : undefined;
+  return home ? { href: home, fallback: true } : null;
+}
+
 export function countryFlag(code: string | null | undefined): string {
   if (!code) return '';
   return ISO3_FLAGS[code.toUpperCase()] ?? code;

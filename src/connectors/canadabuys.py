@@ -44,6 +44,7 @@ sources (UK, AU, CA, SG, PH) skip translation".
 NOTICE URL: `noticeURL-URLavis-eng` — confirmed live, points to the actual
 posting platform (MERX in the captured example), not a CanadaBuys page
 itself; passed through as-is since CanadaBuys' own CSV already resolves it.
+Empty for notices posted on CanadaBuys itself — see NOTICE_PAGE_URL.
 """
 import csv
 import datetime
@@ -55,6 +56,21 @@ import config
 
 CSV_URL = "https://canadabuys.canada.ca/opendata/pub/openTenderNotice-ouvertAvisAppelOffres.csv"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
+# Notices posted on CanadaBuys itself (reference "cb-...") have an empty
+# noticeURL column in the CSV — only notices hosted elsewhere (MERX, "MX-...")
+# carry one. Their own page is at this address, keyed on the reference number
+# (confirmed live 2026-10-17: real references return the notice, made-up
+# ones 404).
+NOTICE_PAGE_URL = "https://canadabuys.canada.ca/en/tender-opportunities/tender-notice/{ref}"
+
+
+def notice_url(notice_url_column, reference):
+    """The CSV's own noticeURL, else the CanadaBuys page for a "cb-" reference."""
+    if notice_url_column:
+        return notice_url_column
+    if reference.lower().startswith("cb-"):
+        return NOTICE_PAGE_URL.format(ref=reference)
+    return ""
 
 
 def parse_response(csv_bytes):
@@ -78,7 +94,8 @@ def parse_response(csv_bytes):
             "procurementMethod": row.get("procurementMethod-methodeApprovisionnement-eng") or "",
             "regionsOfDelivery": row.get("regionsOfDelivery-regionsLivraison-eng") or "",
             "contractingEntityName": row.get("contractingEntityName-nomEntitContractante-eng") or "",
-            "noticeURL": row.get("noticeURL-URLavis-eng") or "",
+            "noticeURL": notice_url(row.get("noticeURL-URLavis-eng") or "",
+                                    row.get("referenceNumber-numeroReference") or ""),
         })
     return out
 

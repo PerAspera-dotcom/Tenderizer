@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from '../../router';
 import { listTenders, getScoutSettings } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine, hoursLeft, PORTAL_OPTS } from '../../utils';
+import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine, hoursLeft, PORTAL_OPTS, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 
 const MATCH_OPTS = [
@@ -169,8 +169,9 @@ export default function TenderFeed() {
                   </td>
                   <td><MatchChip matchSource={t.match_source} /></td>
                   <td>
-                    {t.url ? (
-                      <a href={t.url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>Open ↗</a>
+                    {tenderLink(t) ? (
+                      <a href={tenderLink(t)!.href} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}
+                         title={tenderLink(t)!.fallback ? PORTAL_FALLBACK_TITLE : undefined}>{tenderLink(t)!.fallback ? 'Portal ↗' : 'Open ↗'}</a>
                     ) : <span style={{ color: '#4c5a70' }}>—</span>}
                   </td>
                 </tr>

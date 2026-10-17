@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from '../../router';
 import { getStats, getHealth, listTenders, getLatestReportBlob, ReportNotFoundError } from '../../api';
 import type { Stats, PortalHealth, Tender } from '../../types';
-import { formatDate, formatTime, countryFlag, displayTagLine } from '../../utils';
+import { formatDate, formatTime, countryFlag, displayTagLine, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import MatchChip from '../../components/MatchChip';
 
 export default function Dashboard() {
@@ -184,8 +184,9 @@ export default function Dashboard() {
                       <td><span className="mono" style={{ fontSize: 12 }}>{formatDate(t.deadline)}</span></td>
                       <td><MatchChip matchSource={t.match_source} /></td>
                       <td>
-                        {t.url ? (
-                          <a href={t.url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>Open ↗</a>
+                        {tenderLink(t) ? (
+                          <a href={tenderLink(t)!.href} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}
+                             title={tenderLink(t)!.fallback ? PORTAL_FALLBACK_TITLE : undefined}>{tenderLink(t)!.fallback ? 'Portal ↗' : 'Open ↗'}</a>
                         ) : '—'}
                       </td>
                     </tr>

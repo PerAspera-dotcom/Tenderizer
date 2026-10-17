@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listTenders, patchTender } from '../../api';
 import type { Tender } from '../../types';
-import { formatDate, countryFlag, displayTagLine, displayDescription, hasTranslatedTagLine } from '../../utils';
+import { formatDate, countryFlag, displayTagLine, displayDescription, hasTranslatedTagLine, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
 // CR-006 D4: reinstate reuses the same state-transition endpoint/states the
@@ -116,10 +116,11 @@ export default function DismissedTenders() {
                   <span style={{ color: '#8892a4', fontSize: 13 }}>{selected.country}</span>
                   <NoticeTypeBadge noticeType={selected.notice_type} />
                   <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {selected.url && (
-                      <a href={selected.url} target="_blank" rel="noopener noreferrer"
-                         className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>
-                        Open ↗
+                    {tenderLink(selected) && (
+                      <a href={tenderLink(selected)!.href} target="_blank" rel="noopener noreferrer"
+                         className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}
+                         title={tenderLink(selected)!.fallback ? PORTAL_FALLBACK_TITLE : undefined}>
+                        {tenderLink(selected)!.fallback ? 'Portal ↗' : 'Open ↗'}
                       </a>
                     )}
                     <span style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid #f87171', color: '#f87171', borderRadius: 9999, padding: '3px 10px', fontSize: 12, fontWeight: 500 }}>

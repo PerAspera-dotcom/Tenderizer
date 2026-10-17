@@ -35,7 +35,7 @@ export default function PortalsHealth() {
           const meta = STATUS_LABEL[p.status] ?? { label: p.status, color: '#8892a4' };
           return (
             <div key={p.name} className="card" style={{ padding: '18px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: p.description ? 4 : 12 }}>
                 <span style={{ fontWeight: 700, fontSize: 16 }}>{p.name}</span>
                 <span style={{ color: '#8892a4', fontSize: 12 }}>{p.region}</span>
                 <span style={{
@@ -46,6 +46,10 @@ export default function PortalsHealth() {
                   {meta.label}
                 </span>
               </div>
+
+              {p.description && (
+                <div style={{ color: '#8892a4', fontSize: 12, lineHeight: 1.4, marginBottom: 12 }}>{p.description}</div>
+              )}
 
               {p.detail && (
                 <div style={{ color: '#e3b341', fontSize: 12, marginBottom: 10 }}>{p.detail}</div>

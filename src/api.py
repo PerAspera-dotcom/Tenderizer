@@ -1014,6 +1014,26 @@ _PORTAL_META = [
     {"name": "PhilGEPS", "region": "Philippines", "status": "live"},
 ]
 
+# One line per Portal Health card: what the source is, what it carries, and
+# how this build targets it (see each connector's module docstring).
+_PORTAL_DESCRIPTIONS = {
+    "TED": "EU official journal, above-threshold notices · API query: CPV or title keyword",
+    "BOAMP": "French national bulletin, all thresholds · full-text keyword search",
+    "e-Procurement": "Belgian federal platform · CPV search (not live: legal review)",
+    "Bekanntmachungsservice": "German federal open data, daily eForms export · CPV or keyword, filtered locally",
+    "Find a Tender": "UK above-threshold notices incl. defence (OCDS) · CPV or keyword, filtered locally",
+    "Contracts Finder": "UK lower-value contracts (OCDS) · CPV or keyword, filtered locally",
+    "CanadaBuys": "Canadian federal tenders, daily CSV · UNSPSC codes mapped from CPV, plus keyword",
+    "TenderNed": "Dutch national portal (JSON feed) · CPV or keyword, filtered locally",
+    "PhilGEPS": "Philippine national e-procurement, no codes · title keyword + budget lookup",
+    "DeepL": "Translates non-English notices and documents to English",
+    "AusTender": "Australian federal tenders · via email alerts (not set up yet)",
+    "GeBIZ": "Singapore government tenders · via email alerts (not set up yet)",
+    "Etimad": "Saudi government tenders · via email alerts (not set up yet)",
+    "ePerolehan": "Malaysian government tenders · via email alerts (not set up yet)",
+}
+
+
 @app.get("/api/health")
 def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     # Tenant-gated, not ops-gated: this is the Scout Dashboard's Portal
@@ -1057,6 +1077,8 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     # same "the Portal Health panel already renders any {name, region,
     # status, detail} shape generically" reuse CR-011 §1 relied on for DeepL.
     result.extend(_email_alert_health(conn, tenant_id))
+    for entry in result:
+        entry["description"] = _PORTAL_DESCRIPTIONS.get(entry["name"], "")
     return result
 
 

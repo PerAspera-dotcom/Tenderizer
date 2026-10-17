@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, resolveDuplicate, unresolveDuplicate, type OrgMember } from '../../api';
 import type { Tender, TenderDuplicate } from '../../types';
-import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity } from '../../utils';
+import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import { useSearchParams } from '../../router';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
@@ -609,10 +609,11 @@ export default function ReviewQueue() {
                   <span style={{ color: '#8892a4', fontSize: 13 }}>{selected.country}</span>
                   <NoticeTypeBadge noticeType={selected.notice_type} />
                   <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {selected.url && (
-                      <a href={selected.url} target="_blank" rel="noopener noreferrer"
-                         className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>
-                        Open ↗
+                    {tenderLink(selected) && (
+                      <a href={tenderLink(selected)!.href} target="_blank" rel="noopener noreferrer"
+                         className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}
+                         title={tenderLink(selected)!.fallback ? PORTAL_FALLBACK_TITLE : undefined}>
+                        {tenderLink(selected)!.fallback ? 'Portal ↗' : 'Open ↗'}
                       </a>
                     )}
                     <StatusBadge status={selected.status} />
@@ -653,8 +654,9 @@ export default function ReviewQueue() {
                           <span>
                             Also listed on <strong>{d.source}</strong>
                             {d.match_type === 'similarity' && d.similarity != null && ` (${Math.round(d.similarity * 100)}% match)`}
-                            {d.url && (
-                              <> · <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>View ↗</a></>
+                            {tenderLink(d) && (
+                              <> · <a href={tenderLink(d)!.href} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}
+                                      title={tenderLink(d)!.fallback ? PORTAL_FALLBACK_TITLE : undefined}>{tenderLink(d)!.fallback ? 'Portal ↗' : 'View ↗'}</a></>
                             )}
                           </span>
                           <button className="btn btn-ghost" disabled={resolvingDuplicate}

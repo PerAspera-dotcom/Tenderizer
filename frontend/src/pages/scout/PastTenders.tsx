@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { listTenders } from '../../api';
 import type { Tender, AwardDetail } from '../../types';
-import { formatDate, countryFlag, formatValue, hasTranslatedTagLine, displayTagLine, PORTAL_OPTS } from '../../utils';
+import { formatDate, countryFlag, formatValue, hasTranslatedTagLine, displayTagLine, PORTAL_OPTS, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 
 function DetailField({ label, value }: { label: string; value?: string | null }) {
   if (!value) return null;
@@ -183,8 +183,9 @@ export default function PastTenders() {
                         {formatValue(t.awarded_value, t.awarded_currency) || <span style={{ color: '#4c5a70' }}>—</span>}
                       </td>
                       <td>
-                        {t.url ? (
-                          <a href={t.url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}>Open ↗</a>
+                        {tenderLink(t) ? (
+                          <a href={tenderLink(t)!.href} target="_blank" rel="noopener noreferrer" className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }}
+                             title={tenderLink(t)!.fallback ? PORTAL_FALLBACK_TITLE : undefined}>{tenderLink(t)!.fallback ? 'Portal ↗' : 'Open ↗'}</a>
                         ) : <span style={{ color: '#4c5a70' }}>—</span>}
                       </td>
                       <td>

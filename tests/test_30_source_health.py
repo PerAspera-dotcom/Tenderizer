@@ -222,3 +222,13 @@ def test_portals_active_is_computed_not_hardcoded(tmp_path, monkeypatch):
     # (Find a Tender, Contracts Finder, CanadaBuys, TenderNed, PhilGEPS) live;
     # only e-Procurement still paused on Belgium's own legal-review gate.
     assert stats["portals_active"] == "8/9"
+
+
+def test_every_portal_health_entry_has_a_description():
+    # each Portal Health card shows a one-line descriptor; a portal added to
+    # _PORTAL_META or email_alerts.SOURCE_DOMAINS needs one too
+    import api, email_alerts
+    names = [p["name"] for p in api._PORTAL_META] + ["DeepL"] + list(email_alerts.SOURCE_DOMAINS.values())
+    missing = [n for n in names if not api._PORTAL_DESCRIPTIONS.get(n)]
+    assert missing == []
+    assert all(len(d) <= 90 for d in api._PORTAL_DESCRIPTIONS.values())
