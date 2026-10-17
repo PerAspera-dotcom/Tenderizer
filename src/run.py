@@ -32,7 +32,7 @@ SOURCE_FAILURE_ALERT_THRESHOLD = int(os.getenv("SOURCE_FAILURE_ALERT_THRESHOLD",
 def _tag(rec, full_keywords, cpv_set):
     """Annotate a record with which keywords fired and how it qualified."""
     text = f"{rec.get('tag_line', '')} {rec.get('description', '')}"
-    hits = match.match_keywords(text, full_keywords)
+    hits = match.match_relevance(text, full_keywords)
     has_cpv = bool(set(rec.get("cpv_codes") or []) & cpv_set)
     rec["matched_terms"] = hits
     rec["match_source"] = match.classify_match(has_cpv, hits)

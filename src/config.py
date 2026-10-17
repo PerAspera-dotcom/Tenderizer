@@ -56,6 +56,13 @@ def distinctive_keywords():
     return _load("keywords.yaml")["distinctive"]
 
 
+def compound_keywords():
+    """{"head": [...], "modifier": [...], "not": [...]} — keywords that also
+    match inside German/Dutch compound words; see keywords.yaml's compounds."""
+    cfg = _load("keywords.yaml").get("compounds") or {}
+    return {k: list(cfg.get(k) or []) for k in ("head", "modifier", "not")}
+
+
 def portals():
     """List of portal config dicts (name, type, enabled)."""
     return _load("portals.yaml")

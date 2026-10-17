@@ -64,3 +64,42 @@ def test_elision_fold_does_not_fire_mid_word():
     from match import _fold
     assert _fold("aujourd'hui") == "aujourd'hui"
     assert _fold("Location d'engins") == "location de engins"
+
+
+# ── German/Dutch compounds (2026-10-17): the whole-word rule missed
+# "Festzelt"/"Sanitätszelte" for the keyword "Zelt". Compound matching is
+# opt-in (match_relevance / compounds=), so exclusion lists stay whole-word.
+
+import config
+from match import match_relevance
+
+def test_compound_off_by_default():
+    assert match_keywords("Lieferung von Festzelten", ["Zelt"]) == []
+
+def test_compound_head_with_inflection():
+    for text in ("Beschaffung Festzelt", "Lieferung von Sanitätszelten",
+                 "Rahmenvertrag Sanitaetszelte", "Partyzelte fuer Veranstaltungen"):
+        assert match_relevance(text, ["Zelt"]) == ["Zelt"], text
+
+def test_compound_modifier():
+    assert match_relevance("Zeltplanen und Zeltheizungen", ["Zelt"]) == ["Zelt"]
+
+def test_compound_dutch_tent_and_zeil():
+    assert match_relevance("Levering van legertenten", ["tent"]) == ["tent"]
+    assert match_relevance("Afdekzeilen voor vrachtwagens", ["dekzeil"]) == ["dekzeil"]
+
+def test_compound_not_list_blocks_false_positives():
+    text = "Table of contents; patent assistent; consistent extent of the intent"
+    assert match_relevance(text, ["tent"]) == []
+
+def test_compound_only_for_listed_stems():
+    # "decke" isn't a compound stem — "Zwischendecke" (ceiling) must not match
+    assert match_relevance("Einbau einer Zwischendecke", ["Decke"]) == []
+
+def test_compound_head_only_stem_does_not_match_as_prefix():
+    # "tent" is head-only: "tentoonstelling" (exhibition) must not match
+    assert match_relevance("Inrichting tentoonstelling", ["tent"]) == []
+
+def test_compound_config_shape():
+    cfg = config.compound_keywords()
+    assert "zelt" in cfg["head"] and "zelt" in cfg["modifier"] and "content" in cfg["not"]

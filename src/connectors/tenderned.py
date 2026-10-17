@@ -146,10 +146,10 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
             time.sleep(REQUEST_DELAY_SECONDS)
         # CPV OR a distinctive keyword (2026-10-17): CPV-only dropped notices filed
         # under a generic CPV ("Marquee hire" under event services) before the
-        # keyword check ever ran. Same whole-word matcher as run._tag.
+        # keyword check ever ran. Same matcher as run._tag (whole-word, plus compounds).
         text = f"{item.get('aanbestedingNaam') or ''} {item.get('opdrachtBeschrijving') or ''}"
         if (cpv_filter is not None and cpv_filter.isdisjoint(cpv_here)
-                and not match.match_keywords(text, keywords or [])):
+                and not match.match_relevance(text, keywords or [])):
             continue
         type_opdracht = (item.get("typeOpdracht") or {}).get("code", "")
         procedure = (item.get("procedure") or {}).get("omschrijving", "")

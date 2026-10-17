@@ -314,9 +314,9 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
                 max_version[notice_id] = version
             # CPV OR a distinctive keyword (2026-10-17): CPV-only dropped notices filed
             # under a generic CPV ("Marquee hire" under event services) before the
-            # keyword check ever ran. Same whole-word matcher as run._tag.
+            # keyword check ever ran. Same matcher as run._tag (whole-word, plus compounds).
             if (cpv_filter is not None and cpv_filter.isdisjoint(raw["cpvCodes"])
-                    and not match.match_keywords(f"{raw['title']} {raw['description']}", keywords or [])):
+                    and not match.match_relevance(f"{raw['title']} {raw['description']}", keywords or [])):
                 continue
             current = matched.get(notice_id)
             if current is None or version > current[0]:

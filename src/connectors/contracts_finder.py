@@ -116,7 +116,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     """
     # CPV OR a distinctive keyword (2026-10-17): CPV-only dropped notices filed
     # under a generic CPV ("Marquee hire" under event services) before the
-    # keyword check ever ran. Same whole-word matcher as run._tag.
+    # keyword check ever ran. Same matcher as run._tag (whole-word, plus compounds).
     cpv_filter = set(cpv_codes) if cpv_codes else None
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     out = []
@@ -128,7 +128,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
         for release in parse_response(data):
             flat = _flatten(release)
             if (cpv_filter is not None and cpv_filter.isdisjoint(flat["cpvCodes"])
-                    and not match.match_keywords(f"{flat['title']} {flat['description']}", keywords or [])):
+                    and not match.match_relevance(f"{flat['title']} {flat['description']}", keywords or [])):
                 continue
             out.append(flat)
             if len(out) >= max_records:

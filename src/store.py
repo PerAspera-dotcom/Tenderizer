@@ -1296,7 +1296,7 @@ def rescore_pending(conn, tenant_id, now=None):
     stats = Counter()
     for rec in records:
         text_ = f"{rec.get('tag_line', '')} {rec.get('description', '')}"
-        hits = match.match_keywords(text_, full_keywords)
+        hits = match.match_relevance(text_, full_keywords)
         has_cpv = bool(set(rec.get("cpv_codes") or []) & cpv_set)
         new_match_source = match.classify_match(has_cpv, hits)
 

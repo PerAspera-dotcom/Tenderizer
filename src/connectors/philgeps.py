@@ -100,7 +100,7 @@ def _enrich_budgets(session, rows, keywords):
     kept, as before.
     """
     for row in rows:
-        if not match.match_keywords(row.get("title") or "", keywords or []):
+        if not match.match_relevance(row.get("title") or "", keywords or []):
             continue
         try:
             resp = session.get(DETAIL_URL.format(ref=row["refID"]), headers={"User-Agent": USER_AGENT}, timeout=30)

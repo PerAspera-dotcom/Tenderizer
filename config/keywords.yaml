@@ -44,3 +44,24 @@ distinctive: [tent, tents, tente, tentes, chapiteau, chapiteaux, marquee, Zelt, 
               Zelten, tarpaulin, tarpaulins, bache, baches, dekzeil, dekzeilen, camouflage,
               Tarnung, Tarnnetz, Sonnensegel, Markise, Markisen, campement, schuiltent,
               gazebo]
+
+# Compound matching (2026-10-17). German and Dutch write compounds as one word, so the
+# whole-word matcher missed "Festzelt", "Sanitätszelte", "Partyzelten", "afdekzeil",
+# "legertent". A tenant keyword whose folded form is listed here also matches inside a
+# longer word. Global, not tenant-scoped: it only widens keywords a tenant already has.
+# Used for relevance matching only (tagging + connector keyword reinforcement), never
+# for the exclusion/classification term lists, which stay whole-word.
+compounds:
+  # stem at the END of a word (the compound's head noun), plus an optional inflection
+  # (-e/-en/-er/-es/-n/-s): Festzelt, Sanitätszelte, Fahrzeugtarnung, afdekzeil.
+  head: [zelt, zelte, zelten, tarnnetz, tarnung, sonnensegel, markise, markisen,
+         dekzeil, dekzeilen, tent, tenten]
+  # stem at the START of a word: Zeltplane, Zeltheizung, Zeltboden.
+  modifier: [zelt]
+  # whole words never treated as compounds — "tent" ends a lot of English and Dutch
+  # words that have nothing to do with tents.
+  not: [content, contents, discontent, malcontent, extent, extents, intent, intents,
+        latent, patent, patents, patenten, potent, impotent, omnipotent, portent,
+        competent, incompetent, consistent, inconsistent, persistent, insistent,
+        existent, nonexistent, subsistent, resistent, assistent, assistenten, attent,
+        penitent]
