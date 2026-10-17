@@ -32,8 +32,8 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-DOCUMENT_ENDPOINT = "https://api.deepl.com/v2/document"
-USAGE_ENDPOINT = "https://api.deepl.com/v2/usage"
+FREE_DOCUMENT_ENDPOINT = "https://api-free.deepl.com/v2/document"
+PRO_DOCUMENT_ENDPOINT = "https://api.deepl.com/v2/document"
 
 # CR-012 §2: English (EN-GB specifically, not bare "EN") is the only target —
 # confirmed as the client's own decision (CR-012's "Client decisions
@@ -79,7 +79,16 @@ DEFAULT_QUOTA_RESERVE = 2_000_000
 
 
 def _api_key(api_key=None):
-    return api_key or os.getenv("DEEPL_API_KEY")
+    # Same cleaning as translate.py (CR-012 §1) — a dirty key here would
+    # both break the header and misroute free-vs-Pro in _document_endpoint.
+    return translate._clean_key(api_key or os.getenv("DEEPL_API_KEY"))
+
+
+def _document_endpoint(key):
+    """Free keys (":fx" suffix) live on api-free.deepl.com — the same rule
+    translate._endpoint applies to the text API. Hardcoding the Pro host
+    here 403'd every document call on a Free key."""
+    return FREE_DOCUMENT_ENDPOINT if key.endswith(":fx") else PRO_DOCUMENT_ENDPOINT
 
 
 def _error_message(resp):
@@ -149,7 +158,7 @@ def upload_document(file_bytes, filename, target_lang, source_lang=None, api_key
         data["source_lang"] = source_lang
     try:
         resp = requests.post(
-            DOCUMENT_ENDPOINT,
+            _document_endpoint(key),
             headers={"Authorization": f"DeepL-Auth-Key {key}"},
             data=data,
             files={"file": (filename, file_bytes)},
@@ -186,7 +195,7 @@ def check_status(document_id, document_key, api_key=None, timeout=15):
                 "billed_characters": None, "error_message": "DeepL API key is not configured"}
     try:
         resp = requests.post(
-            f"{DOCUMENT_ENDPOINT}/{document_id}",
+            f"{_document_endpoint(key)}/{document_id}",
             headers={"Authorization": f"DeepL-Auth-Key {key}"},
             data={"document_key": document_key},
             timeout=timeout,
@@ -213,7 +222,7 @@ def download_result(document_id, document_key, api_key=None, timeout=60):
         return None, "DeepL API key is not configured"
     try:
         resp = requests.post(
-            f"{DOCUMENT_ENDPOINT}/{document_id}/result",
+            f"{_document_endpoint(key)}/{document_id}/result",
             headers={"Authorization": f"DeepL-Auth-Key {key}"},
             data={"document_key": document_key},
             timeout=timeout,
@@ -241,7 +250,7 @@ def get_usage(api_key=None, timeout=15):
     if not key:
         return None
     try:
-        resp = requests.get(USAGE_ENDPOINT, headers={"Authorization": f"DeepL-Auth-Key {key}"}, timeout=timeout)
+        resp = requests.get(translate._usage_endpoint(key), headers={"Authorization": f"DeepL-Auth-Key {key}"}, timeout=timeout)
         resp.raise_for_status()
         body = resp.json()
         return {"character_count": body.get("character_count"), "character_limit": body.get("character_limit")}

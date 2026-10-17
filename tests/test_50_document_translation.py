@@ -24,7 +24,6 @@ Composer integration: _composer_document_pages prefers a matching translated
 document (by content hash) over the original when one exists and is ready —
 Composer's extraction previously had no language handling at all.
 """
-import asyncio
 import hashlib
 import io
 
@@ -62,6 +61,52 @@ def test_upload_document_success(monkeypatch):
                          lambda *a, **k: _FakeResponse(200, {"document_id": "d1", "document_key": "k1"}))
     doc_id, doc_key, err = translate_document.upload_document(b"bytes", "f.pdf", "EN", api_key="fakekey")
     assert (doc_id, doc_key, err) == ("d1", "k1", None)
+
+
+# Review follow-up to CR-012 §1: the document API used to hardcode the Pro
+# host and skip key cleaning, so a Free (":fx") or whitespace-dirty key 403'd
+# every document call even after translate.py's own fix.
+
+def _capture_post(monkeypatch, captured, response):
+    def fake_post(url, **kwargs):
+        captured.append((url, kwargs["headers"]["Authorization"]))
+        return response
+    monkeypatch.setattr(translate_document.requests, "post", fake_post)
+
+
+def test_document_calls_use_free_host_for_fx_key_and_clean_the_key(monkeypatch):
+    captured = []
+    _capture_post(monkeypatch, captured, _FakeResponse(200, {"document_id": "d1", "document_key": "k1",
+                                                              "status": "done"}, content=b"x"))
+    translate_document.upload_document(b"bytes", "f.pdf", "EN-GB", api_key=' "fakekey:fx"\n')
+    translate_document.check_status("d1", "k1", api_key="fakekey:fx ")
+    translate_document.download_result("d1", "k1", api_key="fakekey:fx\n")
+    assert [u for u, _ in captured] == [
+        translate_document.FREE_DOCUMENT_ENDPOINT,
+        f"{translate_document.FREE_DOCUMENT_ENDPOINT}/d1",
+        f"{translate_document.FREE_DOCUMENT_ENDPOINT}/d1/result",
+    ]
+    assert {a for _, a in captured} == {"DeepL-Auth-Key fakekey:fx"}
+
+
+def test_document_calls_use_pro_host_for_pro_key(monkeypatch):
+    captured = []
+    _capture_post(monkeypatch, captured, _FakeResponse(200, {"document_id": "d1", "document_key": "k1"}))
+    translate_document.upload_document(b"bytes", "f.pdf", "EN-GB", api_key="fakekey")
+    assert captured[0][0] == translate_document.PRO_DOCUMENT_ENDPOINT
+
+
+def test_get_usage_picks_host_by_key_type_and_cleans_key(monkeypatch):
+    import translate
+    captured = []
+    def fake_get(url, **kwargs):
+        captured.append((url, kwargs["headers"]["Authorization"]))
+        return _FakeResponse(200, {"character_count": 1, "character_limit": 2})
+    monkeypatch.setattr(translate_document.requests, "get", fake_get)
+    translate_document.get_usage(api_key="fakekey:fx\n")
+    translate_document.get_usage(api_key="'fakekey'")
+    assert captured == [(translate.FREE_USAGE_ENDPOINT, "DeepL-Auth-Key fakekey:fx"),
+                        (translate.PRO_USAGE_ENDPOINT, "DeepL-Auth-Key fakekey")]
 
 
 def test_upload_document_missing_key(monkeypatch):
@@ -332,8 +377,8 @@ def test_upload_endpoint_happy_path(tmp_path, monkeypatch, fake_s3):
     monkeypatch.setattr(translate_document, "upload_document",
                          lambda *a, **k: ("d1", "k1", None))
     background = BackgroundTasks()
-    result = asyncio.run(api.upload_translated_document(
-        background, file=_file(), source_lang=None, identity=make_identity()))
+    result = api.upload_translated_document(
+        background, file=_file(), source_lang=None, identity=make_identity())
     assert result["filename"] == "sow.pdf"
     assert result["status"] == "queued"
     assert "attached_tenders" in result
@@ -349,8 +394,8 @@ def test_upload_endpoint_refused_when_quota_guard_says_no(tmp_path, monkeypatch,
                                                    "remaining_documents": 0, "reason": "too close to the reserve"})
     background = BackgroundTasks()
     with pytest.raises(Exception) as exc:
-        asyncio.run(api.upload_translated_document(
-            background, file=_file(), source_lang=None, identity=make_identity()))
+        api.upload_translated_document(
+            background, file=_file(), source_lang=None, identity=make_identity())
     assert getattr(exc.value, "status_code", None) == 409
 
 
@@ -574,8 +619,8 @@ def test_upload_endpoint_rejects_unsupported_extension(tmp_path, monkeypatch, fa
     _db(tmp_path, monkeypatch)
     background = BackgroundTasks()
     with pytest.raises(Exception) as exc:
-        asyncio.run(api.upload_translated_document(
-            background, file=_file(name="malware.exe"), source_lang=None, identity=make_identity()))
+        api.upload_translated_document(
+            background, file=_file(name="malware.exe"), source_lang=None, identity=make_identity())
     assert getattr(exc.value, "status_code", None) == 422
 
 
@@ -584,8 +629,8 @@ def test_upload_endpoint_rejects_oversized_file(tmp_path, monkeypatch, fake_s3):
     big = b"x" * (translate_document.MAX_DOCUMENT_SIZE_BYTES + 1)
     background = BackgroundTasks()
     with pytest.raises(Exception) as exc:
-        asyncio.run(api.upload_translated_document(
-            background, file=_file(content=big), source_lang=None, identity=make_identity()))
+        api.upload_translated_document(
+            background, file=_file(content=big), source_lang=None, identity=make_identity())
     assert getattr(exc.value, "status_code", None) == 413
 
 
@@ -599,8 +644,8 @@ def test_upload_endpoint_already_english_skips_deepl_and_background_task(tmp_pat
     called = []
     monkeypatch.setattr(translate_document, "upload_document", lambda *a, **k: called.append(1) or ("d1", "k1", None))
     background = BackgroundTasks()
-    result = asyncio.run(api.upload_translated_document(
-        background, file=_file(), source_lang=None, identity=make_identity()))
+    result = api.upload_translated_document(
+        background, file=_file(), source_lang=None, identity=make_identity())
     assert result["status"] == "already_english"
     assert called == []  # never called DeepL's document upload at all
     assert len(background.tasks) == 0  # nothing to poll
@@ -619,7 +664,7 @@ def test_upload_endpoint_target_lang_is_always_en_gb(tmp_path, monkeypatch, fake
         return "d1", "k1", None
     monkeypatch.setattr(translate_document, "upload_document", fake_upload)
     background = BackgroundTasks()
-    asyncio.run(api.upload_translated_document(background, file=_file(), source_lang=None, identity=make_identity()))
+    api.upload_translated_document(background, file=_file(), source_lang=None, identity=make_identity())
     assert captured["target_lang"] == "EN-GB"
 
 
@@ -715,8 +760,8 @@ def test_download_all_zips_ready_documents(tmp_path, monkeypatch, fake_s3):
 
     resp = api.download_all_translated_documents(ids=f"{id1},{id2}", tenant_id=TEST_TENANT_ID)
     zf = zipfile.ZipFile(_io.BytesIO(resp.body))
-    assert set(zf.namelist()) == {"a.pdf", "b.pdf"}
-    assert zf.read("a.pdf") == b"translated A"
+    assert set(zf.namelist()) == {"a_EN.pdf", "b_EN.pdf"}
+    assert zf.read("a_EN.pdf") == b"translated A"
 
 
 def test_download_all_skips_unready_and_foreign_ids(tmp_path, monkeypatch, fake_s3):
@@ -753,7 +798,7 @@ def test_save_to_vault_creates_original_and_en_entries(tmp_path, monkeypatch, fa
     assert len(vault_docs) == 2
     names = {d["filename"] for d in vault_docs}
     assert "sow.pdf" in names
-    assert "sow (EN).pdf" in names
+    assert "sow_EN.pdf" in names
 
 
 def test_save_to_vault_refuses_an_unfinished_document(tmp_path, monkeypatch, fake_s3):
@@ -823,3 +868,92 @@ def test_health_endpoint_includes_document_translation_quota(tmp_path, monkeypat
     result = api.get_health(tenant_id=TEST_TENANT_ID)
     deepl_entry = next(e for e in result if e["name"] == "DeepL")
     assert deepl_entry["quota"]["remaining_documents"] == 100
+
+
+# ── Review follow-ups (CR-012 §2 bugs) ───────────────────────────────────────
+
+def test_upload_endpoint_is_sync_so_blocking_io_runs_in_the_threadpool():
+    import inspect
+    assert not inspect.iscoroutinefunction(api.upload_translated_document)
+
+
+def test_duplicate_uploads_get_separate_originals_so_deleting_one_keeps_the_other(tmp_path, monkeypatch, fake_s3):
+    conn = _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(translate_document, "check_quota",
+                         lambda n, api_key=None: {"allowed": True, "estimated_cost": 0, "remaining_characters": None,
+                                                   "remaining_documents": None, "reason": None})
+    monkeypatch.setattr(translate_document, "detect_already_english", lambda *a, **k: False)
+    monkeypatch.setattr(translate_document, "upload_document", lambda *a, **k: ("d1", "k1", None))
+    first = api.upload_translated_document(BackgroundTasks(), file=_file(), source_lang=None, identity=make_identity())
+    second = api.upload_translated_document(BackgroundTasks(), file=_file(), source_lang=None, identity=make_identity())
+    key_1 = store.get_translated_document(conn, TEST_TENANT_ID, first["id"])["original_storage_key"]
+    key_2 = store.get_translated_document(conn, TEST_TENANT_ID, second["id"])["original_storage_key"]
+    assert key_1 != key_2
+
+    api.delete_translated_document(first["id"], tenant_id=TEST_TENANT_ID)
+    resp = api.download_translated_document(second["id"], version="original", tenant_id=TEST_TENANT_ID)
+    assert resp.body == b"%PDF-1.4 fake pdf content"
+
+
+def test_content_disposition_handles_non_latin1_and_quote_characters():
+    header = api._content_disposition('umowa_łódź "x".docx')
+    header.encode("latin-1")  # must not raise — Starlette encodes headers as latin-1
+    assert "filename*=UTF-8''umowa_%C5%82%C3%B3d%C5%BA%20%22x%22.docx" in header
+    fallback = header.split('filename="', 1)[1].split('"', 1)[0]
+    assert '"' not in fallback and "\\" not in fallback
+
+
+def test_download_translated_uses_en_suffix_and_survives_polish_filename(tmp_path, monkeypatch, fake_s3):
+    conn = _db(tmp_path, monkeypatch)
+    doc_id = store.create_translated_document(
+        conn, TEST_TENANT_ID, "umowa_ł.docx", "application/octet-stream", 10, "documents/1/p/original.docx",
+        "p", "PL", "EN-GB", "d1", "k1", TEST_ACCOUNT_NAME)
+    fake_s3["documents/1/p/original.docx"] = b"oryginal"
+    fake_s3["documents/1/p/translated.docx"] = b"translated"
+    store.update_translated_document_status(conn, TEST_TENANT_ID, doc_id, "ready",
+                                              translated_storage_key="documents/1/p/translated.docx")
+
+    translated = api.download_translated_document(doc_id, version="translated", tenant_id=TEST_TENANT_ID)
+    assert "umowa_%C5%82_EN.docx" in translated.headers["content-disposition"]
+    original = api.download_translated_document(doc_id, version="original", tenant_id=TEST_TENANT_ID)
+    assert "umowa_%C5%82.docx" in original.headers["content-disposition"]
+
+
+def test_download_all_dedupes_colliding_filenames(tmp_path, monkeypatch, fake_s3):
+    import zipfile, io as _io
+    conn = _db(tmp_path, monkeypatch)
+    ids = []
+    for n in range(2):
+        doc_id = store.create_translated_document(
+            conn, TEST_TENANT_ID, "sow.pdf", "application/pdf", 10, f"documents/1/{n}/original.pdf",
+            str(n), "FR", "EN-GB", f"d{n}", f"k{n}", TEST_ACCOUNT_NAME)
+        fake_s3[f"documents/1/{n}/translated.pdf"] = f"translated {n}".encode()
+        store.update_translated_document_status(conn, TEST_TENANT_ID, doc_id, "ready",
+                                                  translated_storage_key=f"documents/1/{n}/translated.pdf")
+        ids.append(doc_id)
+    resp = api.download_all_translated_documents(ids=",".join(map(str, ids)), tenant_id=TEST_TENANT_ID)
+    assert sorted(zipfile.ZipFile(_io.BytesIO(resp.body)).namelist()) == ["sow_EN (2).pdf", "sow_EN.pdf"]
+
+
+def test_download_all_rejects_non_integer_ids():
+    with pytest.raises(Exception) as exc:
+        api.download_all_translated_documents(ids="1,abc", tenant_id=TEST_TENANT_ID)
+    assert getattr(exc.value, "status_code", None) == 422
+
+
+def test_save_to_vault_writes_nothing_when_the_translated_copy_cannot_be_read(tmp_path, monkeypatch, fake_s3):
+    conn = _db(tmp_path, monkeypatch)
+    doc_id = store.create_translated_document(
+        conn, TEST_TENANT_ID, "sow.pdf", "application/pdf", 10, "documents/1/h/original.pdf",
+        "h", "FR", "EN-GB", "d1", "k1", TEST_ACCOUNT_NAME)
+    fake_s3["documents/1/h/original.pdf"] = b"original bytes"
+    # translated key recorded but the object is missing — fake_s3 raises KeyError on read
+    store.update_translated_document_status(conn, TEST_TENANT_ID, doc_id, "ready",
+                                              translated_storage_key="documents/1/1/translated.pdf")
+    monkeypatch.setattr(api, "VAULT_UPLOAD_DIR", tmp_path / "vault_uploads")
+    monkeypatch.setattr(api, "_run_vault_processing", lambda *a, **k: None)
+
+    with pytest.raises(Exception) as exc:
+        api.save_translated_document_to_vault(doc_id, BackgroundTasks(), identity=make_identity())
+    assert getattr(exc.value, "status_code", None) == 502
+    assert store.list_vault_documents(conn, TEST_TENANT_ID) == []

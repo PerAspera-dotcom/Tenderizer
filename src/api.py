@@ -1582,6 +1582,26 @@ TRANSLATION_POLL_INTERVAL_SECONDS = 3
 TRANSLATION_POLL_TIMEOUT_SECONDS = 180
 
 
+def _translated_filename(filename):
+    """CR-012 §2: a translated file downloads as `<original>_EN.<ext>`."""
+    path = pathlib.PurePath(filename or "document")
+    return f"{path.stem}_EN{path.suffix}"
+
+
+def _content_disposition(filename):
+    """An attachment header that survives any filename. Starlette encodes
+    header values as latin-1, so a raw non-latin-1 name (Polish "ł", Greek,
+    CJK...) raised UnicodeEncodeError -> 500 on download. RFC 6266/5987:
+    an ASCII fallback in `filename=` plus the real name in `filename*=`.
+    Quotes/backslashes/control chars are dropped from the fallback so a
+    crafted filename can't break out of the quoted string.
+    """
+    from urllib.parse import quote
+    fallback = "".join(c for c in filename.encode("ascii", "replace").decode("ascii")
+                       if c.isprintable() and c not in '"\\') or "download"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 def _public_translated_document(doc, attached_tenders=None):
     """Strips DeepL's own document_id/document_key (never the frontend's
     business, and no reason to leak DeepL-internal handles) and the raw S3
@@ -1652,7 +1672,7 @@ def get_translation_quota(document_count: int = 1, tenant_id: int = Depends(get_
 
 
 @app.post("/api/translated-documents")
-async def upload_translated_document(background: BackgroundTasks, file: UploadFile = File(...),
+def upload_translated_document(background: BackgroundTasks, file: UploadFile = File(...),
                                       source_lang: Optional[str] = Form(None),
                                       identity: Identity = Depends(get_current_identity)):
     """CR-012 §2: target is always English (EN-GB) now — no client-supplied
@@ -1667,7 +1687,11 @@ async def upload_translated_document(background: BackgroundTasks, file: UploadFi
     a file DeepL itself could accept.
     """
     tenant_id = identity.tenant_id
-    content = await file.read()
+    # Sync `def`, not `async def`: everything below (S3 via boto3, DeepL via
+    # requests, PDF/DOCX text extraction) blocks, and in an async handler
+    # that stalled the event loop — every other request — for the whole
+    # upload. FastAPI runs a sync handler in its threadpool instead.
+    content = file.file.read()
     if len(content) > translate_document.MAX_DOCUMENT_SIZE_BYTES:
         raise HTTPException(413, "File too large — DeepL's limit on this plan is 30 MB per document")
     ext = pathlib.Path(file.filename or "").suffix.lower()
@@ -1680,7 +1704,10 @@ async def upload_translated_document(background: BackgroundTasks, file: UploadFi
         raise HTTPException(409, quota["reason"] or "This upload would breach the DeepL quota reserve")
 
     content_hash = hashlib.sha256(content).hexdigest()
-    original_key = translate_document.storage_key(tenant_id, content_hash, "original", file.filename)
+    # A fresh uuid per upload, not the content hash: re-uploading the same
+    # file used to share one S3 object between two jobs, so deleting (or
+    # retention-purging) either one broke download/retry on the other.
+    original_key = translate_document.storage_key(tenant_id, uuid.uuid4().hex, "original", file.filename)
     try:
         translate_document.upload_to_s3(original_key, content)
     except translate_document.StorageNotConfigured as e:
@@ -1792,11 +1819,15 @@ def download_all_translated_documents(ids: str, version: str = "translated",
     """
     if version not in ("original", "translated"):
         raise HTTPException(422, "version must be 'original' or 'translated'")
-    doc_ids = [int(x) for x in ids.split(",") if x.strip()]
+    try:
+        doc_ids = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(422, "ids must be a comma-separated list of integers")
     if not doc_ids:
         raise HTTPException(422, "ids must be a non-empty comma-separated list")
     conn = _db()
     buf = io.BytesIO()
+    used_names = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for doc_id in doc_ids:
             doc = store.get_translated_document(conn, tenant_id, doc_id)
@@ -1809,7 +1840,15 @@ def download_all_translated_documents(ids: str, version: str = "translated",
                 content = translate_document.download_from_s3(key)
             except translate_document.StorageNotConfigured:
                 continue
-            zf.writestr(doc["filename"], content)
+            name = doc["filename"] if version == "original" else _translated_filename(doc["filename"])
+            if name in used_names:  # two jobs with the same filename would collide in the zip
+                stem, suffix = pathlib.PurePath(name).stem, pathlib.PurePath(name).suffix
+                n = 2
+                while f"{stem} ({n}){suffix}" in used_names:
+                    n += 1
+                name = f"{stem} ({n}){suffix}"
+            used_names.add(name)
+            zf.writestr(name, content)
     buf.seek(0)
     return Response(content=buf.read(), media_type="application/zip",
                      headers={"Content-Disposition": 'attachment; filename="translated_documents.zip"'})
@@ -1835,14 +1874,21 @@ def save_translated_document_to_vault(document_id: int, background: BackgroundTa
     if doc["status"] not in ("ready", "already_english"):
         raise HTTPException(409, "Only a finished translation can be saved to Vault")
 
+    # Fetch both files before writing anything, so a storage error on the
+    # translated copy can't leave a half-saved pair (original only) behind.
+    want_translated = doc["status"] == "ready" and doc["translated_storage_key"]
     try:
         original_bytes = translate_document.download_from_s3(doc["original_storage_key"])
+        translated_bytes = (translate_document.download_from_s3(doc["translated_storage_key"])
+                            if want_translated else None)
     except translate_document.StorageNotConfigured as e:
         raise HTTPException(503, str(e))
+    except Exception:
+        logging.exception(f"save-to-vault: could not read stored files for translated document {document_id}")
+        raise HTTPException(502, "Could not read the stored files for this document — try again")
 
     tenant_dir = VAULT_UPLOAD_DIR / str(tenant_id)
     tenant_dir.mkdir(parents=True, exist_ok=True)
-    stem = pathlib.Path(doc["filename"]).stem
     ext = pathlib.Path(doc["filename"]).suffix
 
     def _save_one(filename, content):
@@ -1855,9 +1901,8 @@ def save_translated_document_to_vault(document_id: int, background: BackgroundTa
         return vault_doc_id
 
     saved_ids = [_save_one(doc["filename"], original_bytes)]
-    if doc["status"] == "ready" and doc["translated_storage_key"]:
-        translated_bytes = translate_document.download_from_s3(doc["translated_storage_key"])
-        saved_ids.append(_save_one(f"{stem} (EN){ext}", translated_bytes))
+    if translated_bytes is not None:
+        saved_ids.append(_save_one(_translated_filename(doc["filename"]), translated_bytes))
 
     return {"saved_vault_document_ids": saved_ids}
 
@@ -1894,7 +1939,8 @@ def download_translated_document(document_id: int, version: str = "translated",
     except translate_document.StorageNotConfigured as e:
         raise HTTPException(503, str(e))
     return Response(content=content, media_type=doc["content_type"] or "application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{doc["filename"]}"'})
+                     headers={"Content-Disposition": _content_disposition(
+                         doc["filename"] if version == "original" else _translated_filename(doc["filename"]))})
 
 
 @app.post("/api/translated-documents/{document_id}/attach/{pub_number}")

@@ -37,6 +37,12 @@ function extOf(filename: string): string {
   return i === -1 ? '' : filename.slice(i).toLowerCase();
 }
 
+// CR-012 §2: `<original>_EN.<ext>` — mirrors api._translated_filename.
+function translatedFilename(filename: string): string {
+  const i = filename.lastIndexOf('.');
+  return i === -1 ? `${filename}_EN` : `${filename.slice(0, i)}_EN${filename.slice(i)}`;
+}
+
 export default function Translate() {
   const [docs, setDocs] = useState<TranslatedDocument[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,7 +158,7 @@ export default function Translate() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = doc.filename;
+    a.download = version === 'translated' ? translatedFilename(doc.filename) : doc.filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
