@@ -33,6 +33,12 @@ def cpv_codes():
     return _load("cpv.yaml")["codes"]
 
 
+def canadabuys_unspsc():
+    """CPV code -> list of equivalent UNSPSC codes (CanadaBuys' classification);
+    see config/canadabuys_unspsc.yaml for sources and deliberate gaps."""
+    return {str(k): [str(c) for c in v] for k, v in (_load("canadabuys_unspsc.yaml") or {}).items()}
+
+
 def keywords():
     """Flat list of all keyword terms across every language (the full reference library).
 

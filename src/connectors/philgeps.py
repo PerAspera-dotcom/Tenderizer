@@ -60,10 +60,13 @@ build's own "be a good guest" choice (CR-010 §1's standing stance toward
 government services), not a confirmed server-side requirement.
 """
 import datetime
+import html as html_lib
 import re
 import time
 
 import requests
+
+import match
 
 SEARCH_URL = (
     "https://notices.philgeps.gov.ph/GEPSNONPILOT/Tender/SplashOpportunitiesSearchUI.aspx"
@@ -71,6 +74,41 @@ SEARCH_URL = (
 )
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
 REQUEST_DELAY_SECONDS = 1.0
+DETAIL_URL = ("https://notices.philgeps.gov.ph/GEPSNONPILOT/Tender/SplashBidNoticeAbstractUI.aspx"
+              "?menuIndex=3&refID={ref}&Result=3")
+_BUDGET_RE = re.compile(r"Approved Budget for the Contract:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)")
+
+
+def parse_approved_budget(detail_html):
+    """("PHP", "100000.00") from a notice's abstract page, or (None, None).
+    The list view has no budget; the abstract page shows it as
+    "Approved Budget for the Contract: PHP 100,000.00" (confirmed live
+    2026-10-17)."""
+    text = re.sub(r"\s+", " ", html_lib.unescape(re.sub(r"<[^>]+>", " ", detail_html or "")))
+    m = _BUDGET_RE.search(text)
+    return (m.group(1), m.group(2).replace(",", "")) if m else (None, None)
+
+
+def _enrich_budgets(session, rows, keywords):
+    """Fetch the approved budget for rows whose title matches a distinctive
+    keyword — the only ones that can surface (no CPV here), ~100 of a few
+    thousand per run. Why (2026-10-17): one barangay posted 28 separate
+    PHP 100,000 (~EUR 1,600) negotiated purchases of chairs and a steel-pipe
+    tent, each with its own solicitation number — legally distinct, so not
+    duplicates, but noise. With a value, the existing value floor
+    (exclusions.yaml) filters them. Never raises; a row without a budget is
+    kept, as before.
+    """
+    for row in rows:
+        if not match.match_keywords(row.get("title") or "", keywords or []):
+            continue
+        try:
+            resp = session.get(DETAIL_URL.format(ref=row["refID"]), headers={"User-Agent": USER_AGENT}, timeout=30)
+            resp.raise_for_status()
+            row["budgetCurrency"], row["approvedBudget"] = parse_approved_budget(resp.text)
+        except Exception:
+            pass
+        time.sleep(REQUEST_DELAY_SECONDS)
 
 _ROW_RE = re.compile(
     r'<tr[^>]*>\s*<td[^>]*>\d+</td>'
@@ -183,4 +221,5 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=4000):
         if next_html is None:
             break
         html = next_html
+    _enrich_budgets(session, out, keywords)
     return out

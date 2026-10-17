@@ -412,9 +412,12 @@ def test_all_four_sources_share_identical_schema(
         "e-Procurement": set(normalize.normalize_eprocurement(raw_eprocurement_supply)),
         "Bekanntmachungsservice": set(normalize.normalize_bekanntmachungsservice(raw_bekanntmachungsservice_supply)),
     }
-    canonical = keysets["TED"]
+    # form_type is an optional classification hint (eForms sources only), not
+    # a stored column — the only key allowed to differ.
+    optional = {"form_type"}
+    canonical = keysets["TED"] - optional
     for name, keys in keysets.items():
-        assert keys == canonical, f"{name} schema diverges: {keys ^ canonical}"
+        assert keys - optional == canonical, f"{name} schema diverges: {(keys - optional) ^ canonical}"
 
 
 # ── best-effort deadlines from the eForms export ────────────────────────────
@@ -483,3 +486,15 @@ def test_fetch_survives_eforms_download_failure(monkeypatch):
     monkeypatch.setattr(bms.requests, "get", fake_get)
     today = bms.datetime.date.today()
     assert len(bms.fetch([], KW, today - bms.datetime.timedelta(days=1))) == 1
+
+
+
+def test_fetch_keeps_keyword_match_with_unmatched_cpv(monkeypatch):
+    tables = _minimal_tables(notice_id="K1", lots=[])  # notice-level CPV 45000000-7 only
+    tables["purpose.csv"][0]["title"] = "Lieferung Zelte für den Katastrophenschutz"
+    monkeypatch.setattr(bms.requests, "get", lambda url, params=None, **kw: _FakeResponse(
+        _make_zip(tables) if params["format"] == "csv.zip" else _make_zip({"notice.csv": []})))
+    today = bms.datetime.date.today()
+    since = today - bms.datetime.timedelta(days=1)
+    assert len(bms.fetch(["39522530"], ["Zelte"], since)) == 1
+    assert bms.fetch(["39522530"], ["Marquee"], since) == []

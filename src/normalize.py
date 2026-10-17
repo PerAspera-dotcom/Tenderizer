@@ -768,6 +768,9 @@ def normalize_bekanntmachungsservice(raw):
         # Best-effort from the eForms export (connector's _fill_deadlines);
         # "" when the notice fell outside that export's 1000-file cap.
         "deadline": raw.get("deadline") or "",
+        # eForms form type (competition/result/planning/...) — classification
+        # uses it instead of the empty-deadline heuristic. Not a stored column.
+        "form_type": raw.get("formType") or "",
         "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
         "matched_terms": [],
         "match_source": None,
@@ -966,8 +969,10 @@ def normalize_philgeps(raw):
         ) if raw.get("refID") else "",
         "first_seen": None,
         "internal_identifier": None,
-        "value": "",
-        "value_currency": "",
+        # Approved budget from the abstract page (connector's _enrich_budgets),
+        # fetched only for keyword-matching notices; "" when unknown.
+        "value": raw.get("approvedBudget") or "",
+        "value_currency": raw.get("budgetCurrency") or "",
         # CR-011 §4: English-only source — see connectors/philgeps.py's
         # module docstring.
         "language": "eng",
@@ -987,8 +992,8 @@ _CA_CATEGORY = {"*cnst": "Works"}  # see connectors/canadabuys.py — only this 
 
 
 def normalize_canadabuys(raw):
-    """CR-011 §4: no `cpv_codes` — see connectors/canadabuys.py's module
-    docstring (GSIN/UNSPSC, no verified mapping to CPV built). No award
+    """`cpv_codes` are the tenant CPV codes matched through the UNSPSC
+    crosswalk (see connectors/canadabuys.py's module docstring). No award
     fields — this file is the open-tender-notice feed, never award data
     (CanadaBuys publishes awards as a SEPARATE dataset this CR doesn't pull).
     No `value`/`value_currency` — confirmed absent from the source entirely.
@@ -1005,7 +1010,9 @@ def normalize_canadabuys(raw):
         "procedure": (raw.get("procurementMethod") or "").lower(),
         "pub_date": (raw.get("publicationDate") or "")[:10],
         "deadline": (raw.get("closingDate") or "")[:10],
-        "cpv_codes": [],
+        # CPV codes matched via the UNSPSC crosswalk (connector's fetch);
+        # [] when no UNSPSC equivalent matched.
+        "cpv_codes": _dedupe(raw.get("cpvCodes") or []),
         "matched_terms": [],
         "match_source": None,
         "url": raw.get("noticeURL") or "",

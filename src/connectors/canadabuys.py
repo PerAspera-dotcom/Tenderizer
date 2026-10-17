@@ -18,17 +18,16 @@ XML or Germany's deadline (CR-010 §1/§2), not a parsing miss. `value`/
 `value_currency` are always "" for this source.
 
 CLASSIFICATION: carries `gsin-nibs` (Goods and Services Identification
-Number) and `unspsc` columns — NOT CPV (CR-011 §4's own "non-EU sources
-don't use CPV" point). No verified GSIN/UNSPSC → CPV mapping table exists
-yet (the CR asks to "map... where a mapping exists" — building one
-correctly needs the official cross-reference data, which this build didn't
-have verified access to; inventing one would risk silently wrong matches,
-worse than no match at all). `cpv_codes` is therefore always [] for this
-source — this notice's relevance is decided by keyword matching alone
-(run.py's existing `_tag()` already does this generically: `has_cpv` is
-simply false when cpv_codes is empty, so `match_source` always comes back
-"keyword" or None here, never "cpv"/"both" — an honest, visible tag, not a
-silent gap). Revisit if/when a verified GSIN/UNSPSC-CPV crosswalk shows up.
+Number) and `unspsc` columns — NOT CPV. GSIN is empty in the current feed;
+UNSPSC is filled as asterisk-prefixed codes, one per line ("*49121503").
+config/canadabuys_unspsc.yaml maps the tenant's CPV codes to UNSPSC
+equivalents taken from the Government of Canada's own GSIN-UNSPSC code set
+(added 2026-10-17). A notice whose UNSPSC matches gets the CPV codes it
+matched as its `cpvCodes`, so run.py's `_tag()` sees a code match
+("cpv"/"both"). Keyword matching still runs on every notice as
+reinforcement, and is the only signal for CPV codes with no UNSPSC
+equivalent (see the YAML's header). fetch() still returns every notice
+in the window — nothing is dropped for lacking a code match.
 
 PROCUREMENT CATEGORY: `procurementCategory-categorieApprovisionnement`
 carries a short asterisk-prefixed code — only "*CNST" (construction) is
@@ -52,6 +51,8 @@ import io
 
 import requests
 
+import config
+
 CSV_URL = "https://canadabuys.canada.ca/opendata/pub/openTenderNotice-ouvertAvisAppelOffres.csv"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
 
@@ -72,6 +73,7 @@ def parse_response(csv_bytes):
             "closingDate": row.get("tenderClosingDate-appelOffresDateCloture") or "",
             "gsin": row.get("gsin-nibs") or "",
             "unspsc": row.get("unspsc") or "",
+            "cpvCodes": [],  # filled by fetch() from the UNSPSC crosswalk
             "procurementCategory": (row.get("procurementCategory-categorieApprovisionnement") or "").strip(),
             "procurementMethod": row.get("procurementMethod-methodeApprovisionnement-eng") or "",
             "regionsOfDelivery": row.get("regionsOfDelivery-regionsLivraison-eng") or "",
@@ -79,6 +81,31 @@ def parse_response(csv_bytes):
             "noticeURL": row.get("noticeURL-URLavis-eng") or "",
         })
     return out
+
+
+def parse_unspsc(value):
+    """"*49121503
+*95131700" -> ["49121503", "95131700"]."""
+    return [c.strip().lstrip("*").strip() for c in (value or "").splitlines() if c.strip().lstrip("*").strip()]
+
+
+def _unspsc_matches(notice_code, mapped_code):
+    """Exact, or hierarchical: a class/family code (trailing "00" pairs)
+    covers every code under it — 49121500 matches 49121503."""
+    if notice_code == mapped_code:
+        return True
+    prefix = mapped_code
+    while prefix.endswith("00") and len(prefix) > 2:
+        prefix = prefix[:-2]
+    return prefix != mapped_code and notice_code.startswith(prefix)
+
+
+def matched_cpv_codes(unspsc_value, wanted):
+    """The tenant CPV codes (keys of `wanted`: cpv -> [unspsc]) whose UNSPSC
+    equivalents match this notice's UNSPSC codes."""
+    notice_codes = parse_unspsc(unspsc_value)
+    return [cpv for cpv, mapped in wanted.items()
+            if any(_unspsc_matches(n, m) for n in notice_codes for m in mapped)]
 
 
 def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
@@ -91,6 +118,8 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     pagination.
     """
     headers = {"User-Agent": USER_AGENT}
+    crosswalk = config.canadabuys_unspsc()
+    wanted = {cpv: crosswalk[cpv] for cpv in (cpv_codes or []) if cpv in crosswalk}
     resp = requests.get(CSV_URL, headers=headers, timeout=60)
     resp.raise_for_status()
     since_str = since.isoformat()
@@ -99,6 +128,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
         pub_date = (raw.get("publicationDate") or "")[:10]
         if pub_date and pub_date < since_str:
             continue
+        raw["cpvCodes"] = matched_cpv_codes(raw["unspsc"], wanted)
         out.append(raw)
         if len(out) >= max_records:
             break

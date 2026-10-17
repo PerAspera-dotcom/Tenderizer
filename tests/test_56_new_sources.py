@@ -93,8 +93,16 @@ def test_find_a_tender_fetch_follows_cursor_pagination(monkeypatch):
 def test_find_a_tender_fetch_filters_by_cpv(monkeypatch):
     data = {"releases": [_fts_release(cpv="99999999")], "links": {}}
     monkeypatch.setattr(find_a_tender.requests, "get", lambda *a, **kw: _FakeResponse(json_data=data))
-    assert find_a_tender.fetch(CPV, KW, SINCE) == []
+    assert find_a_tender.fetch(CPV, [], SINCE) == []  # no keywords: CPV alone decides
     assert len(find_a_tender.fetch([], KW, SINCE)) == 1
+
+
+def test_find_a_tender_fetch_keeps_keyword_match_with_unmatched_cpv(monkeypatch):
+    data = {"releases": [_fts_release(cpv="79952000", title="Marquee hire for county show"),
+                         _fts_release(cpv="79952000", title="Event catering")], "links": {}}
+    monkeypatch.setattr(find_a_tender.requests, "get", lambda *a, **kw: _FakeResponse(json_data=data))
+    recs = find_a_tender.fetch(CPV, ["marquee"], SINCE)
+    assert [r["title"] for r in recs] == ["Marquee hire for county show"]
 
 
 def test_find_a_tender_fetch_falls_back_to_lot_value(monkeypatch):
@@ -166,7 +174,16 @@ def test_contracts_finder_fetch_uses_document_url_not_constructed(monkeypatch):
 def test_contracts_finder_fetch_filters_by_cpv(monkeypatch):
     data = {"releases": [_cf_release(cpv="11111111")], "links": {}}
     monkeypatch.setattr(contracts_finder.requests, "get", lambda *a, **kw: _FakeResponse(json_data=data))
-    assert contracts_finder.fetch(CPV, KW, SINCE) == []
+    assert contracts_finder.fetch(CPV, [], SINCE) == []  # no keywords: CPV alone decides
+
+
+def test_contracts_finder_fetch_keeps_keyword_match_with_unmatched_cpv(monkeypatch):
+    release = _cf_release(cpv="11111111")
+    release["tender"]["title"] = "Supply of tents and gazebos"
+    data = {"releases": [release, _cf_release(cpv="11111111")], "links": {}}
+    monkeypatch.setattr(contracts_finder.requests, "get", lambda *a, **kw: _FakeResponse(json_data=data))
+    recs = contracts_finder.fetch(CPV, ["tents"], SINCE)
+    assert [r["title"] for r in recs] == ["Supply of tents and gazebos"]
 
 
 def test_normalize_contracts_finder_fields(raw_contracts_finder_supply):
@@ -235,12 +252,49 @@ def test_canadabuys_fetch_filters_locally_by_publication_date(monkeypatch):
     assert [r["title"] for r in recs] == ["In range"]
 
 
-def test_normalize_canadabuys_no_cpv_codes(raw_canadabuys_supply):
-    # see connectors/canadabuys.py's module docstring — no verified GSIN/
-    # UNSPSC -> CPV mapping, so this source is keyword-matched only.
+def test_normalize_canadabuys_no_cpv_codes_without_a_crosswalk_match(raw_canadabuys_supply):
     r = normalize.normalize_canadabuys(raw_canadabuys_supply)
     assert r["cpv_codes"] == []
     assert r["value"] == ""  # confirmed absent from the source entirely
+
+
+# ── CanadaBuys UNSPSC crosswalk ─────────────────────────────────────────────
+
+def test_canadabuys_parse_unspsc_live_format():
+    assert canadabuys.parse_unspsc("*49121503\n*95131700") == ["49121503", "95131700"]
+    assert canadabuys.parse_unspsc("") == []
+
+
+def test_canadabuys_matched_cpv_codes_exact_and_hierarchical():
+    wanted = {"39522530": ["49121503", "95131700"], "39522500": ["49121500"], "39522540": ["49121504"]}
+    # 49121503 (Tents) hits tents exactly and camping goods via its class 49121500
+    assert canadabuys.matched_cpv_codes("*49121503", wanted) == ["39522530", "39522500"]
+    # a commodity under class 95131700 matches it
+    assert canadabuys.matched_cpv_codes("*95131701", wanted) == ["39522530"]
+    # unrelated codes, and a sibling class sharing only the family prefix, don't
+    assert canadabuys.matched_cpv_codes("*72121400\n*49121600", {"39522530": ["49121503"]}) == []
+
+
+def test_canadabuys_crosswalk_codes_are_well_formed_and_cpv_keys_known():
+    import config
+    crosswalk = config.canadabuys_unspsc()
+    assert crosswalk, "crosswalk must not be empty"
+    reference = config.cpv_reference()
+    for cpv, codes in crosswalk.items():
+        assert cpv in reference, f"unknown CPV {cpv}"
+        assert codes and all(len(c) == 8 and c.isdigit() for c in codes)
+
+
+def test_canadabuys_fetch_maps_unspsc_to_tenant_cpv_and_keeps_unmatched(monkeypatch):
+    tent = dict(_ca_row(pub_date="2026-10-10", title="Field tents"), unspsc="*49121503")
+    other = dict(_ca_row(pub_date="2026-10-10", title="Office chairs"), unspsc="*56101500")
+    monkeypatch.setattr(canadabuys.requests, "get",
+                         lambda *a, **kw: _FakeResponse(content=_csv_bytes([tent, other])))
+    recs = canadabuys.fetch(["39522530", "39522110"], KW, date(2026, 10, 1))
+    by_title = {r["title"]: r for r in recs}
+    assert by_title["Field tents"]["cpvCodes"] == ["39522530"]  # 39522110 has no UNSPSC equivalent
+    assert by_title["Office chairs"]["cpvCodes"] == []           # still returned: keywords decide
+    assert normalize.normalize_canadabuys(by_title["Field tents"])["cpv_codes"] == ["39522530"]
 
 
 def test_normalize_canadabuys_category_from_construction_code(raw_canadabuys_supply):
@@ -338,6 +392,26 @@ def test_tenderned_fetch_skips_amendment_types_without_a_detail_call(monkeypatch
     recs = tenderned.fetch([], KW, date(2026, 10, 1))
     assert [r["publicatieId"] for r in recs] == [1, 4]
     assert len(detail_calls) == 2
+
+
+def test_tenderned_fetch_keeps_keyword_match_with_unmatched_cpv(monkeypatch):
+    page = {"content": [
+        {"publicatieId": 1, "publicatieDatum": "2026-10-16", "aanbestedingNaam": "Levering schuiltent", "link": {"href": "u1"}},
+        {"publicatieId": 2, "publicatieDatum": "2026-10-16", "aanbestedingNaam": "Schoonmaakdiensten", "link": {"href": "u2"}},
+    ], "last": True}
+
+    class _Sess:
+        headers = {}
+
+        def get(self, url, params=None, timeout=None):
+            if url == tenderned.LIST_ENDPOINT:
+                return _FakeResponse(json_data=page)
+            return _FakeResponse(json_data={"cpvCodes": [{"code": "90910000-9"}], "nutsCodes": []})
+
+    monkeypatch.setattr(tenderned.requests, "Session", lambda: _Sess())
+    monkeypatch.setattr(tenderned.time, "sleep", lambda *_: None)
+    recs = tenderned.fetch(["39522530"], ["schuiltent"], date(2026, 10, 1))
+    assert [r["publicatieId"] for r in recs] == [1]
 
 
 def test_tenderned_fetch_merges_detail_cpv_and_filters(monkeypatch):
@@ -473,6 +547,40 @@ def test_philgeps_fetch_respects_max_records(monkeypatch):
     assert len(recs) == 1
 
 
+_PHILGEPS_ABSTRACT = (
+    "<td>Solicitation Number:</td><td>2026-010</td>"
+    "<td>Approved Budget for the Contract:</td><td><span>PHP 100,000.00</span></td>"
+    "<td>Delivery Period:</td><td>15 Day/s</td>"
+)
+
+
+def test_philgeps_parse_approved_budget():
+    assert philgeps.parse_approved_budget(_PHILGEPS_ABSTRACT) == ("PHP", "100000.00")
+    assert philgeps.parse_approved_budget("<p>no budget here</p>") == (None, None)
+
+
+def test_philgeps_fetch_enriches_budget_only_for_keyword_rows(monkeypatch):
+    page = _philgeps_page([{"ref": "1", "agency": "A", "title": "Purchase of steel pipe tent"},
+                           {"ref": "2", "agency": "B", "title": "Office supplies"}])
+    detail_urls = []
+
+    class _Sess(_FakeSessionText):
+        def get(self, url, headers=None, timeout=None):
+            if "SplashBidNoticeAbstractUI" in url:
+                detail_urls.append(url)
+                return _FakeResponse2(_PHILGEPS_ABSTRACT)
+            return super().get(url, headers=headers, timeout=timeout)
+
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _Sess([page, page]))  # repeat ends paging
+    monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
+    recs = {r["refID"]: r for r in philgeps.fetch([], ["tent"], date(2026, 10, 1))}
+    assert len(detail_urls) == 1 and "refID=1" in detail_urls[0]
+    assert (recs["1"]["budgetCurrency"], recs["1"]["approvedBudget"]) == ("PHP", "100000.00")
+    assert "approvedBudget" not in recs["2"]
+    norm = normalize.normalize_philgeps(recs["1"])
+    assert (norm["value"], norm["value_currency"]) == ("100000.00", "PHP")
+
+
 def test_normalize_philgeps_fields(raw_philgeps_supply):
     r = normalize.normalize_philgeps(raw_philgeps_supply)
     assert r["source"] == "PhilGEPS"
@@ -508,6 +616,9 @@ def test_all_nine_sources_share_identical_schema(
         "TenderNed": set(normalize.normalize_tenderned(raw_tenderned_supply)),
         "PhilGEPS": set(normalize.normalize_philgeps(raw_philgeps_supply)),
     }
-    canonical = keysets["TED"]
+    # form_type is an optional classification hint (eForms sources only), not
+    # a stored column — the only key allowed to differ.
+    optional = {"form_type"}
+    canonical = keysets["TED"] - optional
     for name, keys in keysets.items():
-        assert keys == canonical, f"{name} schema diverges: {keys ^ canonical}"
+        assert keys - optional == canonical, f"{name} schema diverges: {(keys - optional) ^ canonical}"

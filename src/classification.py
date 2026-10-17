@@ -21,8 +21,23 @@ def _text(rec):
     return f"{rec.get('tag_line', '')} {rec.get('description', '')}"
 
 
+# eForms form types (BT-03) for sources that expose them — authoritative, so
+# they decide before the empty-deadline heuristic below. Found 2026-10-17:
+# Germany's exports carry no deadline, so every German notice (open tenders
+# included) was classified past_tender and hidden from the Feed/Review Queue.
+# "competition" maps to None: an active notice, so it skips the deadline rule
+# and falls through to the remaining checks (EOI, prequalification, ...).
+_EFORMS_FORM_TYPE = {"result": "past_tender", "planning": "fbo", "competition": None}
+
+
 def check_past_tender(rec):
-    """A1 — identifier: empty deadline field. Historical/awarded, not active."""
+    """A1 — identifier: empty deadline field. Historical/awarded, not active.
+    A record with an eForms `form_type` (see _EFORMS_FORM_TYPE) is classified
+    by that instead, deadline or not.
+    """
+    form_type = (rec.get("form_type") or "").strip().lower()
+    if form_type in _EFORMS_FORM_TYPE:
+        return _EFORMS_FORM_TYPE[form_type]
     if not (rec.get("deadline") or "").strip():
         return "past_tender"
     return None

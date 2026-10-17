@@ -1,0 +1,23 @@
+# CPV -> UNSPSC crosswalk for CanadaBuys, which classifies notices with
+# UNSPSC (the GSIN column is empty in the current open-tender feed).
+#
+# Every UNSPSC code below exists in the Government of Canada's own code set:
+# "Mapping of GSIN-UNSPSC", open.canada.ca dataset
+# 588eab5b-7b16-4a26-b996-23b955965ffa (file nibsunspsc-gsinunspsc.csv,
+# checked 2026-10-17). A class code (ending in 00) also matches every
+# commodity under it (e.g. 49121500 matches 49121503).
+#
+# Deliberately unmapped — no equivalent in Canada's code set that wouldn't
+# pull in noise (window blinds, medical blankets, ...): 39522100/39522110
+# tarpaulins, 39522120 awnings, 39522130 sunblinds, 39522200 camouflage
+# covers, 35800000 individual and support equipment, 39511100 blankets.
+# Keyword matching still covers those for CanadaBuys.
+"39522530": ["49121503", "95131700"]   # Tents -> Tents; Tents and membrane structures
+"33163000": ["49121503", "95131700"]   # Tent for medical use
+"44112100": ["95131700"]               # Shelters -> Tents and membrane structures
+"44112110": ["30241700", "49121512", "49121513"]  # Shelter parts -> framing/covering components; tent post; tent pin
+"37414300": ["49121506"]               # Tent repair kits
+"39522540": ["49121504"]               # Sleeping bags
+"39522520": ["49121600"]               # Camp beds -> Camping furniture
+"39522500": ["49121500"]               # Textile camping goods -> Camping and outdoor equipment
+"39522000": ["49121500"]               # Tarpaulins/.../tents and camping goods -> Camping and outdoor equipment

@@ -8,6 +8,7 @@ no text-regex fallback: it's passed through only from rec's raw_award_detail
 key (set by normalize.py, already scoped to single-lot/single-winner
 notices there).
 """
+import pytest
 import classification
 
 
@@ -233,3 +234,31 @@ def test_extract_award_detail_has_no_regex_fallback():
                              "registration number 12345678900010, contract ref CON-9.")
     _to, _value, _currency, detail = classification.extract_award_info(rec)
     assert detail is None
+
+
+# ── eForms form type beats the empty-deadline heuristic (Germany, 2026-10-17:
+# no deadline in its exports, so open tenders were filed as past_tender) ────
+
+@pytest.mark.parametrize("form_type, deadline, expected", [
+    ("competition", "", "tender"),            # open tender without a known deadline
+    ("competition", "2026-10-29", "tender"),
+    ("result", "", "past_tender"),
+    ("result", "2026-10-29", "past_tender"),
+    ("planning", "", "fbo"),
+    ("change", "", "past_tender"),            # unknown form type: deadline rule still applies
+])
+def test_classify_uses_eforms_form_type(form_type, deadline, expected):
+    rec = {"tag_line": "Zelte", "description": "", "deadline": deadline, "form_type": form_type}
+    assert classification.classify(rec) == expected
+
+
+def test_competition_form_type_still_reaches_later_checks():
+    rec = {"tag_line": "Expression of interest: tents", "description": "", "deadline": "", "form_type": "competition"}
+    assert classification.classify(rec) == "eoi"
+
+
+def test_normalize_bekanntmachungsservice_carries_form_type(raw_bekanntmachungsservice_supply):
+    import normalize
+    rec = normalize.normalize_bekanntmachungsservice(dict(raw_bekanntmachungsservice_supply, formType="competition"))
+    assert rec["form_type"] == "competition"
+    assert classification.classify(rec) == "tender"

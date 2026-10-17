@@ -48,6 +48,8 @@ the same way it already does for TED/BOAMP, no new code needed.
 """
 import requests
 
+import match
+
 ENDPOINT = "https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
 
@@ -112,6 +114,9 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     stance find_a_tender.py takes (no server-side classification filter
     documented). `keywords` accepted for interface parity, unused.
     """
+    # CPV OR a distinctive keyword (2026-10-17): CPV-only dropped notices filed
+    # under a generic CPV ("Marquee hire" under event services) before the
+    # keyword check ever ran. Same whole-word matcher as run._tag.
     cpv_filter = set(cpv_codes) if cpv_codes else None
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     out = []
@@ -122,7 +127,8 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
         data = resp.json()
         for release in parse_response(data):
             flat = _flatten(release)
-            if cpv_filter is not None and cpv_filter.isdisjoint(flat["cpvCodes"]):
+            if (cpv_filter is not None and cpv_filter.isdisjoint(flat["cpvCodes"])
+                    and not match.match_keywords(f"{flat['title']} {flat['description']}", keywords or [])):
                 continue
             out.append(flat)
             if len(out) >= max_records:
