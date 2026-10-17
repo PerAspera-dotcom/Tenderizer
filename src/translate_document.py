@@ -21,6 +21,7 @@ should surface as a real error, not crash the caller.
 """
 import logging
 import os
+import pathlib
 
 import requests
 from dotenv import load_dotenv
@@ -327,29 +328,50 @@ class StorageNotConfigured(RuntimeError):
     pass
 
 
+# Fallback when no S3 bucket is configured: the backend's persistent Railway
+# volume, mounted at /app/data (attached 2026-10-17 — before that this
+# directory was wiped on every deploy, which is why S3 was the only option).
+# Production had no DOCUMENTS_S3_*/BACKUP_S3_* variables at all, so every
+# Translate upload failed with 503. Keys ("documents/{tenant}/...") map 1:1
+# onto paths under this root.
+LOCAL_STORAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent / "data"
+
+
+def _local_path(key):
+    root = LOCAL_STORAGE_ROOT.resolve()
+    path = (root / key).resolve()
+    if root not in path.parents:
+        raise ValueError(f"storage key escapes the storage root: {key!r}")
+    return path
+
+
 def upload_to_s3(key, content_bytes):
     client, bucket = _s3_client()
     if client is None:
-        raise StorageNotConfigured("DOCUMENTS_S3_BUCKET (or BACKUP_S3_BUCKET) is not configured")
+        path = _local_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content_bytes)
+        return
     client.put_object(Bucket=bucket, Key=key, Body=content_bytes)
 
 
 def download_from_s3(key):
     client, bucket = _s3_client()
     if client is None:
-        raise StorageNotConfigured("DOCUMENTS_S3_BUCKET (or BACKUP_S3_BUCKET) is not configured")
+        return _local_path(key).read_bytes()
     obj = client.get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()
 
 
 def delete_from_s3(key):
-    """CR-012 §2 delete: removes our own stored copy. S3's DeleteObject is
-    idempotent (no error deleting an already-gone key), so this is safe to
+    """CR-012 §2 delete: removes our own stored copy. Idempotent on both
+    backends (S3's DeleteObject, and missing_ok locally), so this is safe to
     call even if a prior delete partially completed.
     """
     client, bucket = _s3_client()
     if client is None:
-        raise StorageNotConfigured("DOCUMENTS_S3_BUCKET (or BACKUP_S3_BUCKET) is not configured")
+        _local_path(key).unlink(missing_ok=True)
+        return
     client.delete_object(Bucket=bucket, Key=key)
 
 

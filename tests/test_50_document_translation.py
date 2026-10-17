@@ -229,11 +229,27 @@ def test_check_quota_prefers_a_smaller_real_character_limit(monkeypatch):
 
 # ── S3 storage helpers (mocked — no real endpoint in tests) ──────────────────
 
-def test_storage_not_configured_raises_when_no_bucket_env(monkeypatch):
+def test_storage_falls_back_to_local_volume_when_no_bucket_env(tmp_path, monkeypatch):
+    # Production had no S3 variables, so every upload 503'd; the persistent
+    # volume is the fallback now.
     monkeypatch.delenv("DOCUMENTS_S3_BUCKET", raising=False)
     monkeypatch.delenv("BACKUP_S3_BUCKET", raising=False)
-    with pytest.raises(translate_document.StorageNotConfigured):
-        translate_document.upload_to_s3("documents/1/abc/original.pdf", b"data")
+    monkeypatch.setattr(translate_document, "LOCAL_STORAGE_ROOT", tmp_path)
+    key = "documents/1/abc/original.docx"
+    translate_document.upload_to_s3(key, b"data")
+    assert (tmp_path / key).read_bytes() == b"data"
+    assert translate_document.download_from_s3(key) == b"data"
+    translate_document.delete_from_s3(key)
+    assert not (tmp_path / key).exists()
+    translate_document.delete_from_s3(key)  # idempotent
+
+
+def test_local_storage_rejects_keys_escaping_the_root(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOCUMENTS_S3_BUCKET", raising=False)
+    monkeypatch.delenv("BACKUP_S3_BUCKET", raising=False)
+    monkeypatch.setattr(translate_document, "LOCAL_STORAGE_ROOT", tmp_path)
+    with pytest.raises(ValueError):
+        translate_document.upload_to_s3("../../etc/evil", b"x")
 
 
 def test_storage_key_uses_content_hash_or_id_and_extension():
