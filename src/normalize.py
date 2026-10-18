@@ -811,9 +811,9 @@ _UK_CATEGORY = {"goods": "Supply", "services": "Services", "works": "Works"}
 
 
 def normalize_find_a_tender(raw):
-    """CR-011 §4: no award fields — this connector only pulls `stages=tender`
-    releases (open opportunities, the Review Queue's actual use case), never
-    the `award` stage, so raw_award_* stay None/absent, same as any other
+    """CR-011 §4: no award fields — this connector only keeps releases tagged
+    "tender"/"planning" (open opportunities and planning notices), never
+    award releases, so raw_award_* stay None/absent, same as any other
     source's not-yet-awarded notices.
     """
     return {
@@ -832,6 +832,9 @@ def normalize_find_a_tender(raw):
         "matched_terms": [],
         "match_source": None,
         "url": f"https://www.find-tender.service.gov.uk/Notice/{raw['id']}" if raw.get("id") else "",
+        # "competition" / "planning" from the release tag — see
+        # connectors/find_a_tender.form_type; classification uses it.
+        "form_type": raw.get("formType") or "",
         "first_seen": None,
         "internal_identifier": None,
         "value": str(raw["valueAmount"]) if raw.get("valueAmount") is not None else "",

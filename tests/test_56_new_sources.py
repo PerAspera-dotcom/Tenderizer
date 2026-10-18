@@ -69,10 +69,53 @@ def _fts_release(cpv="90910000", title="Test cleaning contract", value=None):
     }
 
 
-def test_find_a_tender_build_params_uses_tender_stage_and_updated_from():
+def test_find_a_tender_build_params_sends_no_stage_filter():
+    # stages=tender returned ~1/6 of new tender notices (live, 2026-10-18)
     p = find_a_tender.build_params(date(2026, 10, 5))
-    assert p["stages"] == "tender"
+    assert "stages" not in p
     assert p["updatedFrom"] == "2026-10-05T00:00:00"
+
+
+def test_find_a_tender_fetch_keeps_tender_and_planning_releases_only(monkeypatch):
+    def rel(tag, title):
+        return dict(_fts_release(title=title), tag=[tag], id=title)
+    data = {"releases": [rel("tender", "t"), rel("planning", "p"), rel("award", "a"),
+                         rel("contract", "c"), rel("tenderUpdate", "u")], "links": {}}
+    monkeypatch.setattr(find_a_tender.requests, "get", lambda *a, **kw: _FakeResponse(json_data=data))
+    recs = find_a_tender.fetch([], KW, SINCE)
+    assert [(r["title"], r["formType"]) for r in recs] == [("t", "competition"), ("p", "planning")]
+
+
+def test_find_a_tender_planning_notice_classifies_as_prior_information(monkeypatch):
+    import classification
+    data = {"releases": [dict(_fts_release(), tag=["planning"])], "links": {}}
+    data["releases"][0]["tender"].pop("tenderPeriod")  # planning notices carry no deadline
+    monkeypatch.setattr(find_a_tender.requests, "get", lambda *a, **kw: _FakeResponse(json_data=data))
+    rec = normalize.normalize_find_a_tender(find_a_tender.fetch([], KW, SINCE)[0])
+    assert rec["form_type"] == "planning"
+    assert classification.check_past_tender(rec) == "fbo"
+
+
+def test_find_a_tender_fetch_waits_out_rate_limit(monkeypatch):
+    class _Resp429(_FakeResponse):
+        headers = {"Retry-After": "120"}
+    responses = iter([_Resp429(status_code=429), _FakeResponse(json_data={"releases": [_fts_release()], "links": {}})])
+    sleeps = []
+    monkeypatch.setattr(find_a_tender.requests, "get", lambda *a, **kw: next(responses))
+    monkeypatch.setattr(find_a_tender.time, "sleep", sleeps.append)
+    assert len(find_a_tender.fetch([], KW, SINCE)) == 1
+    assert sleeps == [121]
+
+
+def test_find_a_tender_fetch_caps_lookback(monkeypatch):
+    seen = []
+    def fake_get(url, params=None, **kw):
+        seen.append(params)
+        return _FakeResponse(json_data={"releases": [], "links": {}})
+    monkeypatch.setattr(find_a_tender.requests, "get", fake_get)
+    find_a_tender.fetch([], KW, date(2000, 1, 1))
+    cap = date.today() - __import__("datetime").timedelta(days=find_a_tender.MAX_LOOKBACK_DAYS)
+    assert seen[0]["updatedFrom"] == f"{cap.isoformat()}T00:00:00"
 
 
 def test_find_a_tender_fetch_follows_cursor_pagination(monkeypatch):
@@ -86,6 +129,7 @@ def test_find_a_tender_fetch_follows_cursor_pagination(monkeypatch):
         return _FakeResponse(json_data=next(responses))
 
     monkeypatch.setattr(find_a_tender.requests, "get", fake_get)
+    monkeypatch.setattr(find_a_tender.time, "sleep", lambda *_: None)
     recs = find_a_tender.fetch(CPV, KW, SINCE)
     assert len(recs) == 2
     assert urls[1] == "https://example/page2"
