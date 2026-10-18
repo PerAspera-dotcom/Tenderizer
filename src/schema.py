@@ -120,6 +120,11 @@ tenders = Table(
     # transition that doesn't supply a new value.
     Column("reason_category", Text, nullable=True),
     Column("assigned_to", Text, nullable=True),
+    # Source-specific notice facts the shared columns have no place for —
+    # JSON object, real NULL when the source supplies none. Only CanadaBuys
+    # fills it so far (solicitation number, notice type, contact, contract
+    # period, trade agreements — see connectors/canadabuys.notice_detail).
+    Column("notice_detail", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
 )
 

@@ -57,7 +57,7 @@ _NULL_DEFAULT = {"dismissal_reason", "dismissed_by", "dismissed_at",
 # is a JSON object rather than plain text when present — needs its own
 # json.dumps/loads pass, unlike _JSON's columns (which always default to an
 # empty array/object, never real NULL).
-_NULLABLE_JSON = {"award_detail"}
+_NULLABLE_JSON = {"award_detail", "notice_detail"}
 
 PIPELINE_FIELDS = {"submission_status", "deadline_override", "owner", "notes",
                    "submitted_date", "result_due", "outcome"}
@@ -100,6 +100,7 @@ _TENDERS_MIGRATIONS = [
     # retirement comment.
     "ALTER TABLE tenders ADD COLUMN reason_category TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN assigned_to TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN notice_detail TEXT DEFAULT NULL",
 ]
 
 

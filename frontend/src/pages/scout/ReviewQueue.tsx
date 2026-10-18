@@ -3,6 +3,7 @@ import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, get
 import type { Tender, TenderDuplicate } from '../../types';
 import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import NoticeText from '../../components/NoticeText';
+import NoticeDetails from '../../components/NoticeDetails';
 import { useSearchParams } from '../../router';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
@@ -784,6 +785,8 @@ export default function ReviewQueue() {
                 {selected.description && (
                   <NoticeText key={`${selected.pub_number}-${showOriginal}`} text={displayDescription(selected, showOriginal)} />
                 )}
+
+                <NoticeDetails detail={selected.notice_detail} />
 
                 {/* Core elements */}
                 <div style={{ marginBottom: 20 }}>

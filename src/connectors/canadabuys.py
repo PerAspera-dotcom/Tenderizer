@@ -78,6 +78,47 @@ def notice_url(notice_url_column, reference):
     return ""
 
 
+def _multi(value):
+    """"*Canadian Free Trade Agreement (CFTA)\n*World Trade Organization..." ->
+    "Canadian Free Trade Agreement (CFTA), World Trade Organization..." —
+    multi-valued CSV cells are newline-separated with a leading "*"."""
+    return ", ".join(p.strip().lstrip("*").strip() for p in (value or "").splitlines() if p.strip().lstrip("*").strip())
+
+
+# notice_detail key -> CSV column (English side). Order is display order.
+_DETAIL_COLUMNS = {
+    "solicitation_number": "solicitationNumber-numeroSollicitation",
+    "notice_type": "noticeType-avisType-eng",
+    "procurement_method": "procurementMethod-methodeApprovisionnement-eng",
+    "selection_criteria": "selectionCriteria-criteresSelection-eng",
+    "trade_agreements": "tradeAgreements-accordsCommerciaux-eng",
+    "regions_of_opportunity": "regionsOfOpportunity-regionAppelOffres-eng",
+    "end_user": "endUserEntitiesName-nomEntitesUtilisateurFinal-eng",
+    "contract_start": "expectedContractStartDate-dateDebutContratPrevue",
+    "contract_end": "expectedContractEndDate-dateFinContratPrevue",
+    "amendment_number": "amendmentNumber-numeroModification",
+    "amendment_date": "amendmentDate-dateModification",
+    "contact_name": "contactInfoName-informationsContactNom",
+    "contact_email": "contactInfoEmail-informationsContactCourriel",
+    "contact_phone": "contactInfoPhone-contactInfoTelephone",
+}
+
+
+def notice_detail(row):
+    """The CSV facts the shared tender columns have no place for — shown on
+    the notice's detail panel, so a reader doesn't depend on the CanadaBuys
+    page (which can 403 for some visitors). Empty values are left out;
+    amendment number "000" (the original notice) is too. None if nothing."""
+    detail = {}
+    for key, column in _DETAIL_COLUMNS.items():
+        value = _multi(row.get(column))
+        if key == "amendment_number" and value.strip("0") == "":
+            continue
+        if value:
+            detail[key] = value
+    return detail or None
+
+
 def parse_response(csv_bytes):
     """Decode + parse the bilingual CSV into a list of raw per-notice dicts,
     English columns only (see module docstring on LANGUAGE). [] if empty.
@@ -101,6 +142,7 @@ def parse_response(csv_bytes):
             "contractingEntityName": row.get("contractingEntityName-nomEntitContractante-eng") or "",
             "noticeURL": notice_url(row.get("noticeURL-URLavis-eng") or "",
                                     row.get("referenceNumber-numeroReference") or ""),
+            "noticeDetail": notice_detail(row),
         })
     return out
 

@@ -37,6 +37,9 @@ export interface Tender {
   awarded_value: string | null;
   awarded_currency: string | null;
   award_detail: AwardDetail | null;
+  // Source-specific facts (CanadaBuys: solicitation number, notice type,
+  // contact, contract period, …) — see connectors/canadabuys.notice_detail.
+  notice_detail?: Record<string, string> | null;
   // CR-007 Phase B (B3): only present for a tender still awaiting a decision
   // (status "new"/"needs_review") — see api._attach_relevance.
   relevance_score?: number;

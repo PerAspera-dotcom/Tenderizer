@@ -16,6 +16,7 @@ import inspect
 from datetime import date
 
 import normalize
+import store
 from connectors import find_a_tender, contracts_finder, canadabuys, tenderned, philgeps
 from connectors import ted, boamp, eprocurement, bekanntmachungsservice
 
@@ -207,6 +208,10 @@ _CSV_HEADER = [
     "procurementMethod-methodeApprovisionnement-eng",
     "regionsOfDelivery-regionsLivraison-eng",
     "contractingEntityName-nomEntitContractante-eng", "noticeURL-URLavis-eng",
+    "solicitationNumber-numeroSollicitation", "noticeType-avisType-eng",
+    "tradeAgreements-accordsCommerciaux-eng", "amendmentNumber-numeroModification",
+    "contactInfoName-informationsContactNom", "contactInfoEmail-informationsContactCourriel",
+    "contactInfoPhone-contactInfoTelephone",
 ]
 
 
@@ -253,6 +258,39 @@ def test_canadabuys_notice_url_falls_back_to_canadabuys_page_for_cb_and_ssc_refe
     assert recs[1]["noticeURL"] == "https://www.merx.com/x"
     assert recs[2]["noticeURL"] == ""
     assert recs[3]["noticeURL"] == "https://canadabuys.canada.ca/en/tender-opportunities/tender-notice/ssc-26-00035079t"
+
+
+def test_canadabuys_notice_detail_reads_extra_columns():
+    row = dict(_ca_row(), **{
+        "solicitationNumber-numeroSollicitation": "W8486-270836/B",
+        "noticeType-avisType-eng": "Request for Proposal",
+        "tradeAgreements-accordsCommerciaux-eng": "*Canadian Free Trade Agreement (CFTA)\n*World Trade Organization (WTO-AGP)",
+        "amendmentNumber-numeroModification": "000",
+        "contactInfoName-informationsContactNom": "Jane Doe",
+        "contactInfoEmail-informationsContactCourriel": "jane.doe@forces.gc.ca",
+        "contactInfoPhone-contactInfoTelephone": "",
+    })
+    detail = canadabuys.parse_response(_csv_bytes([row]))[0]["noticeDetail"]
+    assert detail["solicitation_number"] == "W8486-270836/B"
+    assert detail["trade_agreements"] == "Canadian Free Trade Agreement (CFTA), World Trade Organization (WTO-AGP)"
+    assert detail["contact_email"] == "jane.doe@forces.gc.ca"
+    assert "amendment_number" not in detail and "contact_phone" not in detail
+    assert normalize.normalize_canadabuys({"noticeDetail": detail})["notice_detail"] == detail
+
+
+def test_canadabuys_notice_detail_none_when_empty():
+    assert canadabuys.notice_detail({}) is None
+
+
+def test_notice_detail_round_trips_through_store(tmp_path):
+    conn = store.init_db(str(tmp_path / "t.db"))
+    rec = normalize.normalize_canadabuys({"referenceNumber": "cb-1-2", "title": "Tents",
+                                          "noticeDetail": {"solicitation_number": "W1"}})
+    store.upsert(conn, 1, rec)
+    other = dict(rec, pub_number="cb-1-3", notice_detail=None)
+    store.upsert(conn, 1, other)
+    got = {r["pub_number"]: r["notice_detail"] for r in store.all_records(conn, 1)}
+    assert got == {"cb-1-2": {"solicitation_number": "W1"}, "cb-1-3": None}
 
 
 def test_canadabuys_fetch_filters_locally_by_publication_date(monkeypatch):
@@ -629,8 +667,10 @@ def test_all_nine_sources_share_identical_schema(
         "PhilGEPS": set(normalize.normalize_philgeps(raw_philgeps_supply)),
     }
     # form_type is an optional classification hint (eForms sources only), not
-    # a stored column — the only key allowed to differ.
-    optional = {"form_type"}
+    # a stored column; notice_detail is a nullable column only sources with
+    # extra facts set (store.upsert stores NULL when absent). The only keys
+    # allowed to differ.
+    optional = {"form_type", "notice_detail"}
     canonical = keysets["TED"] - optional
     for name, keys in keysets.items():
         assert keys - optional == canonical, f"{name} schema diverges: {(keys - optional) ^ canonical}"

@@ -1020,6 +1020,9 @@ def normalize_canadabuys(raw):
         "internal_identifier": None,
         "value": "",
         "value_currency": "",
+        # solicitation number, notice type, contact, … — see
+        # connectors/canadabuys.notice_detail
+        "notice_detail": raw.get("noticeDetail") or None,
         # CR-011 §4: English-only read of a bilingual source — see
         # connectors/canadabuys.py's module docstring.
         "language": "eng",
