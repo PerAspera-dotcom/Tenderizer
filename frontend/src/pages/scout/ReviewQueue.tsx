@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, resolveDuplicate, unresolveDuplicate, type OrgMember } from '../../api';
 import type { Tender, TenderDuplicate } from '../../types';
 import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
+import NoticeText from '../../components/NoticeText';
 import { useSearchParams } from '../../router';
 import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
@@ -781,9 +782,7 @@ export default function ReviewQueue() {
                 )}
 
                 {selected.description && (
-                  <p style={{ color: '#c8d0de', fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>
-                    {displayDescription(selected, showOriginal)}
-                  </p>
+                  <NoticeText key={`${selected.pub_number}-${showOriginal}`} text={displayDescription(selected, showOriginal)} />
                 )}
 
                 {/* Core elements */}

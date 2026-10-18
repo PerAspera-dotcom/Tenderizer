@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { listTenders, patchTender } from '../../api';
 import type { Tender } from '../../types';
 import { formatDate, countryFlag, displayTagLine, displayDescription, hasTranslatedTagLine, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
+import NoticeText from '../../components/NoticeText';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 
 // CR-006 D4: reinstate reuses the same state-transition endpoint/states the
@@ -133,9 +134,7 @@ export default function DismissedTenders() {
                 </h2>
 
                 {selected.description && (
-                  <p style={{ color: '#c8d0de', fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>
-                    {displayDescription(selected, false)}
-                  </p>
+                  <NoticeText key={selected.pub_number} text={displayDescription(selected, false)} />
                 )}
 
                 {/* Core elements */}
