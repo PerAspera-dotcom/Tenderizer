@@ -924,6 +924,9 @@ def normalize_tenderned(raw):
         "internal_identifier": raw.get("referentieNummer"),
         "value": "",
         "value_currency": "",
+        # notice type, procedure, tender platform, notice PDF, … — see
+        # connectors/tenderned.notice_detail
+        "notice_detail": raw.get("noticeDetail") or None,
         # CR-011 §4: Dutch-only source — see connectors/tenderned.py's module
         # docstring. Goes through DeepL like BOAMP.
         "language": "nld",

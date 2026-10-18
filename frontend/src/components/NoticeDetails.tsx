@@ -1,11 +1,17 @@
 import { formatDate } from '../utils';
 
-// Display order and labels for notice_detail keys (see
-// connectors/canadabuys.notice_detail); unknown keys show after these.
+// Display order and labels for notice_detail keys (see connectors/
+// canadabuys.notice_detail and tenderned.notice_detail); unknown keys show
+// after these.
 const LABELS: [string, string][] = [
   ['solicitation_number', 'Solicitation no.'],
+  ['reference', 'Buyer reference'],
+  ['tenderned_kenmerk', 'TenderNed no.'],
   ['notice_type', 'Notice type'],
   ['procurement_method', 'Procurement method'],
+  ['procedure', 'Procedure'],
+  ['scope', 'Scope'],
+  ['legal_framework', 'Legal framework'],
   ['selection_criteria', 'Selection criteria'],
   ['end_user', 'End user'],
   ['regions_of_opportunity', 'Open to suppliers in'],
@@ -13,7 +19,14 @@ const LABELS: [string, string][] = [
   ['amendment_number', 'Amendment'],
 ];
 const CONTACT_KEYS = ['contact_name', 'contact_email', 'contact_phone'];
-const HANDLED = new Set([...LABELS.map(([k]) => k), ...CONTACT_KEYS, 'contract_start', 'contract_end', 'amendment_date']);
+const HANDLED = new Set([...LABELS.map(([k]) => k), ...CONTACT_KEYS, 'contract_start', 'contract_end', 'amendment_date',
+  'tender_platform', 'tender_platform_url', 'notice_pdf_url']);
+
+const linkStyle: React.CSSProperties = { color: '#60a5fa' };
+
+function ext(href: string, text: string) {
+  return <a href={href} target="_blank" rel="noopener noreferrer" style={linkStyle}>{text}</a>;
+}
 
 const label: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: '#4c5a70', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 };
 
@@ -35,8 +48,15 @@ export default function NoticeDetails({ detail }: { detail: Record<string, strin
   if (detail.contract_start || detail.contract_end) {
     rows.push(['Contract period', `${detail.contract_start ? formatDate(detail.contract_start) : '?'} – ${detail.contract_end ? formatDate(detail.contract_end) : '?'}`]);
   }
+  // where the documents and bid submission live (TenderNed: Mercell, Negometrix, …)
+  if (detail.tender_platform || detail.tender_platform_url) {
+    const name = detail.tender_platform || 'Tender platform';
+    rows.push(['Documents & submission', detail.tender_platform_url ? ext(detail.tender_platform_url, `${name} ↗`) : name]);
+  }
+  if (detail.notice_pdf_url) rows.push(['Official notice', ext(detail.notice_pdf_url, 'PDF ↗')]);
   for (const [key, value] of Object.entries(detail)) {
-    if (!HANDLED.has(key) && value) rows.push([humanize(key), value]);
+    if (HANDLED.has(key) || !value) continue;
+    rows.push([humanize(key), /^https?:\/\//.test(value) ? ext(value, 'Open ↗') : value]);
   }
   const hasContact = CONTACT_KEYS.some(k => detail[k]);
 
@@ -55,8 +75,8 @@ export default function NoticeDetails({ detail }: { detail: Record<string, strin
             <div style={label}>Contact</div>
             <div style={{ fontSize: 13, overflowWrap: 'anywhere', lineHeight: 1.5 }}>
               {detail.contact_name && <div>{detail.contact_name}</div>}
-              {detail.contact_email && <div><a href={`mailto:${detail.contact_email}`} style={{ color: '#60a5fa' }}>{detail.contact_email}</a></div>}
-              {detail.contact_phone && <div><a href={`tel:${detail.contact_phone}`} style={{ color: '#60a5fa' }}>{detail.contact_phone}</a></div>}
+              {detail.contact_email && <div><a href={`mailto:${detail.contact_email}`} style={linkStyle}>{detail.contact_email}</a></div>}
+              {detail.contact_phone && <div><a href={`tel:${detail.contact_phone}`} style={linkStyle}>{detail.contact_phone}</a></div>}
             </div>
           </div>
         )}

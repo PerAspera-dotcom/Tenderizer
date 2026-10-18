@@ -64,6 +64,47 @@ REQUEST_DELAY_SECONDS = 0.5
 SKIPPED_PUBLICATION_TYPES = {"REC", "VBE", "AAW"}
 
 
+# aankondigingCode -> English notice type (the codes SKIPPED_PUBLICATION_TYPES
+# documents, plus the ones kept).
+_NOTICE_TYPES = {"AAO": "Contract notice", "AGO": "Contract award notice", "VAK": "Prior information notice",
+                 "MAC": "Market consultation", "REC": "Correction", "VBE": "Early termination",
+                 "AAW": "Contract modification"}
+# procedureCode description -> English; unknown ones stay Dutch.
+_PROCEDURES = {"Openbaar": "Open", "Niet-openbaar": "Restricted",
+               "Concurrentiegerichte dialoog": "Competitive dialogue",
+               "Mededingingsprocedure met onderhandeling": "Competitive procedure with negotiation",
+               "Onderhandelingsprocedure zonder voorafgaande bekendmaking": "Negotiated without prior publication",
+               "Innovatiepartnerschap": "Innovation partnership",
+               "Enkelvoudig onderhands": "Single quote (below threshold)",
+               "Meervoudig onderhands": "Multiple quotes (below threshold)"}
+_SCOPE = {"EU": "European (above EU threshold)", "NAT": "National"}
+SITE_ROOT = "https://www.tenderned.nl"
+
+
+def notice_detail(detail):
+    """Facts from the detail response the shared tender columns have no place
+    for (confirmed live 2026-10-18): buyer reference, TenderNed's own case
+    number (kenmerk), notice type, procedure, legal framework, EU/national
+    scope, the e-tendering platform holding the documents and submission
+    (urlTsenderWebsite — Mercell, Negometrix, …) and the official notice PDF.
+    Empty values left out; None if nothing."""
+    code = lambda key: (detail.get(key) or {}).get("code") or ""
+    desc = lambda key: (detail.get(key) or {}).get("omschrijving") or ""
+    pdf = ((detail.get("links") or {}).get("pdf") or {}).get("href") or ""
+    out = {
+        "reference": detail.get("referentieNummer") or "",
+        "tenderned_kenmerk": str(detail.get("kenmerk") or ""),
+        "notice_type": _NOTICE_TYPES.get(code("aankondigingCode"), desc("aankondigingCode")),
+        "procedure": _PROCEDURES.get(desc("procedureCode"), desc("procedureCode")),
+        "scope": _SCOPE.get(code("nationaalOfEuropeesCode"), desc("nationaalOfEuropeesCode")),
+        "legal_framework": desc("juridischKaderCode"),
+        "tender_platform": detail.get("urlTsenderNaam") or "",
+        "tender_platform_url": detail.get("urlTsenderWebsite") or "",
+        "notice_pdf_url": (SITE_ROOT + pdf) if pdf.startswith("/") else pdf,
+    }
+    return {k: v for k, v in out.items() if v} or None
+
+
 def _strip_checksum(code):
     """"18530000-3" -> "18530000" — see module docstring's CPV section."""
     return code.split("-")[0] if code else code
@@ -83,7 +124,7 @@ def parse_list_response(json_data):
 
 
 def _fetch_detail(session, publicatie_id):
-    """CPV + NUTS + the buyer's own reference number for one notice — see
+    """CPV + NUTS + the buyer's own reference number + notice_detail for one notice — see
     module docstring. Confirmed live shape: `cpvCodes`/`nutsCodes` are each
     a list of {"code": ..., "omschrijving": ...} objects (NOT plain code
     strings), and `referentieNummer` is the buyer's own procurement
@@ -98,7 +139,7 @@ def _fetch_detail(session, publicatie_id):
     cpv_codes = [_strip_checksum(c["code"]) for c in (detail.get("cpvCodes") or []) if c.get("code")]
     nuts = ", ".join(dict.fromkeys(c["code"] for c in (detail.get("nutsCodes") or []) if c.get("code")))
     reference = detail.get("referentieNummer") or None
-    return list(dict.fromkeys(cpv_codes)), nuts, reference
+    return list(dict.fromkeys(cpv_codes)), nuts, reference, notice_detail(detail)
 
 
 def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
@@ -140,9 +181,9 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     out = []
     for item in candidates[:max_records]:
         publicatie_id = item.get("publicatieId")
-        cpv_here, nuts, reference = ([], "", None)
+        cpv_here, nuts, reference, detail = ([], "", None, None)
         if publicatie_id:
-            cpv_here, nuts, reference = _fetch_detail(session, publicatie_id)
+            cpv_here, nuts, reference, detail = _fetch_detail(session, publicatie_id)
             time.sleep(REQUEST_DELAY_SECONDS)
         # CPV OR a distinctive keyword (2026-10-17): CPV-only dropped notices filed
         # under a generic CPV ("Marquee hire" under event services) before the
@@ -165,6 +206,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
             "cpvCodes": cpv_here,
             "nuts": nuts,
             "referentieNummer": reference,
+            "noticeDetail": detail,
             "url": (item.get("link") or {}).get("href") or "",
         })
     return out

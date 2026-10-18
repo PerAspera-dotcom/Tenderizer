@@ -487,9 +487,43 @@ def test_tenderned_fetch_merges_detail_cpv_and_filters(monkeypatch):
     assert len(recs) == 1
     assert recs[0]["cpvCodes"] == ["18530000"]
     assert recs[0]["referentieNummer"] == "IUC25-711"
+    assert recs[0]["noticeDetail"] == {"reference": "IUC25-711"}
     # a non-matching CPV filter excludes it
     recs_none = tenderned.fetch(["99999999"], KW, date(2026, 10, 1))
     assert recs_none == []
+
+
+def test_tenderned_notice_detail_from_live_shape():
+    # trimmed from the live detail response for notice 444954 (2026-10-18)
+    detail = {
+        "kenmerk": 619056, "referentieNummer": "3002228a-dc72-4fae-9211-812440f9f48a",
+        "aankondigingCode": {"code": "AAO", "omschrijving": "Aankondiging opdracht"},
+        "procedureCode": {"code": "OPE", "omschrijving": "Openbaar"},
+        "nationaalOfEuropeesCode": {"code": "EU", "omschrijving": "Europees"},
+        "juridischKaderCode": {"code": "NAW", "omschrijving": "Aanbestedingswet 2012"},
+        "urlTsenderNaam": "Mercell", "urlTsenderWebsite": "https://s2c.mercell.com/today/235977",
+        "links": {"pdf": {"href": "/papi/tenderned-rs-tns/v2/publicaties/444954/pdf"}},
+    }
+    assert tenderned.notice_detail(detail) == {
+        "reference": "3002228a-dc72-4fae-9211-812440f9f48a",
+        "tenderned_kenmerk": "619056",
+        "notice_type": "Contract notice",
+        "procedure": "Open",
+        "scope": "European (above EU threshold)",
+        "legal_framework": "Aanbestedingswet 2012",
+        "tender_platform": "Mercell",
+        "tender_platform_url": "https://s2c.mercell.com/today/235977",
+        "notice_pdf_url": "https://www.tenderned.nl/papi/tenderned-rs-tns/v2/publicaties/444954/pdf",
+    }
+    assert tenderned.notice_detail({}) is None
+    unknown = {"procedureCode": {"code": "XYZ", "omschrijving": "Iets nieuws"}}
+    assert tenderned.notice_detail(unknown) == {"procedure": "Iets nieuws"}
+
+
+def test_normalize_tenderned_carries_notice_detail():
+    rec = normalize.normalize_tenderned({"publicatieId": 1, "noticeDetail": {"procedure": "Open"}})
+    assert rec["notice_detail"] == {"procedure": "Open"}
+    assert normalize.normalize_tenderned({"publicatieId": 2})["notice_detail"] is None
 
 
 def test_normalize_tenderned_fields(raw_tenderned_supply):
