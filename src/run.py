@@ -113,9 +113,13 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
                 rec = normalize_fn(raw)
                 if process_record(conn, tenant_id, rec, full_keywords, cpv_set, exclusions, now, fx_rates, run_date):
                     this_run_records.append(rec)
-            health[name] = f"ok ({len(raws)})"
+            # A connector may flag a partial fetch (e.g. Bekanntmachungsservice's
+            # skipped days) — still "ok", but the note rides along on the health
+            # row's error_detail so the dashboard shows it.
+            warning = getattr(raws, "warning", None)
+            health[name] = f"ok ({len(raws)}; {warning})" if warning else f"ok ({len(raws)})"
             store.record_source_health(conn, tenant_id, name, run_date, "ok",
-                                        notices_pulled=len(raws))
+                                        notices_pulled=len(raws), error_detail=warning)
         except Exception as e:                       # one source failing must not abort the run
             health[name] = f"error: {e}"
             store.record_source_health(conn, tenant_id, name, run_date, "failed",

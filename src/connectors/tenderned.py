@@ -49,6 +49,7 @@ import time
 import requests
 
 import match
+from connectors import retry
 
 LIST_ENDPOINT = "https://www.tenderned.nl/papi/tenderned-rs-tns/publicaties"
 DETAIL_ENDPOINT = "https://www.tenderned.nl/papi/tenderned-rs-tns/publicaties/{id}"
@@ -133,7 +134,7 @@ def _fetch_detail(session, publicatie_id):
     nothing in this CR wires it into cross-portal dedup yet (no other new
     source here shares a join key with TenderNed to match against).
     """
-    resp = session.get(DETAIL_ENDPOINT.format(id=publicatie_id), timeout=30)
+    resp = retry.call(session.get, DETAIL_ENDPOINT.format(id=publicatie_id), timeout=30)
     resp.raise_for_status()
     detail = resp.json()
     cpv_codes = [_strip_checksum(c["code"]) for c in (detail.get("cpvCodes") or []) if c.get("code")]
@@ -157,7 +158,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
 
     candidates, page = [], 0
     while True:
-        resp = session.get(LIST_ENDPOINT, params={"page": page, "size": limit}, timeout=30)
+        resp = retry.call(session.get, LIST_ENDPOINT, params={"page": page, "size": limit}, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         batch = parse_list_response(data)

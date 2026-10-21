@@ -83,6 +83,23 @@ def test_run_pipeline_records_source_health_on_failure(tmp_path):
     assert "portal down" in summary["last_result"]
 
 
+def test_run_pipeline_surfaces_a_partial_fetch_warning(tmp_path, raw_ted_supply):
+    class Partial(list):
+        warning = "1 day skipped: 2026-10-19"
+
+    db = str(tmp_path / "t.db")
+    src = {"name": "TED", "fetch": lambda: Partial([raw_ted_supply]),
+           "normalize": __import__("normalize").normalize_ted}
+    health = run.run_pipeline([src], db, str(tmp_path / "r.xlsx"),
+                               tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES)
+    assert health["TED"] == "ok (1; 1 day skipped: 2026-10-19)"
+    conn = store.init_db(db)
+    summary = store.get_source_health(conn, TEST_TENANT_ID, "TED")
+    assert summary["last_result"] == "ok (1 new; 1 day skipped: 2026-10-19)"
+    assert summary["streak_ok_days"] == 1  # a partial fetch is still a working source
+    assert summary["consecutive_failures"] == 0
+
+
 # ── CR-011 §1: DeepL's own health, recorded every run via translate.check_health ──
 
 def test_run_pipeline_records_deepl_health_ok(tmp_path, monkeypatch, raw_ted_supply):

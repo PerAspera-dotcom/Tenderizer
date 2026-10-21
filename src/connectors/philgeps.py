@@ -61,12 +61,16 @@ government services), not a confirmed server-side requirement.
 """
 import datetime
 import html as html_lib
+import logging
 import re
 import time
 
 import requests
 
 import match
+from connectors import Records, retry
+
+logger = logging.getLogger(__name__)
 
 SEARCH_URL = (
     "https://notices.philgeps.gov.ph/GEPSNONPILOT/Tender/SplashOpportunitiesSearchUI.aspx"
@@ -121,6 +125,18 @@ _ROW_RE = re.compile(
 )
 
 
+def _describe(e):
+    """The error, plus where a redirect loop started — "Exceeded 30
+    redirects" alone (production, 2026-10-21; not reproducible from a
+    residential IP the same day, a full 200-page run went clean) says
+    nothing about which hop bounced."""
+    history = getattr(getattr(e, "response", None), "history", None) or []
+    if isinstance(e, requests.TooManyRedirects) and history:
+        first = history[0]
+        return f"{e} (first hop: {first.status_code} {first.url} -> {first.headers.get('Location')})"
+    return f"{type(e).__name__}: {e}"
+
+
 def _field(html, name):
     m = re.search(r'id="' + name + r'" value="([^"]*)"', html)
     return m.group(1) if m else None
@@ -173,7 +189,7 @@ def _next_page(session, html):
         "__VIEWSTATEGENERATOR": generator or "",
         "__EVENTVALIDATION": validation,
     }
-    resp = session.post(SEARCH_URL, data=data, headers={"User-Agent": USER_AGENT}, timeout=30)
+    resp = retry.call(session.post, SEARCH_URL, data=data, headers={"User-Agent": USER_AGENT}, timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -192,9 +208,17 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=4000):
     """
     since_str = since.isoformat()
     session = requests.Session()
-    html = session.get(SEARCH_URL, headers={"User-Agent": USER_AGENT}, timeout=30).text
+    try:
+        resp = retry.call(session.get, SEARCH_URL, headers={"User-Agent": USER_AGENT}, timeout=30)
+    except requests.TooManyRedirects as e:
+        raise RuntimeError(f"page 1: {_describe(e)}") from e
+    resp.raise_for_status()
+    html = resp.text
 
-    out, seen_refs = [], set()
+    # A later page failing (after connectors.retry) keeps what's already
+    # collected — the list is newest-first, so that's the most recent notices
+    # — and flags it as a warning rather than discarding the whole run.
+    out, seen_refs, page, warning = Records(), set(), 1, None
     while True:
         rows = parse_response(html)
         if not rows:
@@ -217,9 +241,15 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=4000):
             break
 
         time.sleep(REQUEST_DELAY_SECONDS)
-        next_html = _next_page(session, html)
+        try:
+            next_html = _next_page(session, html)
+        except requests.RequestException as e:
+            warning = f"stopped after page {page} ({len(out)} notices): {_describe(e)}"
+            logger.warning("PhilGEPS: %s", warning)
+            break
         if next_html is None:
             break
-        html = next_html
+        html, page = next_html, page + 1
     _enrich_budgets(session, out, keywords)
+    out.warning = warning
     return out

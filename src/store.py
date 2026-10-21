@@ -2278,7 +2278,12 @@ def get_source_health(conn, tenant_id, source, days=7, now=None):
                 "failures_7d": 0, "last_failure": None, "consecutive_failures": 0}
 
     latest = rows[0]
-    last_result = (f"ok ({latest[2]} new)" if latest[1] == "ok" else f"error: {latest[3]}")
+    if latest[1] != "ok":
+        last_result = f"error: {latest[3]}"
+    elif latest[3]:  # an "ok" row's error_detail is a partial-fetch warning (run.py)
+        last_result = f"ok ({latest[2]} new; {latest[3]})"
+    else:
+        last_result = f"ok ({latest[2]} new)"
     streak_ok_days = latest[4] if latest[1] == "ok" else 0
 
     failures_7d = sum(1 for r in rows if r[1] == "failed" and r[0] >= cutoff)

@@ -54,6 +54,7 @@ import re
 import requests
 
 import config
+from connectors import retry
 
 CSV_URL = "https://canadabuys.canada.ca/opendata/pub/openTenderNotice-ouvertAvisAppelOffres.csv"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
@@ -184,7 +185,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     headers = {"User-Agent": USER_AGENT}
     crosswalk = config.canadabuys_unspsc()
     wanted = {cpv: crosswalk[cpv] for cpv in (cpv_codes or []) if cpv in crosswalk}
-    resp = requests.get(CSV_URL, headers=headers, timeout=60)
+    resp = retry.call(requests.get, CSV_URL, headers=headers, timeout=60)
     resp.raise_for_status()
     since_str = since.isoformat()
     out = []

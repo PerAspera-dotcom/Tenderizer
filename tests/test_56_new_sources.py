@@ -14,6 +14,7 @@ but that one-off verification isn't re-run here.)
 """
 import inspect
 from datetime import date
+import pytest
 
 import normalize
 import store
@@ -628,6 +629,8 @@ def test_philgeps_parse_response_converts_dates_to_iso():
 
 
 class _FakeResponse2:
+    status_code = 200  # read by connectors.retry
+
     def __init__(self, text):
         self.text = text
 
@@ -673,6 +676,49 @@ def test_philgeps_fetch_respects_max_records(monkeypatch):
     monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
     recs = philgeps.fetch([], [], date(2026, 10, 1), max_records=1)
     assert len(recs) == 1
+
+
+def _redirect_loop():
+    """A TooManyRedirects shaped like requests raises it: .response.history
+    holds the hops."""
+    hop = philgeps.requests.Response()
+    hop.status_code, hop.url = 302, philgeps.SEARCH_URL
+    hop.headers["Location"] = "/GEPSNONPILOT/Error.aspx"
+    last = philgeps.requests.Response()
+    last.history = [hop]
+    return philgeps.requests.TooManyRedirects("Exceeded 30 redirects.", response=last)
+
+
+def test_philgeps_fetch_keeps_earlier_pages_when_a_later_page_redirect_loops(monkeypatch):
+    page1 = _philgeps_page([{"ref": "2", "agency": "X"}])
+
+    class _Sess(_FakeSessionText):
+        def post(self, url, data=None, headers=None, timeout=None):
+            raise _redirect_loop()
+
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _Sess([page1]))
+    monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
+    recs = philgeps.fetch([], [], date(2026, 10, 1))
+    assert [r["refID"] for r in recs] == ["2"]
+    assert recs.warning.startswith("stopped after page 1 (1 notices): Exceeded 30 redirects.")
+    assert "-> /GEPSNONPILOT/Error.aspx" in recs.warning  # the hop that bounced is named
+
+
+def test_philgeps_fetch_page_one_redirect_loop_fails_the_source(monkeypatch):
+    class _Sess(_FakeSessionText):
+        def get(self, url, headers=None, timeout=None):
+            raise _redirect_loop()
+
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _Sess([]))
+    with pytest.raises(RuntimeError, match=r"^page 1: Exceeded 30 redirects\. \(first hop: 302 "):
+        philgeps.fetch([], [], date(2026, 10, 1))
+
+
+def test_philgeps_fetch_clean_run_has_no_warning(monkeypatch):
+    page = _philgeps_page([{"ref": "1", "agency": "X"}])
+    monkeypatch.setattr(philgeps.requests, "Session", lambda: _FakeSessionText([page, page]))
+    monkeypatch.setattr(philgeps.time, "sleep", lambda *_: None)
+    assert philgeps.fetch([], [], date(2026, 10, 1)).warning is None
 
 
 _PHILGEPS_ABSTRACT = (

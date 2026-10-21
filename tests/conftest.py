@@ -37,6 +37,13 @@ def _no_database_url_env(monkeypatch):
     """
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
+
+@pytest.fixture(autouse=True)
+def _no_retry_delay(monkeypatch):
+    """connectors.retry waits 10 s / 20 s between attempts — never in tests."""
+    from connectors import retry
+    monkeypatch.setattr(retry, "DELAY_SECONDS", 0)
+
 @pytest.fixture
 def raw_ted_supply():
     # real TED shape: multilingual dicts, list-valued fields

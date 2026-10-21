@@ -23,6 +23,8 @@ language in normalize_ted. FIELDS may need country/deadline fields added.
 """
 import requests
 
+from connectors import retry
+
 ENDPOINT = "https://api.ted.europa.eu/v3/notices/search"
 
 # Fields to return — confirmed via live field probe (June 2026).
@@ -105,7 +107,7 @@ def fetch(cpv_codes, keywords, since, fields=FIELDS, limit=100, max_records=2000
         }
         if token:
             body["iterationNextToken"] = token
-        resp = requests.post(ENDPOINT, json=body, timeout=60)
+        resp = retry.call(requests.post, ENDPOINT, json=body, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         notices = parse_response(data)

@@ -15,6 +15,8 @@ used in the query — BOAMP's search API has no CPV filter, only full-text `wher
 """
 import requests
 
+from connectors import retry
+
 ENDPOINT = "https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets/boamp/records"
 
 
@@ -41,7 +43,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     out, offset = [], 0
     while True:
         params = build_params(cpv_codes, keywords, since, limit=limit, offset=offset)
-        resp = requests.get(ENDPOINT, params=params, timeout=60)
+        resp = retry.call(requests.get, ENDPOINT, params=params, timeout=60)
         resp.raise_for_status()
         results = parse_response(resp.json())
         out.extend(results)

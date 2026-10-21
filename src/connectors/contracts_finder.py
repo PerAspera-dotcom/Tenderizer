@@ -49,6 +49,7 @@ the same way it already does for TED/BOAMP, no new code needed.
 import requests
 
 import match
+from connectors import retry
 
 ENDPOINT = "https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
@@ -122,7 +123,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     out = []
     url, params = ENDPOINT, build_params(since, limit)
     while url:
-        resp = requests.get(url, params=params, headers=headers, timeout=60)
+        resp = retry.call(requests.get, url, params=params, headers=headers, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         for release in parse_response(data):

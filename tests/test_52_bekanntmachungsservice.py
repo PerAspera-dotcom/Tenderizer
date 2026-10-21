@@ -323,6 +323,58 @@ def test_fetch_drops_an_older_match_superseded_by_a_non_matching_newer_version(m
     assert recs == []
 
 
+def test_fetch_retries_a_timed_out_day(monkeypatch):
+    attempts = []
+
+    def fake_get(url, params=None, **kw):
+        attempts.append(params["pubDay"])
+        if len(attempts) == 1:
+            raise bms.requests.ReadTimeout("Read timed out. (read timeout=60)")
+        return _FakeResponse(_make_zip(_minimal_tables()))
+
+    monkeypatch.setattr(bms.requests, "get", fake_get)
+    today = bms.datetime.date.today()
+    recs = bms.fetch([], KW, today - bms.datetime.timedelta(days=1))
+    assert len(recs) == 1
+    assert attempts[0] == attempts[1]  # same day re-requested
+
+
+def test_fetch_skips_a_day_that_keeps_failing_and_keeps_the_rest(monkeypatch):
+    yesterday = (bms.datetime.date.today() - bms.datetime.timedelta(days=1)).isoformat()
+
+    def fake_get(url, params=None, **kw):
+        if params["pubDay"] == yesterday:
+            raise bms.requests.ReadTimeout("Read timed out.")
+        return _FakeResponse(_make_zip(_minimal_tables(notice_id=f"N-{params['pubDay']}")))
+
+    monkeypatch.setattr(bms.requests, "get", fake_get)
+    recs = bms.fetch([], KW, bms.datetime.date.today() - bms.datetime.timedelta(days=3))
+    assert len(recs) == 2  # the two other days survive
+    assert recs.warning == f"1 day skipped: {yesterday}"
+
+
+def test_fetch_without_failures_has_no_warning(monkeypatch):
+    monkeypatch.setattr(bms.requests, "get",
+                        lambda url, params=None, **kw: _FakeResponse(_make_zip(_minimal_tables())))
+    recs = bms.fetch([], KW, bms.datetime.date.today() - bms.datetime.timedelta(days=1))
+    assert recs.warning is None
+
+
+def test_fetch_raises_when_every_day_fails(monkeypatch):
+    monkeypatch.setattr(bms.requests, "get", lambda url, params=None, **kw: _FakeResponse(b"", 503))
+    with pytest.raises(RuntimeError, match="all 2 days failed"):
+        bms.fetch([], KW, bms.datetime.date.today() - bms.datetime.timedelta(days=2))
+
+
+def test_fetch_does_not_retry_a_client_error(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bms.requests, "get",
+                        lambda url, params=None, **kw: calls.append(1) or _FakeResponse(b"", 400))
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        bms.fetch([], KW, bms.datetime.date.today() - bms.datetime.timedelta(days=1))
+    assert len(calls) == 1
+
+
 # ── normalize_bekanntmachungsservice ────────────────────────────────────────
 
 def test_normalize_country_is_de(raw_bekanntmachungsservice_supply):

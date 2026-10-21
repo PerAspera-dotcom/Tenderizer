@@ -97,6 +97,7 @@ import zipfile
 import requests
 
 import match
+from connectors import Records, retry
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,29 @@ EXPORT_ENDPOINT = "https://oeffentlichevergabe.de/api/notice-exports"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
 
 HISTORICAL_FLOOR = datetime.date(2022, 12, 1)
+
+# A single day's export occasionally hangs past the 60 s read timeout (seen
+# 2026-10-20; the same day downloaded in ~1 s minutes later). One stalled day
+# used to fail the whole source and discard every other day already fetched;
+# now it's retried (connectors.retry) and, failing that, skipped.
+
+
+class _TransientError(Exception):
+    pass
+
+
+def _get_day(params, headers):
+    """GET one day's export via connectors.retry. Raises _TransientError if
+    it still times out / 5xx after the retries; a 4xx raises as-is (a
+    malformed request won't fix itself on retry)."""
+    try:
+        resp = retry.call(requests.get, EXPORT_ENDPOINT, params=params, headers=headers, timeout=60)
+    except (requests.Timeout, requests.ConnectionError) as e:
+        raise _TransientError(f"{params['pubDay']}: {e}") from e
+    if resp.status_code >= 500:
+        raise _TransientError(f"{params['pubDay']}: HTTP {resp.status_code}")
+    resp.raise_for_status()
+    return resp
 
 _DEADLINE_BLOCK_RE = re.compile(
     r"<cac:TenderSubmissionDeadlinePeriod>(.*?)</cac:TenderSubmissionDeadlinePeriod>", re.S)
@@ -302,11 +326,21 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     # that stopped after ~2 days, so a 30-day window only ever saw its two
     # oldest days and never anything recent (found 2026-10-17: one stored
     # notice in total since go-live, published exactly 30 days earlier).
+    # A day that still fails after retries is skipped, not fatal: the nightly
+    # 30-day window re-requests it on the next run. Only if EVERY day failed
+    # does the source report an error.
     day = yesterday
+    days_tried, failed_days = 0, []
     while day >= start:
         params = build_params(cpv_codes, keywords, day)
-        resp = requests.get(EXPORT_ENDPOINT, params=params, headers=headers, timeout=60)
-        resp.raise_for_status()
+        days_tried += 1
+        try:
+            resp = _get_day(params, headers)
+        except _TransientError as e:
+            logger.warning("Bekanntmachungsservice: skipping day after %d attempts: %s", retry.ATTEMPTS, e)
+            failed_days.append((day, e))
+            day -= datetime.timedelta(days=1)
+            continue
         for raw in parse_response(resp.content):
             notice_id = raw["noticeIdentifier"]
             version = int(raw["noticeVersion"])  # see module docstring: never compare as strings
@@ -326,6 +360,9 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
             break
         day -= datetime.timedelta(days=1)
 
+    if failed_days and len(failed_days) == days_tried:
+        raise RuntimeError(f"all {days_tried} days failed; last: {failed_days[-1][1]}")
+
     # Keep a notice only if its latest version is the one that matched — a
     # newer version whose CPV no longer matches supersedes the older match.
     out = [raw for notice_id, (version, raw) in matched.items() if version == max_version[notice_id]]
@@ -334,4 +371,8 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
     for raw in out:
         raws_by_day.setdefault(day_of[raw["noticeIdentifier"]], []).append(raw)
     _fill_deadlines(raws_by_day, headers)
+    out = Records(out)
+    if failed_days:
+        dates = ", ".join(sorted(d.isoformat() for d, _e in failed_days))
+        out.warning = f"{len(failed_days)} day{'s' if len(failed_days) > 1 else ''} skipped: {dates}"
     return out

@@ -66,6 +66,7 @@ import time
 import requests
 
 import match
+from connectors import retry
 
 ENDPOINT = "https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages"
 USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tender-izer.com)"
@@ -146,7 +147,7 @@ def _get(url, params, headers):
     """GET with the API's rate limit: a 429 waits out Retry-After (120 s
     when absent) and retries, up to MAX_RATE_LIMIT_RETRIES times."""
     for _ in range(MAX_RATE_LIMIT_RETRIES):
-        resp = requests.get(url, params=params, headers=headers, timeout=60)
+        resp = retry.call(requests.get, url, params=params, headers=headers, timeout=60)
         if resp.status_code != 429:
             break
         time.sleep(int(resp.headers.get("Retry-After") or 120) + 1)

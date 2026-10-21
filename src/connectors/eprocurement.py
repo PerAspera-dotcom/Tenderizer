@@ -114,6 +114,8 @@ from pathlib import Path
 
 import requests
 
+from connectors import retry
+
 _CPV_CHECKSUMS_PATH = Path(__file__).resolve().parents[2] / "config" / "cpv_be_checksums.json"
 
 AUTH_URL = os.getenv("EPROCUREMENT_AUTH_URL", "https://www.publicprocurement.be/auth")
@@ -140,7 +142,8 @@ def _get_token():
             "EPROCUREMENT_AUTH_CLIENT_SECRET is not set — see .env.example"
         )
     url = f"{AUTH_URL}/realms/{AUTH_REALM}/protocol/openid-connect/token"
-    resp = requests.post(
+    resp = retry.call(
+        requests.post,
         url,
         data={
             "grant_type": "client_credentials",
@@ -246,7 +249,7 @@ def fetch(cpv_codes, keywords, since, limit=100, max_records=2000):
         # gateway, checked before auth — see module docstring. Fresh per
         # request, matching what a trace ID is for.
         headers = {**base_headers, "BelGov-Trace-Id": str(uuid.uuid4())}
-        resp = requests.post(SEARCH_ENDPOINT, json=body, headers=headers, timeout=60)
+        resp = retry.call(requests.post, SEARCH_ENDPOINT, json=body, headers=headers, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         publications = parse_response(data)
