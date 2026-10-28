@@ -22,6 +22,10 @@ Run from the project root (against whatever DATABASE_URL is set in the
 environment — this is meant to be run on Railway against production, the
 same way scratch_empty_organization.py is):
     python scratch_enable_new_sources.py
+
+Pass portal names as arguments to enable those instead of the CR-011 five
+(e.g. e-Procurement's go-live, 2026-10-28):
+    python scratch_enable_new_sources.py e-Procurement
 """
 import sys
 
@@ -29,7 +33,7 @@ sys.path.insert(0, "src")
 
 import store
 
-NEW_SOURCES = ["Find a Tender", "Contracts Finder", "CanadaBuys", "TenderNed", "PhilGEPS"]
+NEW_SOURCES = sys.argv[1:] or ["Find a Tender", "Contracts Finder", "CanadaBuys", "TenderNed", "PhilGEPS"]
 
 
 def enable_for_all_tenants():

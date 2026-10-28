@@ -96,12 +96,11 @@ const ISO3_FLAGS: Record<string, string> = {
 
 // Scout portal filter options. `value` must be the exact `source` string the
 // connector stores (GET /api/tenders?source= matches it, case-insensitively).
-// e-Procurement (Belgium) is left out while it's paused pending BOSA's legal
-// review — add it back here when it goes live.
 export const PORTAL_OPTS: { value: string; label: string }[] = [
   { value: '', label: 'All portals' },
   { value: 'TED', label: 'TED (EU)' },
   { value: 'BOAMP', label: 'BOAMP (France)' },
+  { value: 'e-Procurement', label: 'e-Procurement (Belgium)' },
   { value: 'Bekanntmachungsservice', label: 'Bekanntmachungsservice (Germany)' },
   { value: 'TenderNed', label: 'TenderNed (Netherlands)' },
   { value: 'Find a Tender', label: 'Find a Tender (UK)' },

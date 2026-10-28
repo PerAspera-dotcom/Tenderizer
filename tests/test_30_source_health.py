@@ -236,9 +236,9 @@ def test_portals_active_is_computed_not_hardcoded(tmp_path, monkeypatch):
     live = sum(1 for p in api._PORTAL_META if p["status"] == "live")
     assert stats["portals_active"] == f"{live}/{len(api._PORTAL_META)}"
     # TED, BOAMP, Bekanntmachungsservice, and all five CR-011 §4 sources
-    # (Find a Tender, Contracts Finder, CanadaBuys, TenderNed, PhilGEPS) live;
-    # only e-Procurement still paused on Belgium's own legal-review gate.
-    assert stats["portals_active"] == "8/9"
+    # (Find a Tender, Contracts Finder, CanadaBuys, TenderNed, PhilGEPS) live,
+    # plus e-Procurement since BOSA's go-ahead (2026-10-28).
+    assert stats["portals_active"] == "9/9"
 
 
 def test_every_portal_health_entry_has_a_description():

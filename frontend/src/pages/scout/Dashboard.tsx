@@ -137,7 +137,7 @@ export default function Dashboard() {
                 {(stats?.portals_active ?? '2/4').split('/')[0]}
                 <span style={{ fontSize: 20, fontWeight: 400, color: '#8892a4' }}> / {(stats?.portals_active ?? '2/4').split('/')[1]}</span>
               </div>
-              <div style={{ color: '#e3b341', fontSize: 12, marginTop: 8 }}>⚠ BE planned · DE paused</div>
+              <div style={{ color: '#8892a4', fontSize: 12, marginTop: 8 }}>live sources</div>
             </div>
             <div className="card" style={{ padding: '18px 20px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#4c5a70', textTransform: 'uppercase', marginBottom: 12 }}>Matched by CPV</div>

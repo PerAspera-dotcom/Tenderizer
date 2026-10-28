@@ -985,16 +985,14 @@ _PORTAL_META = [
     # turned out to be solvable, not a dead end — the search endpoint needs an
     # anonymous Keycloak bearer token the public frontend mints silently from
     # its own public env.config.js; CR-008's probe never carried one. The
-    # connector is built (connectors/eprocurement.py) and works. Still
-    # `paused` here, not `live`: CR-010 §4 ships it with portals.yaml's
-    # enabled:false pending BOSA's own per-portal legal review (no prohibition
-    # on automated access, unlike DTVP, but no reuse licence granted either).
+    # connector is built (connectors/eprocurement.py) and works. CR-010 §4
+    # gated it on BOSA's per-portal legal review; BOSA green-lit it
+    # 2026-10-28 — portals.yaml now ships enabled:true.
     # `name` matches the literal source string everywhere else (normalize.py,
     # run.py, portals.yaml) — the old display name here never did, so
     # get_source_health's streak/failure lookup below was silently keyed to a
     # name no source ever wrote a health row under.
-    {"name": "e-Procurement", "region": "Belgium", "status": "paused",
-     "detail": "Connector built (CR-010) — pending BOSA's per-portal legal review before go-live"},
+    {"name": "e-Procurement", "region": "Belgium", "status": "live"},
     # CR-010 preamble: DTVP itself is confirmed not integrable this way — its
     # ToS prohibits automated use, unlike e-Procurement above, so there was
     # never a connector to build against it (CR-010 doesn't reopen it).
@@ -1019,7 +1017,7 @@ _PORTAL_META = [
 _PORTAL_DESCRIPTIONS = {
     "TED": "EU official journal, above-threshold notices · API query: CPV or title keyword",
     "BOAMP": "French national bulletin, all thresholds · full-text keyword search",
-    "e-Procurement": "Belgian federal platform · CPV search (not live: legal review)",
+    "e-Procurement": "Belgian national platform, all thresholds · CPV search",
     "Bekanntmachungsservice": "German federal open data, daily eForms export · CPV or keyword, filtered locally",
     "Find a Tender": "UK above-threshold notices incl. defence (OCDS) · CPV or keyword, filtered locally",
     "Contracts Finder": "UK lower-value contracts (OCDS) · CPV or keyword, filtered locally",
