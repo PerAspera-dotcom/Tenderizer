@@ -22,12 +22,13 @@ from sqlalchemy import select, update
 
 import config
 import currency
+import filters
 import store
 from connectors import philgeps
 from schema import tenders
 
 APPLY = "--apply" in sys.argv
-floor = config.exclusions()["value_floor"]["eur"]
+floor = filters.value_floor_eur(config.exclusions(), "PhilGEPS")
 fx = currency.fetch_ecb_rates_or_fallback()
 
 conn = store.db.get_engine(store.db.configured_url())

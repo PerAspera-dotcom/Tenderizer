@@ -200,6 +200,20 @@ def test_value_above_floor_is_kept():
     assert filters.apply_filters(rec, EXCLUSIONS) is None
 
 
+def test_philgeps_uses_its_own_50k_floor():
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=60_000)
+    rec["source"] = "PhilGEPS"
+    assert filters.apply_filters(rec, EXCLUSIONS) is None
+    rec["value_eur"] = 49_999
+    assert filters.apply_filters(rec, EXCLUSIONS) == "below_value_floor"
+
+
+def test_other_sources_keep_the_global_floor():
+    rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=60_000)
+    rec["source"] = "TED"
+    assert filters.apply_filters(rec, EXCLUSIONS) == "below_value_floor"
+
+
 def test_value_absent_is_kept():
     # most notices don't disclose a value at all — don't exclude on missing data
     rec = _rec("Army field tent, qty 200", cpv_codes=["39522530"], value_eur=None)

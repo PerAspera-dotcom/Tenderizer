@@ -46,8 +46,14 @@ rental:
 # reference rates (src/currency.py) before comparing. A tender with no disclosed
 # value (most notices — disclosure is optional under EU procurement rules) is
 # kept, not excluded.
+#
+# by_source overrides the floor for one portal (keyed by the record's `source`).
+# PhilGEPS (2026-10-28): the global €200k floor excluded every Philippine tender
+# (largest seen ≈ €84k), so it gets its own €50k floor instead.
 value_floor:
   eur: 200000
+  by_source:
+    PhilGEPS: 50000
 
 # F4 (CR-001, D3 ✅ hard exclude) — any CPV division 45 (construction work) code
 # drops the notice entirely, no tent-signal override (customer confirmed). This

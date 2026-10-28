@@ -59,13 +59,22 @@ def check_value_floor(rec, exclusions, now=None):
     Reads rec['value_eur'] (pre-converted by run.py via currency.to_eur — this
     check stays I/O-free, no network here). Missing/unconvertible value is kept,
     not excluded — most notices don't disclose a value at all.
+
+    A source listed under value_floor.by_source uses its own floor instead of
+    the global one (see config/exclusions.yaml).
     """
     value_eur = rec.get("value_eur")
     if not value_eur:
         return None
-    if float(value_eur) < exclusions["value_floor"]["eur"]:
+    if float(value_eur) < value_floor_eur(exclusions, rec.get("source")):
         return "below_value_floor"
     return None
+
+
+def value_floor_eur(exclusions, source):
+    """The EUR value floor that applies to a record from `source`."""
+    cfg = exclusions["value_floor"]
+    return (cfg.get("by_source") or {}).get(source, cfg["eur"])
 
 
 def check_construction_works(rec, exclusions, now=None):
