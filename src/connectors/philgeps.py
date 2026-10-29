@@ -80,7 +80,10 @@ USER_AGENT = "Tenderizer-Scout/1.0 (+https://tender-izer.com; contact: ops@tende
 REQUEST_DELAY_SECONDS = 1.0
 DETAIL_URL = ("https://notices.philgeps.gov.ph/GEPSNONPILOT/Tender/SplashBidNoticeAbstractUI.aspx"
               "?menuIndex=3&refID={ref}&Result=3")
-_BUDGET_RE = re.compile(r"Approved Budget for the Contract:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)")
+# Negotiated/small-value notices label it "Estimated Budget for the
+# Contract" instead (found 2026-10-29 — every surfaced no-value PhilGEPS row
+# was one of these, so the floor never applied to them).
+_BUDGET_RE = re.compile(r"(?:Approved|Estimated) Budget for the Contract:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)")
 
 
 def parse_approved_budget(detail_html):
@@ -110,8 +113,10 @@ def _enrich_budgets(session, rows, keywords):
             resp = session.get(DETAIL_URL.format(ref=row["refID"]), headers={"User-Agent": USER_AGENT}, timeout=30)
             resp.raise_for_status()
             row["budgetCurrency"], row["approvedBudget"] = parse_approved_budget(resp.text)
-        except Exception:
-            pass
+            if row["approvedBudget"] is None:
+                logger.warning("PhilGEPS %s: no budget found on the abstract page", row["refID"])
+        except Exception as e:
+            logger.warning("PhilGEPS %s: budget fetch failed: %s", row["refID"], _describe(e))
         time.sleep(REQUEST_DELAY_SECONDS)
 
 _ROW_RE = re.compile(

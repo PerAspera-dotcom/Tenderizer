@@ -733,6 +733,14 @@ def test_philgeps_parse_approved_budget():
     assert philgeps.parse_approved_budget("<p>no budget here</p>") == (None, None)
 
 
+def test_philgeps_parse_estimated_budget():
+    # Negotiated purchases (live, 2026-10-29) say "Estimated", with an &nbsp;
+    # between currency and amount.
+    html = ("<td>Estimated Budget for the Contract:</td>"
+            "<td><span>PHP &nbsp; 100,000.00</span></td>")
+    assert philgeps.parse_approved_budget(html) == ("PHP", "100000.00")
+
+
 def test_philgeps_fetch_enriches_budget_only_for_keyword_rows(monkeypatch):
     page = _philgeps_page([{"ref": "1", "agency": "A", "title": "Purchase of steel pipe tent"},
                            {"ref": "2", "agency": "B", "title": "Office supplies"}])

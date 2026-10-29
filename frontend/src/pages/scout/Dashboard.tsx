@@ -80,7 +80,7 @@ export default function Dashboard() {
 
   function healthDot(s: string) {
     if (s === 'live') return <span className="dot-live" />;
-    if (s === 'paused') return <span className="dot-paused" />;
+    if (s === 'paused' || s === 'pending') return <span className="dot-paused" />;
     return <span className="dot-planned" />;
   }
 
@@ -214,6 +214,9 @@ export default function Dashboard() {
                         )}
                         {p.status === 'paused' && (
                           <span style={{ color: '#e3b341', fontSize: 11, fontWeight: 600, marginLeft: 'auto' }}>Paused</span>
+                        )}
+                        {p.status === 'pending' && (
+                          <span style={{ color: '#e3b341', fontSize: 11, fontWeight: 600, marginLeft: 'auto' }}>No runs yet</span>
                         )}
                         {p.status === 'planned' && (
                           <span style={{ color: '#4c5a70', fontSize: 11, fontWeight: 600, marginLeft: 'auto' }}>Planned</span>

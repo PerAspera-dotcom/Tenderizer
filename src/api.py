@@ -1041,6 +1041,7 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     # tenant-scoped) — CR-004 F4's source_health table replaces it as the
     # source of truth for last_result too, now tenant-scoped for real.
     conn = _db()
+    enabled = store.get_enabled_portal_names(conn, tenant_id)
     result = []
     for portal in _PORTAL_META:
         entry = dict(portal)
@@ -1048,6 +1049,17 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
         # accumulated rows (empty/zeroed for a source with no run history
         # yet, e.g. "planned"/"paused" ones that never actually fetch).
         entry.update(store.get_source_health(conn, tenant_id, portal["name"]))
+        # _PORTAL_META's "live" only says the connector ships — found
+        # 2026-10-29: e-Procurement showed "live" while switched off for
+        # every tenant and never run. Only claim live for this tenant when
+        # it's enabled here and has actually run.
+        if entry["status"] == "live":
+            if portal["name"] not in enabled:
+                entry["status"] = "paused"
+                entry["detail"] = "Switched off for this organization"
+            elif entry["last_result"] is None:
+                entry["status"] = "pending"
+                entry["detail"] = "Enabled, waiting for its first scrape run"
         result.append(entry)
     # CR-011 §1: DeepL isn't a Scout portal/connector (no CPV/region/enabled
     # toggle), but "never fail silently again" means its health belongs on

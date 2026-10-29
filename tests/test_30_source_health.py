@@ -182,6 +182,26 @@ def test_consecutive_failures_triggers_alert_at_threshold(tmp_path, monkeypatch)
     assert "3" in calls[0][0]
 
 
+def test_get_health_portal_never_run_is_pending(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    store.ensure_tenant(store.init_db(str(tmp_path / "t.db")), TEST_TENANT_ID)
+    result = api.get_health(tenant_id=TEST_TENANT_ID)
+    ted = next(p for p in result if p["name"] == "TED")
+    assert ted["status"] == "pending"
+
+
+def test_get_health_portal_disabled_for_tenant_is_paused(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
+    conn = store.init_db(str(tmp_path / "t.db"))
+    store.ensure_tenant(conn, TEST_TENANT_ID)
+    store.set_tenant_portal_enabled(conn, TEST_TENANT_ID, "e-Procurement", False)
+    store.record_source_health(conn, TEST_TENANT_ID, "e-Procurement", "2026-10-16", "ok", notices_pulled=1)
+    result = api.get_health(tenant_id=TEST_TENANT_ID)
+    ep = next(p for p in result if p["name"] == "e-Procurement")
+    assert ep["status"] == "paused"
+    assert ep["detail"] == "Switched off for this organization"
+
+
 def test_get_health_api_shape(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "DB_PATH", str(tmp_path / "t.db"))
     conn = store.init_db(str(tmp_path / "t.db"))
