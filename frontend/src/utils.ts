@@ -127,7 +127,19 @@ export const PORTAL_HOME: Record<string, string> = {
   'ePerolehan': 'https://www.eperolehan.gov.my/',
 };
 
-export const PORTAL_FALLBACK_TITLE = 'No page for this notice — opens the portal home page';
+// Attribution + disclaimer for sources whose reuse permission requires them
+// (BOSA's e-Procurement go-live, 2026-10-29). Keep the wording identical to
+// src/attribution.py, which appends it to outgoing tender emails.
+export const SOURCE_NOTICES: Record<string, { attribution: string; disclaimer: string }> = {
+  'e-Procurement': {
+    attribution: 'Source: Belgian e-Procurement platform (publicprocurement.be), FPS BOSA.',
+    disclaimer: 'Tenderizer is not affiliated with or endorsed by FPS BOSA. Notice data is '
+      + 'reproduced as published; FPS BOSA gives no guarantee as to its accuracy or '
+      + 'currency. Always check the original publication before acting on it.',
+  },
+};
+
+export const PORTAL_FALLBACK_TITLE ='No page for this notice — opens the portal home page';
 
 // The notice's own page, else its portal's home page (fallback: true), else null.
 export function tenderLink(t: { url?: string | null; source?: string | null }): { href: string; fallback: boolean } | null {

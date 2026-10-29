@@ -5,6 +5,7 @@ import { formatDate, countryFlag, displayTagLine, displayDescription, hasTransla
 import NoticeText from '../../components/NoticeText';
 import NoticeDetails from '../../components/NoticeDetails';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
+import SourceNotice from '../../components/SourceNotice';
 
 // CR-006 D4: reinstate reuses the same state-transition endpoint/states the
 // New/Review Queue views use — no parallel path.
@@ -130,6 +131,7 @@ export default function DismissedTenders() {
                     </span>
                   </div>
                 </div>
+                <SourceNotice source={selected.source} />
                 <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 20, lineHeight: 1.3 }}>
                   {displayTagLine(selected, false)}
                 </h2>

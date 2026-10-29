@@ -11,6 +11,7 @@ about what counts as closing soon.
 """
 from datetime import date, datetime, timezone
 
+import attribution
 import store
 
 URGENT_DAYS = 7
@@ -61,4 +62,8 @@ def build_daily_digest(conn, tenant_id, today=None):
             lines.append(f"- {flag} {e['tag_line']} ({e['pub_number']}) — {days} day{'s' if days != 1 else ''} left")
         sections.append(f"Closing soon ({len(closing_soon)}):\n" + "\n".join(lines))
 
+    footer = attribution.email_footer([r["source"] for r in new_tenders]
+                                      + [e.get("source") or "" for _, e in closing_soon])
+    if footer:
+        sections.append(footer)
     return "\n\n".join(sections)

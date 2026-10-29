@@ -21,7 +21,7 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts
+import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution
 import run as engine
 import currency
 from schema import RELEVANCE_REASON_CATEGORIES
@@ -859,6 +859,9 @@ def _send_forward_email(tenant_id, pub_number, to_email, message, sender_name):
         lines.append(f"Deadline: {tender['deadline'][:10]}")
     if message:
         lines += ["", message]
+    footer = attribution.email_footer([tender["source"]] if tender else [])
+    if footer:
+        lines += ["", footer]
     alerts.send_tenant_email(to_email, f"Tenderizer — {sender_name} sent you a reminder", "\n".join(lines))
 
 
