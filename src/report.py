@@ -7,6 +7,8 @@ Rows are sorted by deadline (empty deadlines last). The Health sheet shows which
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+import attribution
+
 # Supply first (primary interest); Works/Training/Other ensure nothing is dropped.
 SECTIONS = ["Supply", "Services", "Works", "Training", "Other"]
 
@@ -83,5 +85,15 @@ def build_report(records, health, out_path):
     for ri, (src, status) in enumerate(health.items(), start=2):
         hs.cell(row=ri, column=1, value=src)
         hs.cell(row=ri, column=2, value=status)
+    # BOSA's e-Procurement conditions travel with the file too (see attribution.py).
+    noticed = sorted({r.get("source") for r in records} & set(attribution.SOURCE_NOTICES))
+    if noticed:
+        ns = wb.create_sheet("Sources")
+        ns.column_dimensions["A"].width = 120
+        row = 1
+        for src in noticed:
+            ns.cell(row=row, column=1, value=attribution.SOURCE_NOTICES[src]["attribution"]).font = Font(bold=True)
+            ns.cell(row=row + 1, column=1, value=attribution.SOURCE_NOTICES[src]["disclaimer"]).alignment = Alignment(wrap_text=True)
+            row += 3
     wb.save(out_path)
     return out_path

@@ -26,3 +26,14 @@ def test_digest_has_no_notice_without_belgian_tender(tmp_path):
     store.upsert(conn, TEST_TENANT_ID, _tender("TED-1"))
     body = digest.build_daily_digest(conn, TEST_TENANT_ID, today=TODAY)
     assert "FPS BOSA" not in body
+
+
+def test_report_adds_sources_sheet_only_with_belgian_tender(tmp_path):
+    from openpyxl import load_workbook
+    import report
+    rec = {**_tender("BE-1"), "category": "Supply"}
+    path = report.build_report([{**rec, "source": "e-Procurement"}], {}, str(tmp_path / "be.xlsx"))
+    ws = load_workbook(path)["Sources"]
+    assert "publicprocurement.be" in ws["A1"].value
+    path = report.build_report([rec], {}, str(tmp_path / "ted.xlsx"))
+    assert "Sources" not in load_workbook(path).sheetnames
