@@ -27,6 +27,7 @@ import requests
 from dotenv import load_dotenv
 
 import alerts
+import object_storage
 import translate
 
 load_dotenv()
@@ -301,88 +302,37 @@ def check_quota(document_count, api_key=None, included_allowance=None, reserve=N
     }
 
 
-# ── S3-compatible object storage ─────────────────────────────────────────────
-# Same one-endpoint-covers-AWS/B2/GCS approach as backup.py's _s3_client, with
-# its own bucket-or-prefix — DOCUMENTS_S3_BUCKET falls back to BACKUP_S3_BUCKET
-# (a "documents/" key prefix keeps the two apart in a shared bucket) so a
-# deployment doesn't need a second full credential set unless it wants one.
-
-def _s3_client():
-    bucket = os.getenv("DOCUMENTS_S3_BUCKET") or os.getenv("BACKUP_S3_BUCKET")
-    if not bucket:
-        return None, None
-    import boto3
-    client = boto3.client(
-        "s3",
-        endpoint_url=os.getenv("DOCUMENTS_S3_ENDPOINT_URL") or os.getenv("BACKUP_S3_ENDPOINT_URL") or None,
-        aws_access_key_id=(os.getenv("DOCUMENTS_S3_ACCESS_KEY_ID")
-                            or os.getenv("BACKUP_S3_ACCESS_KEY_ID") or None),
-        aws_secret_access_key=(os.getenv("DOCUMENTS_S3_SECRET_ACCESS_KEY")
-                                or os.getenv("BACKUP_S3_SECRET_ACCESS_KEY") or None),
-        region_name=os.getenv("DOCUMENTS_S3_REGION") or os.getenv("BACKUP_S3_REGION") or None,
-    )
-    return client, bucket
-
+# ── Object storage ───────────────────────────────────────────────────────────
+# CR-013 §2: delegated to object_storage — one bucket (DOCUMENTS_S3_BUCKET)
+# for every document area, filesystem fallback on the persistent volume when
+# unset. The old fallback to BACKUP_S3_BUCKET and its credentials is gone on
+# purpose: tender documents must not land in the database-backup bucket under
+# the backup credentials. Function names kept so callers and tests stay put.
 
 class StorageNotConfigured(RuntimeError):
-    pass
-
-
-# Fallback when no S3 bucket is configured: the backend's persistent Railway
-# volume, mounted at /app/data (attached 2026-10-17 — before that this
-# directory was wiped on every deploy, which is why S3 was the only option).
-# Production had no DOCUMENTS_S3_*/BACKUP_S3_* variables at all, so every
-# Translate upload failed with 503. Keys ("documents/{tenant}/...") map 1:1
-# onto paths under this root.
-LOCAL_STORAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent / "data"
-
-
-def _local_path(key):
-    root = LOCAL_STORAGE_ROOT.resolve()
-    path = (root / key).resolve()
-    if root not in path.parents:
-        raise ValueError(f"storage key escapes the storage root: {key!r}")
-    return path
+    """Kept for callers' except-clauses; storage always has a filesystem
+    fallback now, so nothing raises this any more."""
 
 
 def upload_to_s3(key, content_bytes):
-    client, bucket = _s3_client()
-    if client is None:
-        path = _local_path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content_bytes)
-        return
-    client.put_object(Bucket=bucket, Key=key, Body=content_bytes)
+    object_storage.put(key, content_bytes)
 
 
 def download_from_s3(key):
-    client, bucket = _s3_client()
-    if client is None:
-        return _local_path(key).read_bytes()
-    obj = client.get_object(Bucket=bucket, Key=key)
-    return obj["Body"].read()
+    return object_storage.get(key)
 
 
 def delete_from_s3(key):
-    """CR-012 §2 delete: removes our own stored copy. Idempotent on both
-    backends (S3's DeleteObject, and missing_ok locally), so this is safe to
-    call even if a prior delete partially completed.
-    """
-    client, bucket = _s3_client()
-    if client is None:
-        _local_path(key).unlink(missing_ok=True)
-        return
-    client.delete_object(Bucket=bucket, Key=key)
+    """Idempotent on both backends, so safe to call after a partial delete."""
+    object_storage.delete(key)
 
 
 def storage_key(tenant_id, key_id, version, filename):
-    """documents/{tenant}/{key_id}/{original|translated}{ext} — `key_id` is
-    typically the row's content hash (known before the DB insert, for the
-    original) or its id (for the translated result, written after DeepL
-    hands back a document). Mirrors the uuid-based, path-traversal-safe
-    convention `documents.storage_path` already uses, but as an S3 key
-    rather than a filesystem path.
+    """{tenant}/translations/_/{key_id}-{original|translated}{ext} — CR-013's
+    tenant-first key layout. `key_id` is a fresh uuid (original) or the row
+    id (translated result). Pre-CR-013 rows keep their old
+    "documents/{tenant}/{key_id}/{version}{ext}" keys until storage-migrate
+    renames them; object_storage still resolves those.
     """
-    import pathlib
     ext = pathlib.Path(filename or "").suffix[:10]
-    return f"documents/{tenant_id}/{key_id}/{version}{ext}"
+    return f"{int(tenant_id)}/translations/_/{key_id}-{version}{ext}"

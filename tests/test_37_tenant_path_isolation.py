@@ -45,10 +45,10 @@ def test_vault_upload_storage_path_is_scoped_to_authenticated_tenant(tmp_path, m
     background = BackgroundTasks()
     result = asyncio.run(api.ingest_vault_document(background, file=_file(), tenant_id=TEST_TENANT_ID))
     doc = store.get_vault_document(api._db(), TEST_TENANT_ID, result["id"])
-    storage_path = doc["storage_path"]
+    key = doc["object_key"]  # CR-013: tenant is the key's first segment
 
-    assert str(vault_dir / str(TEST_TENANT_ID)) in storage_path
-    assert str(vault_dir / str(OTHER_TENANT_ID)) not in storage_path
+    assert key.startswith(f"{TEST_TENANT_ID}/vault/")
+    assert not key.startswith(f"{OTHER_TENANT_ID}/")
 
 
 def test_composer_upload_storage_path_is_scoped_to_authenticated_tenant_and_pub_number(tmp_path, monkeypatch):
@@ -63,10 +63,10 @@ def test_composer_upload_storage_path_is_scoped_to_authenticated_tenant_and_pub_
     result = asyncio.run(api.upload_composer_document(
         "P-1", background, file=_file(name="sow_tender.pdf"), role=None, tenant_id=TEST_TENANT_ID))
     doc = store.get_composer_document(conn, TEST_TENANT_ID, result["id"])
-    storage_path = doc["storage_path"]
+    key = doc["object_key"]
 
-    assert str(composer_dir / str(TEST_TENANT_ID) / "P-1") in storage_path
-    assert str(composer_dir / str(OTHER_TENANT_ID)) not in storage_path
+    assert key.startswith(f"{TEST_TENANT_ID}/composer/P-1/")
+    assert not key.startswith(f"{OTHER_TENANT_ID}/")
 
 
 # ── Chroma collection paths ──────────────────────────────────────────────────

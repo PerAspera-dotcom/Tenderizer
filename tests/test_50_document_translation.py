@@ -229,32 +229,47 @@ def test_check_quota_prefers_a_smaller_real_character_limit(monkeypatch):
 
 # ── S3 storage helpers (mocked — no real endpoint in tests) ──────────────────
 
-def test_storage_falls_back_to_local_volume_when_no_bucket_env(tmp_path, monkeypatch):
-    # Production had no S3 variables, so every upload 503'd; the persistent
-    # volume is the fallback now.
+def test_storage_falls_back_to_local_volume_when_no_bucket_env(monkeypatch):
+    # CR-013: delegated to object_storage, filesystem mode when
+    # DOCUMENTS_S3_BUCKET is unset (conftest points its root at a temp dir).
+    import object_storage
     monkeypatch.delenv("DOCUMENTS_S3_BUCKET", raising=False)
-    monkeypatch.delenv("BACKUP_S3_BUCKET", raising=False)
-    monkeypatch.setattr(translate_document, "LOCAL_STORAGE_ROOT", tmp_path)
-    key = "documents/1/abc/original.docx"
+    key = "1/translations/_/abc-original.docx"
     translate_document.upload_to_s3(key, b"data")
-    assert (tmp_path / key).read_bytes() == b"data"
+    assert object_storage.local_path(key).read_bytes() == b"data"
     assert translate_document.download_from_s3(key) == b"data"
     translate_document.delete_from_s3(key)
-    assert not (tmp_path / key).exists()
+    assert not object_storage.local_path(key).exists()
     translate_document.delete_from_s3(key)  # idempotent
 
 
-def test_local_storage_rejects_keys_escaping_the_root(tmp_path, monkeypatch):
+def test_storage_no_longer_falls_back_to_the_backup_bucket(monkeypatch):
+    # CR-013: documents must never land in the database-backup bucket.
+    import object_storage
     monkeypatch.delenv("DOCUMENTS_S3_BUCKET", raising=False)
-    monkeypatch.delenv("BACKUP_S3_BUCKET", raising=False)
-    monkeypatch.setattr(translate_document, "LOCAL_STORAGE_ROOT", tmp_path)
+    monkeypatch.setenv("BACKUP_S3_BUCKET", "backups")
+    assert object_storage.configured() is False
+
+
+def test_legacy_translation_keys_still_resolve_locally(monkeypatch):
+    import object_storage
+    legacy = "documents/1/abc/original.docx"
+    path = object_storage.local_path(legacy)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"old")
+    assert translate_document.download_from_s3(legacy) == b"old"
+    assert path.parent.parent.parent.parent == object_storage.LEGACY_ROOT.resolve()
+
+
+def test_local_storage_rejects_keys_escaping_the_root(monkeypatch):
+    monkeypatch.delenv("DOCUMENTS_S3_BUCKET", raising=False)
     with pytest.raises(ValueError):
         translate_document.upload_to_s3("../../etc/evil", b"x")
 
 
-def test_storage_key_uses_content_hash_or_id_and_extension():
+def test_storage_key_is_tenant_first_with_id_and_extension():
     key = translate_document.storage_key(1, "abc123", "original", "SOW.pdf")
-    assert key == "documents/1/abc123/original.pdf"
+    assert key == "1/translations/_/abc123-original.pdf"
 
 
 # ── In-memory fake S3 used by the store/API sections below ──────────────────
@@ -399,7 +414,7 @@ def test_upload_endpoint_happy_path(tmp_path, monkeypatch, fake_s3):
     assert result["status"] == "queued"
     assert "attached_tenders" in result
     assert len(background.tasks) == 1  # queued, not run inline
-    assert "documents/" in list(fake_s3.keys())[0]
+    assert list(fake_s3.keys())[0].startswith("1/translations/_/")
 
 
 def test_upload_endpoint_refused_when_quota_guard_says_no(tmp_path, monkeypatch, fake_s3):

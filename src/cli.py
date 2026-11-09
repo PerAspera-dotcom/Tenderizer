@@ -40,9 +40,46 @@ def _restore(args):
     print(result)
 
 
+def _storage_check(args):
+    import storage_migration
+    if not storage_migration.check():
+        sys.exit(1)
+
+
+def _storage_migrate(args):
+    import store
+    import storage_migration
+    engine = store.init_db("data/tenders.db")
+    stats, missing = storage_migration.migrate(engine, dry_run=not args.yes)
+    print("DRY RUN — nothing written" if not args.yes else "Migration pass complete")
+    for k, v in sorted(stats.items()):
+        print(f"  {k}: {v}")
+    print(f"  rows whose file is missing: {len(missing)}")
+    if not args.yes:
+        print("Re-run with --yes to copy.")
+
+
+def _storage_restore_local(args):
+    import storage_migration
+    stats = storage_migration.restore_local(dry_run=not args.yes)
+    print("DRY RUN — nothing written" if not args.yes else "Restore pass complete")
+    for k, v in sorted(stats.items()):
+        print(f"  {k}: {v}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="tenderizer")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    # CR-013 §2 — object-storage cutover (see storage_migration.py's docstring)
+    sub.add_parser("storage-check", help="Verify the documents bucket credentials end to end."
+                   ).set_defaults(func=_storage_check)
+    mig = sub.add_parser("storage-migrate", help="Copy on-disk documents into the bucket (dry run by default).")
+    mig.add_argument("--yes", action="store_true", help="Actually copy and update rows.")
+    mig.set_defaults(func=_storage_migrate)
+    rest = sub.add_parser("storage-restore-local", help="Rollback: copy bucket objects back to disk.")
+    rest.add_argument("--yes", action="store_true", help="Actually download.")
+    rest.set_defaults(func=_storage_restore_local)
 
     sub.add_parser("run-now", help="Run the scrape/match/filter pipeline immediately.").set_defaults(func=_run_now)
 

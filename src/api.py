@@ -4,7 +4,7 @@ No matching, normalisation, or fetching logic lives here.
 Reads via store.*, config.*; only POST /api/run triggers the engine.
 """
 import sys, pathlib, json, logging, os, uuid, hashlib, tempfile, time, io, zipfile, hmac
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -22,13 +22,16 @@ if _sentry_dsn:
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
 import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution
+import object_storage
 import run as engine
 import currency
 from schema import RELEVANCE_REASON_CATEGORIES
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, UploadFile, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, File, Form, Header, UploadFile, Request
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile as _StarletteUploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from typing import Optional
@@ -56,10 +59,13 @@ def _last_run_path(tenant_id: int) -> str:
     """
     return str(ROOT / "data" / f"last_run_{tenant_id}.json")
 
-# CR-002 E: per-tenant upload root, tenant_id in the path itself as a second
-# layer of isolation beyond the DB-row tenant check in get_document().
+# Pre-CR-013 on-disk upload roots. New uploads go through object_storage
+# (keys, not paths); these stay only as the source directories that
+# `cli storage-migrate` copies from and that legacy rows' storage_path
+# values still point into.
 UPLOAD_DIR = ROOT / "data" / "uploads"
-MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB — a minimal-slice sanity cap, not a product decision
+# CR-013 §2: 100 MB per file (was a 20 MB "minimal-slice sanity cap").
+MAX_UPLOAD_SIZE = object_storage.MAX_UPLOAD_SIZE
 
 DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
 
@@ -1546,8 +1552,148 @@ def _find_tender(conn, tenant_id, pub_number):
     return None
 
 
+# ── CR-013 §2: object storage — shared upload / download plumbing ──────────
+# Two upload routes, converging on the same endpoint:
+#   * S3 mode: POST /api/uploads/presign -> the browser POSTs the file straight
+#     to the bucket -> the normal upload endpoint is called with `object_key`
+#     instead of `file`, so large packs never stream through this process.
+#   * Filesystem mode (DOCUMENTS_S3_BUCKET unset: dev, tests, rollback): the
+#     presign call answers {"mode": "direct"} and the browser sends `file`
+#     multipart exactly as before.
+# Downloads: a client sending `X-Download-Mode: link` gets a short-TTL
+# presigned GET URL back (DOWNLOAD_LINK_MEDIA_TYPE) when the object is in the
+# bucket; otherwise the bytes are served as before.
+
+DOWNLOAD_LINK_MEDIA_TYPE = "application/vnd.tenderizer.download-link+json"
+
+# Areas a client may request a presigned upload for. composer_output is
+# server-written only. Caps are read at call time (monkeypatchable).
+_UPLOADABLE_AREAS = ("tender_documents", "vault", "composer", "composer_style", "translations")
+
+
+def _upload_limit(area):
+    if area == "translations":
+        return translate_document.MAX_DOCUMENT_SIZE_BYTES  # DeepL's own per-document limit
+    return MAX_UPLOAD_SIZE
+
+
+def _form_str(value):
+    """A Form()/Header() param's real value. Called directly (tests, other
+    handlers), an unset param is FastAPI's FieldInfo default, not None."""
+    return value if isinstance(value, str) and value else None
+
+
+def _receive_upload(tenant_id, area, pub_number, file, object_key, filename, content_type,
+                    max_size=None):
+    """Lands one upload in object storage and returns
+    {key, filename, content_type, size}. Either `file` (multipart, stored
+    here under a fresh server-generated key) or `object_key` (already
+    uploaded via a presigned POST — only accepted when it sits under this
+    tenant's own prefix for this area/tender, so one tenant can never claim
+    another's object). Blocking: call through run_in_threadpool from async
+    handlers.
+    """
+    object_key = _form_str(object_key)
+    max_size = max_size or _upload_limit(area)
+    if isinstance(file, _StarletteUploadFile):
+        content = file.file.read()
+        if len(content) > max_size:
+            raise HTTPException(413, "File too large")
+        name = file.filename or "upload"
+        key = object_storage.new_key(tenant_id, area, name, pub_number=pub_number)
+        object_storage.put(key, content, content_type=file.content_type)
+        return {"key": key, "filename": name, "content_type": file.content_type or "",
+                "size": len(content)}
+    if not object_key:
+        raise HTTPException(422, "Either a file or an object_key is required")
+    if not object_storage.key_belongs_to(object_key, tenant_id, area, pub_number):
+        raise HTTPException(403, "Forbidden")
+    size = object_storage.size(object_key)
+    if size is None:
+        raise HTTPException(422, "Upload not found in storage — upload the file first")
+    if size > max_size:
+        object_storage.delete(object_key)
+        raise HTTPException(413, "File too large")
+    name = _form_str(filename) or pathlib.PurePath(object_key).name
+    return {"key": object_key, "filename": name, "content_type": _form_str(content_type) or "",
+            "size": size}
+
+
+def _stored_row(value):
+    """Row-shaped ref for object_storage.row_* from a bare stored value:
+    a CR-013 key (relative) or a legacy absolute filesystem path."""
+    if value and os.path.isabs(value):
+        return {"object_key": None, "storage_path": value}
+    return {"object_key": value or None, "storage_path": ""}
+
+
+@contextmanager
+def _stored_file(ref):
+    """A local path for a stored file. `ref` is a row dict (object_key /
+    storage_path) or, from older callers, a plain path string — passed
+    through untouched, exactly as before CR-013."""
+    if isinstance(ref, dict):
+        with object_storage.row_local_copy(ref) as path:
+            yield path
+    else:
+        yield ref
+
+
+def _stored_download(row, filename, media_type, download_mode=None):
+    media_type = media_type or "application/octet-stream"
+    if _form_str(download_mode) == "link":
+        url = object_storage.row_presigned_get(row, filename, media_type)
+        if url:
+            return JSONResponse({"url": url, "expires_in": object_storage.DOWNLOAD_URL_TTL_SECONDS},
+                                media_type=DOWNLOAD_LINK_MEDIA_TYPE)
+    local = object_storage.row_local_file(row)
+    if local:
+        return FileResponse(local, filename=filename, media_type=media_type)
+    try:
+        content = object_storage.row_read(row)
+    except object_storage.ObjectNotFound:
+        raise HTTPException(404, "Document not found")
+    return Response(content=content, media_type=media_type,
+                    headers={"Content-Disposition": object_storage.content_disposition(filename)})
+
+
+class UploadPresignBody(BaseModel):
+    area:         str
+    filename:     str
+    content_type: Optional[str] = None
+    size:         Optional[int] = None
+    pub_number:   Optional[str] = None
+
+
+@app.post("/api/uploads/presign")
+def presign_upload(body: UploadPresignBody, tenant_id: int = Depends(get_current_tenant_id)):
+    if body.area not in _UPLOADABLE_AREAS:
+        raise HTTPException(422, f"area must be one of {sorted(_UPLOADABLE_AREAS)}")
+    limit = _upload_limit(body.area)
+    if body.size is not None and body.size > limit:
+        raise HTTPException(413, f"File too large — the limit is {limit // (1024 * 1024)} MB")
+    pub_number = None
+    if body.area not in object_storage.TENANT_WIDE_AREAS:
+        if not body.pub_number:
+            raise HTTPException(422, "pub_number is required for this area")
+        conn = _db()
+        if _find_tender(conn, tenant_id, body.pub_number) is None:
+            if store.pub_number_exists_for_other_tenant(conn, tenant_id, body.pub_number):
+                raise HTTPException(403, "Forbidden")
+            raise HTTPException(404, "Tender not found")
+        pub_number = body.pub_number
+    if not object_storage.configured():
+        return {"mode": "direct", "max_size": limit}
+    key = object_storage.new_key(tenant_id, body.area, body.filename, pub_number=pub_number)
+    post = object_storage.presigned_post(key, body.content_type, max_size=limit)
+    return {"mode": "s3", "object_key": key, "url": post["url"], "fields": post["fields"],
+            "max_size": limit, "expires_in": object_storage.UPLOAD_URL_TTL_SECONDS}
+
+
 @app.post("/api/tenders/{pub_number}/documents")
-async def upload_document(pub_number: str, file: UploadFile = File(...),
+async def upload_document(pub_number: str, file: Optional[UploadFile] = File(None),
+                           object_key: Optional[str] = Form(None), filename: Optional[str] = Form(None),
+                           content_type: Optional[str] = Form(None),
                            tenant_id: int = Depends(get_current_tenant_id)):
     conn = _db()
     tender = _find_tender(conn, tenant_id, pub_number)
@@ -1558,21 +1704,10 @@ async def upload_document(pub_number: str, file: UploadFile = File(...),
     if tender.get("status") != "shortlisted":
         raise HTTPException(409, "Documents can only be uploaded for shortlisted tenders")
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(413, "File too large")
-
-    tenant_dir = UPLOAD_DIR / str(tenant_id) / pub_number
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    # Server-generated name — the user-supplied filename is never used as a
-    # path component (see schema.py's documents comment).
-    ext = pathlib.Path(file.filename or "").suffix[:10]
-    stored_name = f"{uuid.uuid4().hex}{ext}"
-    storage_path = tenant_dir / stored_name
-    storage_path.write_bytes(content)
-
-    doc_id = store.add_document(conn, tenant_id, pub_number, file.filename or stored_name,
-                                 file.content_type, len(content), str(storage_path))
+    up = await run_in_threadpool(_receive_upload, tenant_id, "tender_documents", pub_number,
+                                 file, object_key, filename, content_type)
+    doc_id = store.add_document(conn, tenant_id, pub_number, up["filename"], up["content_type"],
+                                 up["size"], "", object_key=up["key"])
     doc = store.get_document(conn, tenant_id, doc_id)
     return {"id": doc_id, "filename": doc["filename"], "content_type": doc["content_type"],
             "size": doc["size"], "uploaded_at": doc["uploaded_at"]}
@@ -1589,14 +1724,12 @@ def list_documents(pub_number: str, tenant_id: int = Depends(get_current_tenant_
 
 
 @app.get("/api/documents/{document_id}")
-def download_document(document_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+def download_document(document_id: int, x_download_mode: Optional[str] = Header(None),
+                      tenant_id: int = Depends(get_current_tenant_id)):
     doc = store.get_document(_db(), tenant_id, document_id)
-    if doc is None:
+    if doc is None or not object_storage.row_exists(doc):
         raise HTTPException(404, "Document not found")
-    if not os.path.exists(doc["storage_path"]):
-        raise HTTPException(404, "Document not found")
-    return FileResponse(doc["storage_path"], filename=doc["filename"],
-                         media_type=doc["content_type"] or "application/octet-stream")
+    return _stored_download(doc, doc["filename"], doc["content_type"], x_download_mode)
 
 
 # ── Translated documents (Scout translate/attach/library) ───────────────────
@@ -1707,8 +1840,11 @@ def get_translation_quota(document_count: int = 1, tenant_id: int = Depends(get_
 
 
 @app.post("/api/translated-documents")
-def upload_translated_document(background: BackgroundTasks, file: UploadFile = File(...),
+def upload_translated_document(background: BackgroundTasks, file: Optional[UploadFile] = File(None),
                                       source_lang: Optional[str] = Form(None),
+                                      object_key: Optional[str] = Form(None),
+                                      filename: Optional[str] = Form(None),
+                                      content_type: Optional[str] = Form(None),
                                       identity: Identity = Depends(get_current_identity)):
     """CR-012 §2: target is always English (EN-GB) now — no client-supplied
     target_lang any more (the "Out of scope: target languages other than
@@ -1722,15 +1858,37 @@ def upload_translated_document(background: BackgroundTasks, file: UploadFile = F
     a file DeepL itself could accept.
     """
     tenant_id = identity.tenant_id
+    source_lang = _form_str(source_lang)
+    object_key = _form_str(object_key)
     # Sync `def`, not `async def`: everything below (S3 via boto3, DeepL via
     # requests, PDF/DOCX text extraction) blocks, and in an async handler
     # that stalled the event loop — every other request — for the whole
     # upload. FastAPI runs a sync handler in its threadpool instead.
-    content = file.file.read()
+    if isinstance(file, _StarletteUploadFile):
+        content = file.file.read()
+        upload_name, upload_type = file.filename, file.content_type
+    elif object_key:
+        # CR-013 §2: already in the bucket via a presigned POST. DeepL still
+        # needs the bytes, so they're read back here — server-to-bucket, not
+        # through the user's connection.
+        if not object_storage.key_belongs_to(object_key, tenant_id, "translations"):
+            raise HTTPException(403, "Forbidden")
+        try:
+            content = object_storage.get(object_key)
+        except object_storage.ObjectNotFound:
+            raise HTTPException(422, "Upload not found in storage — upload the file first")
+        upload_name = _form_str(filename) or pathlib.PurePath(object_key).name
+        upload_type = _form_str(content_type)
+    else:
+        raise HTTPException(422, "Either a file or an object_key is required")
     if len(content) > translate_document.MAX_DOCUMENT_SIZE_BYTES:
+        if object_key:
+            object_storage.delete(object_key)
         raise HTTPException(413, "File too large — DeepL's limit on this plan is 30 MB per document")
-    ext = pathlib.Path(file.filename or "").suffix.lower()
+    ext = pathlib.Path(upload_name or "").suffix.lower()
     if ext not in translate_document.ACCEPTED_EXTENSIONS:
+        if object_key:
+            object_storage.delete(object_key)
         raise HTTPException(422, f"Unsupported file type {ext or '(none)'} — "
                              f"accepted: {', '.join(sorted(translate_document.ACCEPTED_EXTENSIONS))}")
 
@@ -1739,14 +1897,17 @@ def upload_translated_document(background: BackgroundTasks, file: UploadFile = F
         raise HTTPException(409, quota["reason"] or "This upload would breach the DeepL quota reserve")
 
     content_hash = hashlib.sha256(content).hexdigest()
-    # A fresh uuid per upload, not the content hash: re-uploading the same
-    # file used to share one S3 object between two jobs, so deleting (or
-    # retention-purging) either one broke download/retry on the other.
-    original_key = translate_document.storage_key(tenant_id, uuid.uuid4().hex, "original", file.filename)
-    try:
-        translate_document.upload_to_s3(original_key, content)
-    except translate_document.StorageNotConfigured as e:
-        raise HTTPException(503, str(e))
+    if object_key:
+        original_key = object_key
+    else:
+        # A fresh uuid per upload, not the content hash: re-uploading the same
+        # file used to share one S3 object between two jobs, so deleting (or
+        # retention-purging) either one broke download/retry on the other.
+        original_key = translate_document.storage_key(tenant_id, uuid.uuid4().hex, "original", upload_name)
+        try:
+            translate_document.upload_to_s3(original_key, content)
+        except translate_document.StorageNotConfigured as e:
+            raise HTTPException(503, str(e))
 
     conn = _db()
 
@@ -1758,26 +1919,26 @@ def upload_translated_document(background: BackgroundTasks, file: UploadFile = F
         tmp.write(content)
         tmp_path = tmp.name
     try:
-        already_english = translate_document.detect_already_english(tmp_path, file.content_type)
+        already_english = translate_document.detect_already_english(tmp_path, upload_type)
     finally:
         os.unlink(tmp_path)
 
     if already_english:
         doc_id = store.create_translated_document(
-            conn, tenant_id, file.filename or "document", file.content_type, len(content), original_key,
+            conn, tenant_id, upload_name or "document", upload_type, len(content), original_key,
             content_hash, "eng", translate_document.TARGET_LANG, None, None, identity.account_name)
         store.update_translated_document_status(conn, tenant_id, doc_id, "already_english")
         doc = store.get_translated_document(conn, tenant_id, doc_id)
         return _public_translated_document(doc, attached_tenders=[])
 
     deepl_document_id, deepl_document_key, err = translate_document.upload_document(
-        content, file.filename or "document", translate_document.TARGET_LANG, source_lang=source_lang)
+        content, upload_name or "document", translate_document.TARGET_LANG, source_lang=source_lang)
     if err:
         status_code = 503 if "not configured" in err else 422
         raise HTTPException(status_code, f"DeepL could not accept this document: {err}")
 
     doc_id = store.create_translated_document(
-        conn, tenant_id, file.filename or "document", file.content_type, len(content), original_key,
+        conn, tenant_id, upload_name or "document", upload_type, len(content), original_key,
         content_hash, source_lang, translate_document.TARGET_LANG, deepl_document_id, deepl_document_key,
         identity.account_name)
     background.add_task(_process_translation, tenant_id, doc_id)
@@ -1922,17 +2083,13 @@ def save_translated_document_to_vault(document_id: int, background: BackgroundTa
         logging.exception(f"save-to-vault: could not read stored files for translated document {document_id}")
         raise HTTPException(502, "Could not read the stored files for this document — try again")
 
-    tenant_dir = VAULT_UPLOAD_DIR / str(tenant_id)
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    ext = pathlib.Path(doc["filename"]).suffix
-
     def _save_one(filename, content):
-        stored_name = f"{uuid.uuid4().hex}{ext}"
-        storage_path = tenant_dir / stored_name
-        storage_path.write_bytes(content)
+        key = object_storage.new_key(tenant_id, "vault", filename)
+        object_storage.put(key, content, content_type=doc["content_type"])
         vault_doc_id = store.add_vault_document(conn, tenant_id, filename, doc["content_type"],
-                                                  len(content), str(storage_path))
-        background.add_task(_run_vault_processing, tenant_id, vault_doc_id, str(storage_path), doc["content_type"])
+                                                  len(content), "", object_key=key)
+        background.add_task(_run_vault_processing, tenant_id, vault_doc_id,
+                            {"object_key": key, "storage_path": ""}, doc["content_type"])
         return vault_doc_id
 
     saved_ids = [_save_one(doc["filename"], original_bytes)]
@@ -1960,6 +2117,7 @@ def get_translated_document(document_id: int, tenant_id: int = Depends(get_curre
 
 @app.get("/api/translated-documents/{document_id}/download")
 def download_translated_document(document_id: int, version: str = "translated",
+                                  x_download_mode: Optional[str] = Header(None),
                                   tenant_id: int = Depends(get_current_tenant_id)):
     if version not in ("original", "translated"):
         raise HTTPException(422, "version must be 'original' or 'translated'")
@@ -1969,13 +2127,18 @@ def download_translated_document(document_id: int, version: str = "translated",
     key = doc["original_storage_key"] if version == "original" else doc["translated_storage_key"]
     if not key:
         raise HTTPException(404, "That version isn't available yet")
+    name = doc["filename"] if version == "original" else _translated_filename(doc["filename"])
+    if _form_str(x_download_mode) == "link":
+        return _stored_download({"object_key": key, "storage_path": ""}, name, doc["content_type"],
+                                x_download_mode)
     try:
         content = translate_document.download_from_s3(key)
     except translate_document.StorageNotConfigured as e:
         raise HTTPException(503, str(e))
+    except object_storage.ObjectNotFound:
+        raise HTTPException(404, "Document not found")
     return Response(content=content, media_type=doc["content_type"] or "application/octet-stream",
-                     headers={"Content-Disposition": _content_disposition(
-                         doc["filename"] if version == "original" else _translated_filename(doc["filename"]))})
+                     headers={"Content-Disposition": _content_disposition(name)})
 
 
 @app.post("/api/translated-documents/{document_id}/attach/{pub_number}")
@@ -2040,12 +2203,14 @@ def attach_translated_document_to_group(document_id: int, pub_number: str,
 VAULT_UPLOAD_DIR = ROOT / "data" / "vault_uploads"
 
 
-def _run_vault_processing(tenant_id, doc_id, path, content_type):
+def _run_vault_processing(tenant_id, doc_id, ref, content_type):
+    """`ref`: the stored row ({object_key, storage_path}) or a legacy path."""
     conn = _db()
     hints = store.get_vault_rules(conn, tenant_id)["hints"]
     threshold = store.get_vault_settings(conn, tenant_id)["confidence_threshold"]
-    result = vault.process_upload(tenant_id, doc_id, path, content_type,
-                                   extra_hints=hints, confidence_threshold=threshold)
+    with _stored_file(ref) as path:
+        result = vault.process_upload(tenant_id, doc_id, path, content_type,
+                                       extra_hints=hints, confidence_threshold=threshold)
     store.update_vault_document_metadata(
         _db(), tenant_id, doc_id, doc_type=result["doc_type"], metadata=result["metadata"],
         cpv_codes=result["cpv_codes"], confidence=result["confidence"],
@@ -2054,23 +2219,17 @@ def _run_vault_processing(tenant_id, doc_id, path, content_type):
 
 
 @app.post("/api/vault/ingest")
-async def ingest_vault_document(background: BackgroundTasks, file: UploadFile = File(...),
+async def ingest_vault_document(background: BackgroundTasks, file: Optional[UploadFile] = File(None),
+                                 object_key: Optional[str] = Form(None), filename: Optional[str] = Form(None),
+                                 content_type: Optional[str] = Form(None),
                                  tenant_id: int = Depends(get_current_tenant_id)):
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(413, "File too large")
-
-    tenant_dir = VAULT_UPLOAD_DIR / str(tenant_id)
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    ext = pathlib.Path(file.filename or "").suffix[:10]
-    stored_name = f"{uuid.uuid4().hex}{ext}"
-    storage_path = tenant_dir / stored_name
-    storage_path.write_bytes(content)
-
+    up = await run_in_threadpool(_receive_upload, tenant_id, "vault", None,
+                                 file, object_key, filename, content_type)
     conn = _db()
-    doc_id = store.add_vault_document(conn, tenant_id, file.filename or stored_name,
-                                       file.content_type, len(content), str(storage_path))
-    background.add_task(_run_vault_processing, tenant_id, doc_id, str(storage_path), file.content_type)
+    doc_id = store.add_vault_document(conn, tenant_id, up["filename"], up["content_type"], up["size"], "",
+                                       object_key=up["key"])
+    background.add_task(_run_vault_processing, tenant_id, doc_id,
+                        {"object_key": up["key"], "storage_path": ""}, up["content_type"])
     docs = store.list_vault_documents(conn, tenant_id)
     created = next(d for d in docs if d["id"] == doc_id)
     return created
@@ -2151,8 +2310,10 @@ def delete_vault_doc(document_id: int, tenant_id: int = Depends(get_current_tena
         vault._chroma_collection(tenant_id).delete(where={"doc_id": document_id})
     except Exception:
         logging.exception(f"failed to drop Chroma chunks for vault doc {document_id}")
-    if os.path.exists(doc["storage_path"]):
-        os.remove(doc["storage_path"])
+    try:
+        object_storage.row_delete(doc)
+    except Exception:
+        logging.exception(f"failed to delete the stored file for vault doc {document_id}")
     return {"deleted": True}
 
 
@@ -2404,14 +2565,26 @@ def _require_shortlisted_tender(conn, tenant_id, pub_number):
     return tender
 
 
+def _composer_output_key(tenant_id, pub_number, filename):
+    return object_storage.fixed_key(tenant_id, "composer_output", pub_number, filename)
+
+
+def _composer_output_row(tenant_id, pub_number, filename):
+    """CR-013 key, with the pre-CR-013 on-disk location as the legacy
+    fallback for outputs generated before the cutover."""
+    return {"object_key": _composer_output_key(tenant_id, pub_number, filename),
+            "storage_path": str(COMPOSER_OUTPUT_DIR / str(tenant_id) / pub_number / filename)}
+
+
 def _composer_output_path(tenant_id, pub_number, filename):
-    return COMPOSER_OUTPUT_DIR / str(tenant_id) / pub_number / filename
+    """Filesystem-mode location of a generated output (tests, dev)."""
+    return object_storage.local_path(_composer_output_key(tenant_id, pub_number, filename))
 
 
-def _ensure_composer_output_dir(tenant_id, pub_number):
-    d = COMPOSER_OUTPUT_DIR / str(tenant_id) / pub_number
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _store_composer_output(tenant_id, pub_number, filename, src_path, content_type=None):
+    key = _composer_output_key(tenant_id, pub_number, filename)
+    object_storage.put_file(key, src_path, content_type=content_type)
+    return key
 
 
 def _is_pdf_path(path):
@@ -2429,7 +2602,8 @@ def _public_matrix(row):
             "filled": bool(row["filled_path"])}
 
 
-def _run_composer_ingest(tenant_id, pub_number, doc_id, path, content_type, role):
+def _run_composer_ingest(tenant_id, pub_number, doc_id, ref, content_type, role):
+    """`ref`: the stored row ({object_key, storage_path}) or a legacy path."""
     if role == "example":
         # Style-learning docs are stored but never embedded/retrieved — Style
         # Guide (extract_style.py) stays a stub this pass, so there's nothing
@@ -2438,38 +2612,33 @@ def _run_composer_ingest(tenant_id, pub_number, doc_id, path, content_type, role
         store.update_composer_document_status(_db(), tenant_id, doc_id, status="style_only",
                                                pages=None, chunks=0, image_heavy=False)
         return
-    n_chunks = composer.ingest_document(tenant_id, pub_number, doc_id, path, content_type, role)
-    image_heavy = composer.detect_image_heavy(path, content_type)
-    pages = len(composer._pdf_pages_text(path)) if _is_pdf_path(path) else None
+    with _stored_file(ref) as path:
+        n_chunks = composer.ingest_document(tenant_id, pub_number, doc_id, path, content_type, role)
+        image_heavy = composer.detect_image_heavy(path, content_type)
+        pages = len(composer._pdf_pages_text(path)) if _is_pdf_path(path) else None
     store.update_composer_document_status(_db(), tenant_id, doc_id, status="ingested",
                                            pages=pages, chunks=n_chunks, image_heavy=image_heavy)
 
 
 @app.post("/api/composer/{pub_number}/documents")
 async def upload_composer_document(pub_number: str, background: BackgroundTasks,
-                                    file: UploadFile = File(...), role: Optional[str] = Form(None),
+                                    file: Optional[UploadFile] = File(None), role: Optional[str] = Form(None),
+                                    object_key: Optional[str] = Form(None), filename: Optional[str] = Form(None),
+                                    content_type: Optional[str] = Form(None),
                                     tenant_id: int = Depends(get_current_tenant_id)):
     conn = _db()
     _require_shortlisted_tender(conn, tenant_id, pub_number)
+    role = _form_str(role)
     if role is not None and role not in _VALID_COMPOSER_ROLES:
         raise HTTPException(422, f"role must be one of {_VALID_COMPOSER_ROLES}")
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(413, "File too large")
-
-    tenant_dir = COMPOSER_UPLOAD_DIR / str(tenant_id) / pub_number
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    ext = pathlib.Path(file.filename or "").suffix[:10]
-    stored_name = f"{uuid.uuid4().hex}{ext}"
-    storage_path = tenant_dir / stored_name
-    storage_path.write_bytes(content)
-
-    detected_role = role or composer.get_role(file.filename or "")
-    doc_id = store.add_composer_document(conn, tenant_id, pub_number, file.filename or stored_name,
-                                          file.content_type, len(content), str(storage_path), detected_role)
-    background.add_task(_run_composer_ingest, tenant_id, pub_number, doc_id, str(storage_path),
-                         file.content_type, detected_role)
+    up = await run_in_threadpool(_receive_upload, tenant_id, "composer", pub_number,
+                                 file, object_key, filename, content_type)
+    detected_role = role or composer.get_role(up["filename"])
+    doc_id = store.add_composer_document(conn, tenant_id, pub_number, up["filename"], up["content_type"],
+                                          up["size"], "", detected_role, object_key=up["key"])
+    background.add_task(_run_composer_ingest, tenant_id, pub_number, doc_id,
+                        {"object_key": up["key"], "storage_path": ""}, up["content_type"], detected_role)
     docs = store.list_composer_documents(conn, tenant_id, pub_number)
     return next(d for d in docs if d["id"] == doc_id)
 
@@ -2491,26 +2660,27 @@ def patch_composer_document_role(pub_number: str, document_id: int, body: Compos
 
 
 @app.post("/api/composer/{pub_number}/matrix")
-async def upload_composer_matrix(pub_number: str, file: UploadFile = File(...),
+async def upload_composer_matrix(pub_number: str, file: Optional[UploadFile] = File(None),
+                                  object_key: Optional[str] = Form(None), filename: Optional[str] = Form(None),
+                                  content_type: Optional[str] = Form(None),
                                   tenant_id: int = Depends(get_current_tenant_id)):
     conn = _db()
     _require_shortlisted_tender(conn, tenant_id, pub_number)
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(413, "File too large")
+    up = await run_in_threadpool(_receive_upload, tenant_id, "composer", pub_number,
+                                 file, object_key, filename, content_type)
 
-    tenant_dir = COMPOSER_UPLOAD_DIR / str(tenant_id) / pub_number
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    storage_path = tenant_dir / f"matrix_{uuid.uuid4().hex}.xlsx"
-    storage_path.write_bytes(content)
+    def _count():
+        with object_storage.local_copy(up["key"], suffix=".xlsx") as path:
+            return len(composer._load_matrix_requirements(path))
 
     try:
-        requirement_count = len(composer._load_matrix_requirements(str(storage_path)))
+        requirement_count = await run_in_threadpool(_count)
     except Exception:
+        await run_in_threadpool(object_storage.delete, up["key"])
         raise HTTPException(422, "Could not parse compliance matrix — expected the standard column layout")
 
-    store.set_composer_matrix(conn, tenant_id, pub_number, file.filename or "compliance_matrix.xlsx",
-                               str(storage_path), requirement_count)
+    store.set_composer_matrix(conn, tenant_id, pub_number, up["filename"] or "compliance_matrix.xlsx",
+                               "", requirement_count, object_key=up["key"])
     return _public_matrix(store.get_composer_matrix(conn, tenant_id, pub_number))
 
 
@@ -2520,9 +2690,10 @@ def _run_composer_enrich(tenant_id, pub_number):
         if not doc["image_heavy"]:
             continue
         full = store.get_composer_document(conn, tenant_id, doc["id"])
-        if not full or not os.path.exists(full["storage_path"]):
+        if not full or not object_storage.row_exists(full):
             continue
-        text = composer.enrich_datasheet(full["storage_path"])
+        with object_storage.row_local_copy(full) as path:
+            text = composer.enrich_datasheet(path)
         if not text:
             continue
         chunks = vault.chunk_text(text)
@@ -2561,30 +2732,30 @@ def _composer_document_pages(tenant_id, full):
     translated_documents into one table — the two upload flows stay
     independent; this is just a lookup.
     """
-    path, content_type = full["storage_path"], full["content_type"]
-    with open(path, "rb") as f:
-        content_hash = hashlib.sha256(f.read()).hexdigest()
+    content_type = full["content_type"]
+    original_bytes = object_storage.row_read(full)
+    content_hash = hashlib.sha256(original_bytes).hexdigest()
     translation = store.get_translated_document_by_hash(_db(), tenant_id, content_hash)
-    tmp_path = None
+    ext = (pathlib.Path(full["filename"]).suffix
+           or pathlib.Path(full.get("object_key") or full.get("storage_path") or "").suffix)
+    data = original_bytes
     if translation and translation["translated_storage_key"]:
         try:
-            translated_bytes = translate_document.download_from_s3(translation["translated_storage_key"])
-            ext = pathlib.Path(full["filename"]).suffix or pathlib.Path(path).suffix
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                tmp.write(translated_bytes)
-                tmp_path = tmp.name
-            path, content_type = tmp_path, translation["content_type"] or content_type
+            data = translate_document.download_from_s3(translation["translated_storage_key"])
+            content_type = translation["content_type"] or content_type
         except Exception:
             logging.exception("failed to load an existing translation for a Composer document — "
                                "falling back to the original")
-            tmp_path = None
+            data = original_bytes
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(data)
+        path = tmp.name
     try:
         if _is_pdf_path(path):
             return composer._pdf_pages_text(path)
         return [vault.parse_document(path, content_type) or ""]
     finally:
-        if tmp_path:
-            os.remove(tmp_path)
+        os.remove(path)
 
 
 def _run_composer_interpret(tenant_id, pub_number):
@@ -2594,7 +2765,7 @@ def _run_composer_interpret(tenant_id, pub_number):
         if doc["role"] not in ("sow", "parta"):
             continue
         full = store.get_composer_document(conn, tenant_id, doc["id"])
-        if not full or not os.path.exists(full["storage_path"]):
+        if not full or not object_storage.row_exists(full):
             continue
         pages = _composer_document_pages(tenant_id, full)
         if doc["role"] == "parta":
@@ -2694,15 +2865,27 @@ def _run_composer_generate(tenant_id, pub_number):
                                                   r["similarity"], r["response_text"], r["citations"])
 
     final = store.list_composer_requirements(conn, tenant_id, pub_number)
-    out_dir = _ensure_composer_output_dir(tenant_id, pub_number)
-    composer.build_proposal_docx(final, str(out_dir / "technical_proposal.docx"))
-    composer.build_gaps_report(final, str(out_dir / "gaps_report.txt"))
+    # Built in a scratch dir, then stored under fixed per-tender keys
+    # (CR-013 §2) — overwritten on each run; bucket versioning keeps history.
+    with tempfile.TemporaryDirectory() as out_dir:
+        out_dir = pathlib.Path(out_dir)
+        composer.build_proposal_docx(final, str(out_dir / "technical_proposal.docx"))
+        _store_composer_output(tenant_id, pub_number, "technical_proposal.docx",
+                               out_dir / "technical_proposal.docx",
+                               "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        composer.build_gaps_report(final, str(out_dir / "gaps_report.txt"))
+        _store_composer_output(tenant_id, pub_number, "gaps_report.txt", out_dir / "gaps_report.txt",
+                               "text/plain")
 
-    matrix = store.get_composer_matrix(conn, tenant_id, pub_number)
-    if matrix and os.getenv("ANTHROPIC_API_KEY"):
-        filled_path = out_dir / "matrix_filled.xlsx"
-        composer.fill_compliance_matrix(tenant_id, pub_number, matrix["storage_path"], str(filled_path))
-        store.set_composer_matrix_filled_path(conn, tenant_id, pub_number, str(filled_path))
+        matrix = store.get_composer_matrix(conn, tenant_id, pub_number)
+        if matrix and os.getenv("ANTHROPIC_API_KEY"):
+            filled_path = out_dir / "matrix_filled.xlsx"
+            with object_storage.row_local_copy(matrix) as matrix_path:
+                composer.fill_compliance_matrix(tenant_id, pub_number, matrix_path, str(filled_path))
+            key = _store_composer_output(
+                tenant_id, pub_number, "matrix_filled.xlsx", filled_path,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            store.set_composer_matrix_filled_path(conn, tenant_id, pub_number, key)
 
 
 def _run_composer_refine(tenant_id, pub_number, requirement_id, feedback, vault_document_ids=None):
@@ -2768,31 +2951,37 @@ def post_composer_generate(pub_number: str, background: BackgroundTasks,
 
 
 @app.get("/api/composer/{pub_number}/download/proposal.docx")
-def download_composer_proposal(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+def download_composer_proposal(pub_number: str, x_download_mode: Optional[str] = Header(None),
+                               tenant_id: int = Depends(get_current_tenant_id)):
     _require_shortlisted_tender(_db(), tenant_id, pub_number)
-    path = _composer_output_path(tenant_id, pub_number, "technical_proposal.docx")
-    if not path.exists():
+    row = _composer_output_row(tenant_id, pub_number, "technical_proposal.docx")
+    if not object_storage.row_exists(row):
         raise HTTPException(404, "No proposal generated yet")
-    return FileResponse(str(path), filename="technical_proposal.docx",
-                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return _stored_download(row, "technical_proposal.docx",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            x_download_mode)
 
 
 @app.get("/api/composer/{pub_number}/download/matrix.xlsx")
-def download_composer_matrix(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+def download_composer_matrix(pub_number: str, x_download_mode: Optional[str] = Header(None),
+                             tenant_id: int = Depends(get_current_tenant_id)):
     matrix = store.get_composer_matrix(_db(), tenant_id, pub_number)
-    if not matrix or not matrix["filled_path"] or not os.path.exists(matrix["filled_path"]):
+    row = _stored_row(matrix["filled_path"]) if matrix and matrix["filled_path"] else None
+    if row is None or not object_storage.row_exists(row):
         raise HTTPException(404, "No filled matrix available yet")
-    return FileResponse(matrix["filled_path"], filename="matrix_filled.xlsx",
-                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return _stored_download(row, "matrix_filled.xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            x_download_mode)
 
 
 @app.get("/api/composer/{pub_number}/download/gaps_report.txt")
-def download_composer_gaps(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+def download_composer_gaps(pub_number: str, x_download_mode: Optional[str] = Header(None),
+                           tenant_id: int = Depends(get_current_tenant_id)):
     _require_shortlisted_tender(_db(), tenant_id, pub_number)
-    path = _composer_output_path(tenant_id, pub_number, "gaps_report.txt")
-    if not path.exists():
+    row = _composer_output_row(tenant_id, pub_number, "gaps_report.txt")
+    if not object_storage.row_exists(row):
         raise HTTPException(404, "No gaps report generated yet")
-    return FileResponse(str(path), filename="gaps_report.txt", media_type="text/plain")
+    return _stored_download(row, "gaps_report.txt", "text/plain", x_download_mode)
 
 
 # ── Composer Settings + Style Guide — tenant-wide, not tender-scoped ────────
@@ -2834,23 +3023,21 @@ STYLE_UPLOAD_DIR = ROOT / "data" / "composer_style_uploads"
 
 
 @app.post("/api/composer/style/examples")
-async def upload_style_example(file: UploadFile = File(...),
+async def upload_style_example(file: Optional[UploadFile] = File(None),
+                                 object_key: Optional[str] = Form(None), filename: Optional[str] = Form(None),
+                                 content_type: Optional[str] = Form(None),
                                  tenant_id: int = Depends(get_current_tenant_id)):
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(413, "File too large")
+    up = await run_in_threadpool(_receive_upload, tenant_id, "composer_style", None,
+                                 file, object_key, filename, content_type)
 
-    tenant_dir = STYLE_UPLOAD_DIR / str(tenant_id)
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    ext = pathlib.Path(file.filename or "").suffix[:10]
-    stored_name = f"{uuid.uuid4().hex}{ext}"
-    storage_path = tenant_dir / stored_name
-    storage_path.write_bytes(content)
+    def _extract():
+        with object_storage.local_copy(up["key"]) as path:
+            return vault.parse_document(path, up["content_type"]) or ""
 
-    extracted_text = vault.parse_document(str(storage_path), file.content_type) or ""
-    doc_id = store.add_style_example(_db(), tenant_id, file.filename or stored_name,
-                                      file.content_type, len(content), str(storage_path), extracted_text)
-    return {"id": doc_id, "filename": file.filename or stored_name}
+    extracted_text = await run_in_threadpool(_extract)
+    doc_id = store.add_style_example(_db(), tenant_id, up["filename"], up["content_type"], up["size"], "",
+                                      extracted_text, object_key=up["key"])
+    return {"id": doc_id, "filename": up["filename"]}
 
 
 @app.get("/api/composer/style/examples")
@@ -2865,8 +3052,10 @@ def delete_style_example(example_id: int, tenant_id: int = Depends(get_current_t
     if example is None:
         raise HTTPException(404, "Example not found")
     store.delete_style_example(conn, tenant_id, example_id)
-    if os.path.exists(example["storage_path"]):
-        os.remove(example["storage_path"])
+    try:
+        object_storage.row_delete(example)
+    except Exception:
+        logging.exception(f"failed to delete the stored file for style example {example_id}")
     return {"deleted": True}
 
 

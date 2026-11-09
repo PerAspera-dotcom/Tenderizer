@@ -12,6 +12,71 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return r.json() as Promise<T>;
 }
 
+// ── CR-013 §2: object storage ────────────────────────────────────────────────
+// Upload: ask the API for a presigned POST; in S3 mode the file goes straight
+// to the bucket and the endpoint is then called with its object_key. In
+// filesystem mode (no bucket configured) the presign call answers "direct"
+// and the file is posted to the endpoint as before.
+
+export type StorageArea = 'tender_documents' | 'vault' | 'composer' | 'composer_style' | 'translations';
+
+interface PresignResponse {
+  mode: 'direct' | 's3';
+  object_key?: string;
+  url?: string;
+  fields?: Record<string, string>;
+  max_size: number;
+}
+
+async function uploadViaStorage<T>(
+  endpoint: string, area: StorageArea, file: File,
+  extra: Record<string, string | undefined> = {}, pubNumber?: string,
+): Promise<T> {
+  const presign = await apiFetch<PresignResponse>('/api/uploads/presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      area, filename: file.name, content_type: file.type || null, size: file.size,
+      pub_number: pubNumber ?? null,
+    }),
+  });
+  const form = new FormData();
+  for (const [k, v] of Object.entries(extra)) if (v) form.append(k, v);
+  if (presign.mode === 's3' && presign.url && presign.fields && presign.object_key) {
+    const s3Form = new FormData();
+    for (const [k, v] of Object.entries(presign.fields)) s3Form.append(k, v);
+    s3Form.append('file', file);  // must be the last field of a presigned POST
+    const r = await fetch(presign.url, { method: 'POST', body: s3Form });
+    if (!r.ok) throw new Error(`${r.status} upload to storage failed`);
+    form.append('object_key', presign.object_key);
+    form.append('filename', file.name);
+    if (file.type) form.append('content_type', file.type);
+  } else {
+    form.append('file', file);
+  }
+  return apiFetch<T>(endpoint, { method: 'POST', body: form });
+}
+
+const DOWNLOAD_LINK_MEDIA_TYPE = 'application/vnd.tenderizer.download-link+json';
+
+// Download: asks for a short-lived presigned link; when the API returns one
+// the file is fetched straight from the bucket, otherwise the API's own
+// response body is the file. Either way the caller gets a Blob.
+async function downloadStoredBlob(path: string): Promise<Blob> {
+  const token = await getAuthToken();
+  const headers = new Headers({ 'X-Download-Mode': 'link' });
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const r = await fetch(BASE + path, { headers });
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  if ((r.headers.get('Content-Type') ?? '').startsWith(DOWNLOAD_LINK_MEDIA_TYPE)) {
+    const { url } = await r.json() as { url: string };
+    const s3 = await fetch(url);
+    if (!s3.ok) throw new Error(`${s3.status} download from storage failed`);
+    return s3.blob();
+  }
+  return r.blob();
+}
+
 export interface TenderFilters {
   source?: string;
   category?: string;
@@ -202,21 +267,12 @@ export function listDocuments(pub_number: string): Promise<DocumentEntry[]> {
 }
 
 export function uploadDocument(pub_number: string, file: File): Promise<DocumentEntry> {
-  const form = new FormData();
-  form.append('file', file);
-  return apiFetch<DocumentEntry>(`/api/tenders/${encodeURIComponent(pub_number)}/documents`, {
-    method: 'POST',
-    body: form,
-  });
+  return uploadViaStorage<DocumentEntry>(
+    `/api/tenders/${encodeURIComponent(pub_number)}/documents`, 'tender_documents', file, {}, pub_number);
 }
 
-export async function downloadDocumentBlob(id: number): Promise<Blob> {
-  const token = await getAuthToken();
-  const headers = new Headers();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const r = await fetch(`${BASE}/api/documents/${id}`, { headers });
-  if (!r.ok) throw new Error(`${r.status} /api/documents/${id}`);
-  return r.blob();
+export function downloadDocumentBlob(id: number): Promise<Blob> {
+  return downloadStoredBlob(`/api/documents/${id}`);
 }
 
 // ── Translated documents (Scout translate/attach/library) ───────────────────
@@ -228,10 +284,8 @@ export function getTranslationQuota(documentCount = 1): Promise<TranslationQuota
 // CR-012 §2: target is always English (EN-GB) now — no targetLang param,
 // matches api.upload_translated_document no longer accepting one.
 export function uploadTranslatedDocument(file: File, sourceLang?: string): Promise<TranslatedDocument> {
-  const form = new FormData();
-  form.append('file', file);
-  if (sourceLang) form.append('source_lang', sourceLang);
-  return apiFetch<TranslatedDocument>('/api/translated-documents', { method: 'POST', body: form });
+  return uploadViaStorage<TranslatedDocument>(
+    '/api/translated-documents', 'translations', file, { source_lang: sourceLang });
 }
 
 export function retryTranslatedDocument(id: number): Promise<TranslatedDocument> {
@@ -275,14 +329,8 @@ export function getTranslatedDocument(id: number): Promise<TranslatedDocument> {
   return apiFetch<TranslatedDocument>(`/api/translated-documents/${id}`);
 }
 
-export async function downloadTranslatedDocumentBlob(id: number, version: 'original' | 'translated'): Promise<Blob> {
-  const token = await getAuthToken();
-  const headers = new Headers();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const url = `${BASE}/api/translated-documents/${id}/download?version=${version}`;
-  const r = await fetch(url, { headers });
-  if (!r.ok) throw new Error(`${r.status} ${url}`);
-  return r.blob();
+export function downloadTranslatedDocumentBlob(id: number, version: 'original' | 'translated'): Promise<Blob> {
+  return downloadStoredBlob(`/api/translated-documents/${id}/download?version=${version}`);
 }
 
 export function attachTranslatedDocument(id: number, pub_number: string): Promise<unknown> {
@@ -406,9 +454,7 @@ export function listVaultDocs(q?: string, tag?: string): Promise<{ total: number
 }
 
 export function uploadVaultDoc(file: File): Promise<VaultDoc> {
-  const form = new FormData();
-  form.append('file', file);
-  return apiFetch<VaultDoc>('/api/vault/ingest', { method: 'POST', body: form });
+  return uploadViaStorage<VaultDoc>('/api/vault/ingest', 'vault', file);
 }
 
 export function setVaultDocTags(id: number, tags: string[]): Promise<{ id: number; tags: string[] }> {
@@ -491,12 +537,8 @@ export function getComposerSession(pub?: string): Promise<ComposerSession | null
 }
 
 export function uploadComposerDocument(pub: string, file: File, role?: string): Promise<ComposerDoc> {
-  const form = new FormData();
-  form.append('file', file);
-  if (role) form.append('role', role);
-  return apiFetch<ComposerDoc>(`/api/composer/${encodeURIComponent(pub)}/documents`, {
-    method: 'POST', body: form,
-  });
+  return uploadViaStorage<ComposerDoc>(
+    `/api/composer/${encodeURIComponent(pub)}/documents`, 'composer', file, { role }, pub);
 }
 
 export function updateComposerDocumentRole(pub: string, docId: number, role: string): Promise<unknown> {
@@ -508,11 +550,8 @@ export function updateComposerDocumentRole(pub: string, docId: number, role: str
 }
 
 export function uploadComposerMatrix(pub: string, file: File): Promise<ComposerMatrix> {
-  const form = new FormData();
-  form.append('file', file);
-  return apiFetch<ComposerMatrix>(`/api/composer/${encodeURIComponent(pub)}/matrix`, {
-    method: 'POST', body: form,
-  });
+  return uploadViaStorage<ComposerMatrix>(
+    `/api/composer/${encodeURIComponent(pub)}/matrix`, 'composer', file, {}, pub);
 }
 
 export function triggerComposerEnrich(pub: string): Promise<{ status: string }> {
@@ -552,14 +591,8 @@ export function regenerateComposerSection(
   });
 }
 
-async function _downloadComposerBlob(pub: string, filename: string): Promise<Blob> {
-  const token = await getAuthToken();
-  const headers = new Headers();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const path = `/api/composer/${encodeURIComponent(pub)}/download/${filename}`;
-  const r = await fetch(BASE + path, { headers });
-  if (!r.ok) throw new Error(`${r.status} ${path}`);
-  return r.blob();
+function _downloadComposerBlob(pub: string, filename: string): Promise<Blob> {
+  return downloadStoredBlob(`/api/composer/${encodeURIComponent(pub)}/download/${filename}`);
 }
 
 export function downloadComposerProposalBlob(pub: string): Promise<Blob> {
@@ -605,9 +638,7 @@ export function listStyleExamples(): Promise<{ results: ComposerStyleExample[] }
 }
 
 export function uploadStyleExample(file: File): Promise<{ id: number; filename: string }> {
-  const form = new FormData();
-  form.append('file', file);
-  return apiFetch('/api/composer/style/examples', { method: 'POST', body: form });
+  return uploadViaStorage('/api/composer/style/examples', 'composer_style', file);
 }
 
 export function deleteStyleExample(id: number): Promise<{ deleted: boolean }> {

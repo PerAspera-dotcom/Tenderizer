@@ -380,6 +380,10 @@ documents = Table(
     Column("content_type", Text, nullable=False, server_default=""),
     Column("size", Integer, nullable=False, server_default="0"),
     Column("storage_path", Text, nullable=False),
+    # CR-013 §2: object-storage key ({tenant}/{area}/{pub}/{uuid}{ext}).
+    # NULL only on pre-CR-013 rows not yet moved by `cli storage-migrate`;
+    # new rows leave storage_path "" and carry this instead.
+    Column("object_key", Text, nullable=True),
     Column("uploaded_at", Text, nullable=False, server_default=""),
 )
 
@@ -485,6 +489,10 @@ vault_documents = Table(
     Column("content_type", Text, nullable=False, server_default=""),
     Column("size", Integer, nullable=False, server_default="0"),
     Column("storage_path", Text, nullable=False),
+    # CR-013 §2: object-storage key ({tenant}/{area}/{pub}/{uuid}{ext}).
+    # NULL only on pre-CR-013 rows not yet moved by `cli storage-migrate`;
+    # new rows leave storage_path "" and carry this instead.
+    Column("object_key", Text, nullable=True),
     Column("doc_type", Text, nullable=True),
     Column("status", Text, nullable=False, server_default="processing"),
     Column("metadata_json", Text, nullable=False, server_default="{}"),
@@ -522,6 +530,10 @@ composer_documents = Table(
     Column("content_type", Text, nullable=False, server_default=""),
     Column("size", Integer, nullable=False, server_default="0"),
     Column("storage_path", Text, nullable=False),
+    # CR-013 §2: object-storage key ({tenant}/{area}/{pub}/{uuid}{ext}).
+    # NULL only on pre-CR-013 rows not yet moved by `cli storage-migrate`;
+    # new rows leave storage_path "" and carry this instead.
+    Column("object_key", Text, nullable=True),
     Column("role", Text, nullable=False, server_default="unknown"),
     Column("role_override", Text, nullable=True),
     Column("status", Text, nullable=False, server_default="processing"),
@@ -543,6 +555,10 @@ composer_matrix = Table(
     Column("pub_number", Text, nullable=False),
     Column("filename", Text, nullable=False),
     Column("storage_path", Text, nullable=False),
+    # CR-013 §2: object-storage key ({tenant}/{area}/{pub}/{uuid}{ext}).
+    # NULL only on pre-CR-013 rows not yet moved by `cli storage-migrate`;
+    # new rows leave storage_path "" and carry this instead.
+    Column("object_key", Text, nullable=True),
     Column("requirement_count", Integer, nullable=False, server_default="0"),
     Column("filled_path", Text, nullable=True),
     Column("uploaded_at", Text, nullable=False, server_default=""),
@@ -738,6 +754,10 @@ composer_style_examples = Table(
     Column("content_type", Text, nullable=False, server_default=""),
     Column("size", Integer, nullable=False, server_default="0"),
     Column("storage_path", Text, nullable=False),
+    # CR-013 §2: object-storage key ({tenant}/{area}/{pub}/{uuid}{ext}).
+    # NULL only on pre-CR-013 rows not yet moved by `cli storage-migrate`;
+    # new rows leave storage_path "" and carry this instead.
+    Column("object_key", Text, nullable=True),
     Column("extracted_text", Text, nullable=False, server_default=""),
     Column("uploaded_at", Text, nullable=False, server_default=""),
 )

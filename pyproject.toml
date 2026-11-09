@@ -34,6 +34,14 @@ dependencies = [
     "boto3",
 ]
 
+[project.optional-dependencies]
+# Local development only (`pip install -e .[dev]`); the Docker image installs
+# the base set via `pip install .` and never pulls these.
+dev = [
+    "pytest>=9.1",
+    "pyflakes>=4.1",
+]
+
 [project.scripts]
 tenderizer = "cli:main"
 

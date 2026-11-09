@@ -39,6 +39,18 @@ def _no_database_url_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_object_storage(tmp_path_factory, monkeypatch):
+    """CR-013 §2: every test runs object_storage in filesystem mode against
+    its own temp root — never a developer's real bucket (DOCUMENTS_S3_BUCKET
+    in .env) and never the repo's data/ directory."""
+    import object_storage
+    monkeypatch.delenv("DOCUMENTS_S3_BUCKET", raising=False)
+    root = tmp_path_factory.mktemp("objects")
+    monkeypatch.setattr(object_storage, "LOCAL_ROOT", root / "objects")
+    monkeypatch.setattr(object_storage, "LEGACY_ROOT", root)
+
+
+@pytest.fixture(autouse=True)
 def _no_retry_delay(monkeypatch):
     """connectors.retry waits 10 s / 20 s between attempts — never in tests."""
     from connectors import retry

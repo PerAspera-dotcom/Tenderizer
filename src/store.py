@@ -101,6 +101,12 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE tenders ADD COLUMN reason_category TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN assigned_to TEXT DEFAULT NULL",
     "ALTER TABLE tenders ADD COLUMN notice_detail TEXT DEFAULT NULL",
+    # CR-013 §2: object-storage keys
+    "ALTER TABLE documents ADD COLUMN object_key TEXT DEFAULT NULL",
+    "ALTER TABLE vault_documents ADD COLUMN object_key TEXT DEFAULT NULL",
+    "ALTER TABLE composer_documents ADD COLUMN object_key TEXT DEFAULT NULL",
+    "ALTER TABLE composer_matrix ADD COLUMN object_key TEXT DEFAULT NULL",
+    "ALTER TABLE composer_style_examples ADD COLUMN object_key TEXT DEFAULT NULL",
 ]
 
 
@@ -796,11 +802,13 @@ def set_style_guide(conn, tenant_id, style_guide, source_doc_count, generated_at
             c.execute(insert(tenant_style_guide).values(tenant_id=tenant_id, **values))
 
 
-def add_style_example(conn, tenant_id, filename, content_type, size, storage_path, extracted_text):
+def add_style_example(conn, tenant_id, filename, content_type, size, storage_path, extracted_text,
+                      object_key=None):
     with conn.begin() as c:
         result = c.execute(insert(composer_style_examples).values(
             tenant_id=tenant_id, filename=filename, content_type=content_type or "",
-            size=size, storage_path=storage_path, extracted_text=extracted_text or "",
+            size=size, storage_path=storage_path, object_key=object_key,
+            extracted_text=extracted_text or "",
             uploaded_at=date.today().isoformat()))
         return result.inserted_primary_key[0]
 
@@ -830,13 +838,14 @@ def get_style_example(conn, tenant_id, example_id):
     with conn.connect() as c:
         row = c.execute(select(
             composer_style_examples.c.filename, composer_style_examples.c.storage_path,
+            composer_style_examples.c.object_key,
         ).where(
             (composer_style_examples.c.tenant_id == tenant_id)
             & (composer_style_examples.c.id == example_id)
         )).fetchone()
     if not row:
         return None
-    return {"filename": row[0], "storage_path": row[1]}
+    return {"filename": row[0], "storage_path": row[1], "object_key": row[2]}
 
 
 def delete_style_example(conn, tenant_id, example_id):
@@ -1499,11 +1508,13 @@ def get_pipeline_entries(conn, tenant_id):
     return out
 
 
-def add_document(conn, tenant_id, pub_number, filename, content_type, size, storage_path):
+def add_document(conn, tenant_id, pub_number, filename, content_type, size, storage_path,
+                 object_key=None):
     with conn.begin() as c:
         result = c.execute(insert(documents).values(
             tenant_id=tenant_id, pub_number=pub_number, filename=filename,
             content_type=content_type or "", size=size, storage_path=storage_path,
+            object_key=object_key,
             uploaded_at=date.today().isoformat()))
         return result.inserted_primary_key[0]
 
@@ -1529,13 +1540,14 @@ def get_document(conn, tenant_id, document_id):
         row = c.execute(select(
             documents.c.pub_number, documents.c.filename, documents.c.content_type,
             documents.c.size, documents.c.storage_path, documents.c.uploaded_at,
+            documents.c.object_key,
         ).where(
             (documents.c.tenant_id == tenant_id) & (documents.c.id == document_id)
         )).fetchone()
     if not row:
         return None
     return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
-            "size": row[3], "storage_path": row[4], "uploaded_at": row[5]}
+            "size": row[3], "storage_path": row[4], "uploaded_at": row[5], "object_key": row[6]}
 
 
 # ── Translated documents (Scout translate/attach/library) ───────────────────
@@ -1749,7 +1761,7 @@ def get_active_tender_links_for_document(conn, tenant_id, document_id):
     return [r[0] for r in rows]
 
 
-def add_vault_document(conn, tenant_id, filename, content_type, size, storage_path):
+def add_vault_document(conn, tenant_id, filename, content_type, size, storage_path, object_key=None):
     """Row starts `status='processing'` (schema default) — flipped to
     'indexed' by update_vault_document_metadata once ingest_and_embed/
     extract_metadata (src/vault.py) finish.
@@ -1757,7 +1769,8 @@ def add_vault_document(conn, tenant_id, filename, content_type, size, storage_pa
     with conn.begin() as c:
         result = c.execute(insert(vault_documents).values(
             tenant_id=tenant_id, filename=filename, content_type=content_type or "",
-            size=size, storage_path=storage_path, uploaded_at=date.today().isoformat()))
+            size=size, storage_path=storage_path, object_key=object_key,
+            uploaded_at=date.today().isoformat()))
         return result.inserted_primary_key[0]
 
 
@@ -1862,13 +1875,13 @@ def get_vault_document(conn, tenant_id, document_id):
     with conn.connect() as c:
         row = c.execute(select(
             vault_documents.c.filename, vault_documents.c.content_type,
-            vault_documents.c.storage_path,
+            vault_documents.c.storage_path, vault_documents.c.object_key,
         ).where(
             (vault_documents.c.tenant_id == tenant_id) & (vault_documents.c.id == document_id)
         )).fetchone()
     if not row:
         return None
-    return {"filename": row[0], "content_type": row[1], "storage_path": row[2]}
+    return {"filename": row[0], "content_type": row[1], "storage_path": row[2], "object_key": row[3]}
 
 
 def update_vault_document_metadata(conn, tenant_id, document_id, doc_type, metadata,
@@ -1928,11 +1941,12 @@ def update_vault_document_metadata_fields(conn, tenant_id, document_id, metadata
 
 
 def add_composer_document(conn, tenant_id, pub_number, filename, content_type, size,
-                           storage_path, role):
+                           storage_path, role, object_key=None):
     with conn.begin() as c:
         result = c.execute(insert(composer_documents).values(
             tenant_id=tenant_id, pub_number=pub_number, filename=filename,
             content_type=content_type or "", size=size, storage_path=storage_path,
+            object_key=object_key,
             role=role, uploaded_at=date.today().isoformat()))
         return result.inserted_primary_key[0]
 
@@ -1964,13 +1978,14 @@ def get_composer_document(conn, tenant_id, document_id):
             composer_documents.c.pub_number, composer_documents.c.filename,
             composer_documents.c.content_type, composer_documents.c.storage_path,
             composer_documents.c.role, composer_documents.c.role_override,
+            composer_documents.c.object_key,
         ).where(
             (composer_documents.c.tenant_id == tenant_id) & (composer_documents.c.id == document_id)
         )).fetchone()
     if not row:
         return None
     return {"pub_number": row[0], "filename": row[1], "content_type": row[2],
-            "storage_path": row[3], "role": row[5] or row[4]}
+            "storage_path": row[3], "role": row[5] or row[4], "object_key": row[6]}
 
 
 def update_composer_document_status(conn, tenant_id, document_id, status, pages, chunks,
@@ -2010,7 +2025,8 @@ def get_composer_document_history(conn, tenant_id, document_id):
     return [{"field": r[0], "old_value": r[1], "new_value": r[2], "changed_at": r[3]} for r in rows]
 
 
-def set_composer_matrix(conn, tenant_id, pub_number, filename, storage_path, requirement_count):
+def set_composer_matrix(conn, tenant_id, pub_number, filename, storage_path, requirement_count,
+                        object_key=None):
     """One matrix per tender — replaces any existing row for this
     (tenant_id, pub_number) rather than accumulating duplicates on re-upload.
     """
@@ -2019,7 +2035,7 @@ def set_composer_matrix(conn, tenant_id, pub_number, filename, storage_path, req
             (composer_matrix.c.tenant_id == tenant_id) & (composer_matrix.c.pub_number == pub_number)))
         result = c.execute(insert(composer_matrix).values(
             tenant_id=tenant_id, pub_number=pub_number, filename=filename,
-            storage_path=storage_path, requirement_count=requirement_count,
+            storage_path=storage_path, object_key=object_key, requirement_count=requirement_count,
             uploaded_at=date.today().isoformat()))
         return result.inserted_primary_key[0]
 
@@ -2029,13 +2045,14 @@ def get_composer_matrix(conn, tenant_id, pub_number):
         row = c.execute(select(
             composer_matrix.c.filename, composer_matrix.c.storage_path,
             composer_matrix.c.requirement_count, composer_matrix.c.filled_path,
+            composer_matrix.c.object_key,
         ).where(
             (composer_matrix.c.tenant_id == tenant_id) & (composer_matrix.c.pub_number == pub_number)
         )).fetchone()
     if not row:
         return None
     return {"filename": row[0], "storage_path": row[1], "requirement_count": row[2],
-            "filled_path": row[3]}
+            "filled_path": row[3], "object_key": row[4]}
 
 
 def set_composer_matrix_filled_path(conn, tenant_id, pub_number, filled_path):

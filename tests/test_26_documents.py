@@ -112,12 +112,15 @@ def test_upload_rejects_oversized_file(tmp_path, monkeypatch):
 
 def test_stored_filename_never_uses_user_supplied_path(tmp_path, monkeypatch):
     """A malicious filename with path-traversal segments must not affect
-    where the file lands on disk — storage_path is always uuid-based."""
+    where the file lands — the object key (CR-013) is always uuid-based."""
     _seed(tmp_path, monkeypatch)
     result = asyncio.run(api.upload_document(
         "P-1", file=_file(name="../../evil.pdf"), tenant_id=TEST_TENANT_ID))
     docs = api.list_documents("P-1", tenant_id=TEST_TENANT_ID)
     doc = store.get_document(api._db(), TEST_TENANT_ID, result["id"])
-    assert (tmp_path / "uploads").resolve() in __import__("pathlib").Path(doc["storage_path"]).resolve().parents
+    import object_storage
+    key = doc["object_key"]
+    assert key.startswith(f"{TEST_TENANT_ID}/tender_documents/P-1/") and ".." not in key
+    assert object_storage.LOCAL_ROOT.resolve() in object_storage.local_path(key).parents
     assert doc["filename"] == "../../evil.pdf"  # kept as display metadata only
     assert docs[0]["filename"] == "../../evil.pdf"
