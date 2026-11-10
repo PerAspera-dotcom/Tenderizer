@@ -55,6 +55,19 @@ def process_record(conn, tenant_id, rec, full_keywords, cpv_set, exclusions, now
     dl = (rec.get("deadline") or "")[:10]
     if dl and dl < run_date:
         return False  # expired deadline — skip ingest
+    derive_fields(rec, full_keywords, cpv_set, exclusions, now, fx_rates, tagged=True)
+    store.upsert(conn, tenant_id, rec)
+    return True
+
+
+def derive_fields(rec, full_keywords, cpv_set, exclusions, now, fx_rates, tagged=False):
+    """Every system-derived field of a record, in place: matching tags, EUR
+    value, exclusion, classification, award info. The one code path for a
+    scraped record (process_record above) and a manually entered one
+    (manual_tenders, CR-013 §4) — not a reimplementation. Ingest-only rules
+    (the expired-deadline skip) stay in process_record."""
+    if not tagged:
+        _tag(rec, full_keywords, cpv_set)
     rec["value_eur"], rec["fx_rate_date"] = currency.to_eur(
         rec.get("value"), rec.get("value_currency"), fx_rates)
     rec["exclude_reason"] = filters.apply_filters(rec, exclusions, now) or ""
@@ -65,8 +78,35 @@ def process_record(conn, tenant_id, rec, full_keywords, cpv_set, exclusions, now
         classification.extract_award_info(rec)
         if rec["notice_type"] == "past_tender" else (None, None, None, None)
     )
-    store.upsert(conn, tenant_id, rec)
-    return True
+    return rec
+
+
+def translate_record(conn, tenant_id, r):
+    """Translate one stored record's tag_line/description to English if it
+    needs it, through DeepL's content-hash cache. Returns "ok"/"unavailable"
+    when it translated (or tried), None when there was nothing to do (English,
+    no language, or already done). Used by the run's translation pass and by
+    a manual create/edit (CR-013 §4), so both take the same route."""
+    if not r.get("language") or r["language"] == "eng":
+        return None
+    if r.get("translation_status") == "ok":
+        return None
+    tag_en, tag_status = translate.translate_cached(conn, r.get("tag_line"))
+    desc_en, desc_status = translate.translate_cached(conn, r.get("description"))
+    status = "ok" if tag_status == "ok" and desc_status == "ok" else "unavailable"
+    store.set_translation(conn, tenant_id, r["pub_number"], tag_en or "", desc_en or "", status)
+    return status
+
+
+def matching_context(conn, tenant_id):
+    """(full_keywords, cpv_set, exclusions) for this tenant — what
+    run_pipeline below builds once per run."""
+    tenant_kw = store.get_tenant_keywords(conn, tenant_id)
+    full_keywords = [w for lang in tenant_kw["terms"].values() for w in lang]
+    cpv_set = set(store.get_tenant_cpv(conn, tenant_id))
+    exclusions = dict(config.exclusions())
+    exclusions["_distinctive_keywords"] = tenant_kw["distinctive"]
+    return full_keywords, cpv_set, exclusions
 
 
 def _maybe_alert_consecutive_failures(conn, tenant_id, source):
@@ -151,15 +191,9 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     # text across notices, or across tenants, is never sent twice either.
     translated_this_run = 0
     for r in store.all_records(conn, tenant_id):
-        if visibility.is_hidden(r) or not r.get("language") or r["language"] == "eng":
+        if visibility.is_hidden(r):
             continue
-        if r.get("translation_status") == "ok":
-            continue
-        tag_en, tag_status = translate.translate_cached(conn, r.get("tag_line"))
-        desc_en, desc_status = translate.translate_cached(conn, r.get("description"))
-        status = "ok" if tag_status == "ok" and desc_status == "ok" else "unavailable"
-        store.set_translation(conn, tenant_id, r["pub_number"], tag_en or "", desc_en or "", status)
-        if status == "ok":
+        if translate_record(conn, tenant_id, r) == "ok":
             translated_this_run += 1
 
     # CR-011 §1: DeepL's own health, independent of whether any record above

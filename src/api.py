@@ -21,7 +21,7 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution, visibility
+import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution, visibility, manual_tenders
 import object_storage
 import run as engine
 import currency
@@ -33,7 +33,7 @@ from starlette.datastructures import UploadFile as _StarletteUploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 ROOT          = _HERE.parent
@@ -927,6 +927,93 @@ def get_notifications(identity: Identity = Depends(get_current_identity)):
 def mark_notification_read(notification_id: int, identity: Identity = Depends(get_current_identity)):
     store.mark_notification_read(_db(), identity.tenant_id, notification_id, identity.account_name)
     return {"ok": True}
+
+
+# ── CR-013 §4: manual tender entry ───────────────────────────────────────────
+# Any org member may create, edit, delete or restore a manual tender; only
+# manual ones (scraped tenders stay read-only). extra="forbid": a client cannot
+# smuggle in pub_number, source, created_by, status or any derived field —
+# they are generated or stamped server-side (manual_tenders.create).
+
+class OriginSiteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    domain: Optional[str] = None
+
+
+class ManualTenderBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    origin_site_id: int
+    url: str = ""
+    tag_line: str
+    description: str = ""
+    buyer: str = ""
+    country: str = ""
+    place: str = ""
+    category: str = ""
+    procedure: str = ""
+    pub_date: str = ""
+    deadline: str = ""
+    cpv_codes: list[str] = []
+    value: str = ""
+    value_currency: str = ""
+    language: str = "eng"
+
+
+def _manual_error(e):
+    return HTTPException(422, {"field": e.field, "message": str(e)})
+
+
+@app.get("/api/origin-sites")
+def list_origin_sites(tenant_id: int = Depends(get_current_tenant_id)):
+    return store.get_origin_sites(_db(), tenant_id)
+
+
+@app.post("/api/origin-sites")
+def create_origin_site(body: OriginSiteBody, identity: Identity = Depends(get_current_identity)):
+    try:
+        return store.add_origin_site(_db(), identity.tenant_id, body.name, body.domain,
+                                     created_by=identity.account_name)
+    except ValueError as e:
+        raise HTTPException(422, {"field": "name", "message": str(e)})
+
+
+@app.post("/api/tenders/manual")
+def create_manual_tender(body: ManualTenderBody, identity: Identity = Depends(get_current_identity)):
+    try:
+        return manual_tenders.create(_db(), identity.tenant_id, identity.account_name, body.model_dump())
+    except manual_tenders.ManualTenderError as e:
+        raise _manual_error(e)
+
+
+@app.put("/api/tenders/manual/{pub_number}")
+def update_manual_tender(pub_number: str, body: ManualTenderBody,
+                         identity: Identity = Depends(get_current_identity)):
+    try:
+        record, changed = manual_tenders.update(_db(), identity.tenant_id, pub_number,
+                                                identity.account_name, body.model_dump())
+    except manual_tenders.ManualTenderError as e:
+        raise _manual_error(e)
+    except manual_tenders.NotEditable:
+        raise HTTPException(404, "No editable manual tender with that number")
+    return {"tender": record, "changed": changed}
+
+
+@app.delete("/api/tenders/manual/{pub_number}")
+def delete_manual_tender(pub_number: str, identity: Identity = Depends(get_current_identity)):
+    try:
+        manual_tenders.delete(_db(), identity.tenant_id, pub_number, identity.account_name)
+    except manual_tenders.NotEditable:
+        raise HTTPException(404, "No editable manual tender with that number")
+    return {"status": "deleted", "pub_number": pub_number}
+
+
+@app.post("/api/tenders/manual/{pub_number}/restore")
+def restore_manual_tender(pub_number: str, identity: Identity = Depends(get_current_identity)):
+    try:
+        return manual_tenders.restore(_db(), identity.tenant_id, pub_number, identity.account_name)
+    except manual_tenders.NotEditable:
+        raise HTTPException(404, "No deleted manual tender with that number")
 
 
 @app.get("/api/tenders/{pub_number}/history")

@@ -49,6 +49,14 @@ export interface Tender {
   // CR-007 Phase C: cross-portal duplicates (e.g. the same tender also on
   // BOAMP) — always present, empty when none, see api._attach_duplicates.
   duplicates: TenderDuplicate[];
+  // CR-013 §3: manual entry. entry_method is the authoritative marker;
+  // exclude_reason is shown on a manual tender as "would be excluded: …"
+  // (it never hides one — see visibility.py on the backend).
+  entry_method?: 'scraped' | 'manual';
+  exclude_reason?: string;
+  origin_site_id?: number | null;
+  created_by?: string | null;
+  created_at?: string | null;
   // Duplicate-resolution follow-up: null unless this tender is in an
   // unresolved same_source group — see api._attach_duplicates /
   // dedup.group_same_source_duplicates.
@@ -416,4 +424,32 @@ export interface ComposerSession {
   docs: ComposerDoc[];
   matrix: ComposerMatrix | null;
   requirements: ComposerRequirement[];
+}
+
+// CR-013 §3/§4: manual tender entry
+export interface OriginSite {
+  id: number;
+  name: string;
+  domain: string | null;
+  active: boolean;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+export interface ManualTenderInput {
+  origin_site_id: number;
+  url: string;
+  tag_line: string;
+  description: string;
+  buyer: string;
+  country: string;
+  place: string;
+  category: string;
+  procedure: string;
+  pub_date: string;
+  deadline: string;
+  cpv_codes: string[];
+  value: string;
+  value_currency: string;
+  language: string;
 }

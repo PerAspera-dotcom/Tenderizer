@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion, OriginSite, ManualTenderInput } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -647,4 +647,61 @@ export function deleteStyleExample(id: number): Promise<{ deleted: boolean }> {
 
 export function extractComposerStyle(): Promise<ComposerStyleGuide> {
   return apiFetch('/api/composer/style/extract', { method: 'POST' });
+}
+
+// ── CR-013 §4: manual tender entry ───────────────────────────────────────────
+// Unlike apiFetch, a failure keeps the server's detail: a 422 from these
+// endpoints is {field, message}, which the form shows next to the field.
+
+export class ApiError extends Error {
+  status: number;
+  field?: string;
+  constructor(status: number, message: string, field?: string) {
+    super(message);
+    this.status = status;
+    this.field = field;
+  }
+}
+
+async function apiSend<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const token = await getAuthToken();
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const r = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (!r.ok) {
+    let message = `${r.status} ${path}`;
+    let field: string | undefined;
+    try {
+      const j = await r.json();
+      const d = j?.detail;
+      if (d && typeof d === 'object' && 'message' in d) { message = String(d.message); field = d.field; }
+      else if (typeof d === 'string') message = d;
+    } catch { /* not JSON */ }
+    throw new ApiError(r.status, message, field);
+  }
+  return r.json() as Promise<T>;
+}
+
+export function getOriginSites(): Promise<OriginSite[]> {
+  return apiFetch<OriginSite[]>('/api/origin-sites');
+}
+
+export function addOriginSite(name: string, domain?: string): Promise<OriginSite> {
+  return apiSend<OriginSite>('/api/origin-sites', 'POST', { name, domain: domain || null });
+}
+
+export function createManualTender(input: ManualTenderInput): Promise<Tender> {
+  return apiSend<Tender>('/api/tenders/manual', 'POST', input);
+}
+
+export function updateManualTender(pubNumber: string, input: ManualTenderInput): Promise<{ tender: Tender; changed: string[] }> {
+  return apiSend(`/api/tenders/manual/${encodeURIComponent(pubNumber)}`, 'PUT', input);
+}
+
+export function deleteManualTender(pubNumber: string): Promise<{ status: string }> {
+  return apiSend(`/api/tenders/manual/${encodeURIComponent(pubNumber)}`, 'DELETE');
+}
+
+export function restoreManualTender(pubNumber: string): Promise<Tender> {
+  return apiSend(`/api/tenders/manual/${encodeURIComponent(pubNumber)}/restore`, 'POST');
 }

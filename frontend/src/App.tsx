@@ -14,6 +14,7 @@ import DismissedTenders from './pages/scout/DismissedTenders';
 import PortalsHealth from './pages/scout/PortalsHealth';
 import MatchingConfig from './pages/scout/MatchingConfig';
 import Settings from './pages/scout/Settings';
+import ManualEntry from './pages/scout/ManualEntry';
 import VaultLibrary from './pages/vault/VaultLibrary';
 import VaultRules from './pages/vault/VaultRules';
 import VaultCollections from './pages/vault/VaultCollections';
@@ -37,6 +38,7 @@ function Router() {
     '/scout/past-tenders': <Layout><PastTenders /></Layout>,
     '/scout/review-queue': <Layout><ReviewQueue /></Layout>,
     '/scout/dismissed': <Layout><DismissedTenders /></Layout>,
+    '/scout/add-tender': <Layout><ManualEntry /></Layout>,
     '/scout/portals': <Layout><PortalsHealth /></Layout>,
     '/scout/matching': <Layout><MatchingConfig /></Layout>,
     '/scout/settings': <Layout><Settings /></Layout>,

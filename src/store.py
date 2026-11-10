@@ -866,34 +866,130 @@ def delete_style_example(conn, tenant_id, example_id):
 
 
 def upsert(conn, tenant_id, record):
-    h = record_hash(record)
     with conn.begin() as c:
-        exists = c.execute(select(tenders.c.hash).where(
-            (tenders.c.tenant_id == tenant_id) & (tenders.c.hash == h))).fetchone()
-        if exists:
+        return insert_tender(c, tenant_id, record)
+
+
+def insert_tender(c, tenant_id, record):
+    """upsert's body, on a connection already inside a transaction — so a
+    manual create (CR-013 §4) can draw its pub_number and insert the row in
+    one transaction. Insert-only: False if the hash already exists."""
+    h = record_hash(record)
+    exists = c.execute(select(tenders.c.hash).where(
+        (tenders.c.tenant_id == tenant_id) & (tenders.c.hash == h))).fetchone()
+    if exists:
+        return False
+    fs = record.get("first_seen") or date.today().isoformat()
+    values = {"tenant_id": tenant_id, "hash": h, "first_seen": fs}
+    for col in COLUMNS:
+        if col not in ("tenant_id", "hash", "first_seen"):
+            values[col] = _column_value(col, record)
+    c.execute(insert(tenders).values(**values))
+    return True
+
+
+def _column_value(col, record):
+    """How a record dict's value for `col` is written to the tenders row."""
+    if col == "status":
+        return record.get("status", "new")
+    if col == "notice_type":
+        return record.get("notice_type") or "tender"
+    if col == "entry_method":
+        return record.get("entry_method") or "scraped"
+    if col in _JSON:
+        return json.dumps(record.get(col, []))
+    if col in _EMPTY_DEFAULT:
+        return record.get(col) or ""  # None (no value/not translated) -> ''
+    if col in _NULL_DEFAULT:
+        return record.get(col)  # None stays None (no note) — never ''
+    if col in _NULLABLE_JSON:
+        return json.dumps(record[col]) if record.get(col) else None
+    return record.get(col, "")
+
+
+# CR-013 §4: what a manual edit may write. Never hash/source/pub_number (the
+# identity), never created_*/entry_method, never review state (status and
+# dismissal go through set_status as for any tender).
+MANUAL_EDITABLE_COLUMNS = (
+    "origin_site_id", "url", "tag_line", "description", "buyer", "country", "place",
+    "category", "procedure", "pub_date", "deadline", "cpv_codes", "value",
+    "value_currency", "language",
+    # re-derived on every edit, through run.derive_fields
+    "matched_terms", "match_source", "value_eur", "fx_rate_date", "exclude_reason",
+    "notice_type", "awarded_to", "awarded_value", "awarded_currency", "award_detail",
+    "tag_line_en", "description_en", "translation_status",
+)
+
+
+def get_record(conn, tenant_id, pub_number, include_deleted=False):
+    """One tender as all_records shapes it, or None."""
+    q = select(*[tenders.c[col] for col in COLUMNS]).where(
+        (tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number))
+    if not include_deleted:
+        q = q.where(tenders.c.deleted_at.is_(None))
+    with conn.connect() as c:
+        r = c.execute(q).fetchone()
+    if r is None:
+        return None
+    rec = dict(zip(COLUMNS, r))
+    for col in _JSON:
+        rec[col] = json.loads(rec[col])
+    for col in _NULLABLE_JSON:
+        rec[col] = json.loads(rec[col]) if rec[col] else None
+    return rec
+
+
+def _history_text(v):
+    if v is None:
+        return None
+    return json.dumps(v) if isinstance(v, (list, dict)) else str(v)
+
+
+def update_manual_tender(conn, tenant_id, pub_number, new_record, changed_by, history_fields):
+    """Write an edited manual record. Only MANUAL_EDITABLE_COLUMNS are
+    touched, and only on a live manual row — the WHERE clause itself refuses
+    a scraped or deleted one, so a caller bug cannot rewrite a scraped
+    tender. `history_fields` (user-supplied fields plus exclude_reason) get a
+    tender_history row each when they actually changed, plus one
+    `manual_edit` row naming who made the edit. Returns the changed fields."""
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+           & (tenders.c.entry_method == "manual") & tenders.c.deleted_at.is_(None))
+    old = get_record(conn, tenant_id, pub_number)
+    changed = [f for f in history_fields
+               if old is not None and _history_text(old.get(f)) != _history_text(new_record.get(f))]
+    with conn.begin() as c:
+        res = c.execute(update(tenders).where(key).values(
+            **{col: _column_value(col, new_record) for col in MANUAL_EDITABLE_COLUMNS}))
+        if res.rowcount != 1:
+            raise LookupError(f"no live manual tender {pub_number}")
+        for f in changed:
+            c.execute(insert(tender_history).values(
+                tenant_id=tenant_id, pub_number=pub_number, field=f,
+                old_value=_history_text(old.get(f)), new_value=_history_text(new_record.get(f)),
+                changed_at=now))
+        if changed:
+            c.execute(insert(tender_history).values(
+                tenant_id=tenant_id, pub_number=pub_number, field="manual_edit",
+                old_value=None, new_value=changed_by, changed_at=now))
+    return changed
+
+
+def set_manual_tender_deleted(conn, tenant_id, pub_number, deleted, by):
+    """Soft delete / restore (CR-013 §9 Q6). Manual rows only; recorded in
+    tender_history. Returns False if there was nothing to change."""
+    now = datetime.now(timezone.utc).isoformat()
+    key = ((tenders.c.tenant_id == tenant_id) & (tenders.c.pub_number == pub_number)
+           & (tenders.c.entry_method == "manual")
+           & (tenders.c.deleted_at.is_(None) if deleted else tenders.c.deleted_at.isnot(None)))
+    with conn.begin() as c:
+        res = c.execute(update(tenders).where(key).values(
+            deleted_at=now if deleted else None, deleted_by=by if deleted else None))
+        if res.rowcount != 1:
             return False
-        fs = record.get("first_seen") or date.today().isoformat()
-        values = {"tenant_id": tenant_id, "hash": h, "first_seen": fs}
-        for col in COLUMNS:
-            if col in ("tenant_id", "hash", "first_seen"):
-                continue
-            elif col == "status":
-                values[col] = record.get("status", "new")
-            elif col == "notice_type":
-                values[col] = record.get("notice_type") or "tender"
-            elif col == "entry_method":
-                values[col] = record.get("entry_method") or "scraped"
-            elif col in _JSON:
-                values[col] = json.dumps(record.get(col, []))
-            elif col in _EMPTY_DEFAULT:
-                values[col] = record.get(col) or ""  # None (no value/not translated) -> ''
-            elif col in _NULL_DEFAULT:
-                values[col] = record.get(col)  # None stays None (no note) — never ''
-            elif col in _NULLABLE_JSON:
-                values[col] = json.dumps(record[col]) if record.get(col) else None
-            else:
-                values[col] = record.get(col, "")
-        c.execute(insert(tenders).values(**values))
+        c.execute(insert(tender_history).values(
+            tenant_id=tenant_id, pub_number=pub_number, field="deleted" if deleted else "restored",
+            old_value=None, new_value=by, changed_at=now))
     return True
 
 
@@ -1604,7 +1700,8 @@ def get_pipeline_entries(conn, tenant_id):
                  & (tenders.c.tenant_id == pipeline.c.tenant_id))
     stmt = (select(*cols)
             .select_from(tenders.outerjoin(pipeline, join_cond))
-            .where((tenders.c.tenant_id == tenant_id) & (tenders.c.status == "shortlisted")))
+            .where((tenders.c.tenant_id == tenant_id) & (tenders.c.status == "shortlisted")
+                   & tenders.c.deleted_at.is_(None)))  # CR-013: soft-deleted manual rows stay out
     with conn.connect() as c:
         rows = c.execute(stmt).fetchall()
     out = []
@@ -2336,7 +2433,8 @@ def get_followup_entries(conn, tenant_id):
                  & (tenders.c.tenant_id == pipeline.c.tenant_id))
     stmt = (select(*cols)
             .select_from(tenders.join(pipeline, join_cond))
-            .where((tenders.c.tenant_id == tenant_id) & (pipeline.c.submission_status == "submitted")))
+            .where((tenders.c.tenant_id == tenant_id) & (pipeline.c.submission_status == "submitted")
+                   & tenders.c.deleted_at.is_(None)))  # CR-013: soft-deleted manual rows stay out
     with conn.connect() as c:
         rows = c.execute(stmt).fetchall()
     out = []

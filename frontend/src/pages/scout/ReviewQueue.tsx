@@ -9,6 +9,7 @@ import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 import ForwardTender from '../../components/ForwardTender';
 import SourceNotice from '../../components/SourceNotice';
+import ManualTenderPanel from '../../components/ManualTenderPanel';
 
 // CR-008 W4: 'status' sorts by decision (see STATUS_SORT_RANK below).
 type SortBy = 'pub_date' | 'deadline' | 'status';
@@ -623,6 +624,9 @@ export default function ReviewQueue() {
                   </div>
                 </div>
                 <SourceNotice source={selected.source} />
+                {selected.entry_method === 'manual' && (
+                  <ManualTenderPanel tender={selected} onDeleted={() => { setSelected(null); load(); }} />
+                )}
 
                 {/* CR-007 Phase D (D1): collaboration warning — presence only,
                     never blocks the triage actions below (see api._attach_presence). */}
