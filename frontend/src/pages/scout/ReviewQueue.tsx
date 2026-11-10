@@ -9,7 +9,7 @@ import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 import ForwardTender from '../../components/ForwardTender';
 import SourceNotice from '../../components/SourceNotice';
-import ManualTenderPanel from '../../components/ManualTenderPanel';
+import ManualTenderPanel, { ManualBadge, WouldBeExcluded } from '../../components/ManualTenderPanel';
 
 // CR-008 W4: 'status' sorts by decision (see STATUS_SORT_RANK below).
 type SortBy = 'pub_date' | 'deadline' | 'status';
@@ -214,6 +214,8 @@ export default function ReviewQueue() {
   const [assigneeManual, setAssigneeManual] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [duplicateFilter, setDuplicateFilter] = useState<DuplicateFilter>('all');
+  // CR-013 §6: manual / scraped facet
+  const [entryFilter, setEntryFilter] = useState<'all' | 'scraped' | 'manual'>('all');
   const [resolvingDuplicate, setResolvingDuplicate] = useState(false);
 
   function closeNoteAction() {
@@ -394,6 +396,7 @@ export default function ReviewQueue() {
   const visibleTenders = tenders
     .filter(t => statusFilter === 'all' || t.status === statusFilter)
     .filter(t => !regionFilter || t.country === regionFilter)
+    .filter(t => entryFilter === 'all' || (t.entry_method ?? 'scraped') === entryFilter)
     // "unique" keeps every tender with no active group, plus exactly the
     // canonical member of each group that has one — never drops a tender
     // that isn't part of a group, and never drops more than one per group.
@@ -445,6 +448,17 @@ export default function ReviewQueue() {
         >
           <option value="">All regions</option>
           {regions.map(r => <option key={r} value={r}>{countryFlag(r)} {r}</option>)}
+        </select>
+        {/* CR-013 §6: manual / scraped facet */}
+        <select
+          value={entryFilter}
+          onChange={e => setEntryFilter(e.target.value as 'all' | 'scraped' | 'manual')}
+          aria-label="Entry method"
+          style={{ background: '#151d2c', border: `1px solid ${entryFilter !== 'all' ? '#4c5a70' : '#1a2334'}`, color: '#e2e8f0', padding: '5px 10px', borderRadius: 6, fontSize: 13, cursor: 'pointer', outline: 'none' }}
+        >
+          <option value="all">Scraped and manual</option>
+          <option value="scraped">Scraped only</option>
+          <option value="manual">Manual only ({tenders.filter(t => t.entry_method === 'manual').length})</option>
         </select>
         {/* Duplicate-resolution follow-up: opt-in declutter, defaults to
             'all' — collapsing is never the default (see DuplicateFilter's
@@ -522,6 +536,8 @@ export default function ReviewQueue() {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
                         <span style={{ color: '#8892a4', fontSize: 11 }}>{t.source} · {t.country}</span>
+                        {t.entry_method === 'manual' && <ManualBadge />}
+                        {t.entry_method === 'manual' && <WouldBeExcluded reason={t.exclude_reason} />}
                         <NoticeTypeBadge noticeType={t.notice_type} />
                         {t.cpv_codes.length > 0 && (() => {
                           // CR-008 W5: most-specific code's label, full ordered

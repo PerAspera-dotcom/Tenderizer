@@ -14,6 +14,7 @@ SECTIONS = ["Supply", "Services", "Works", "Training", "Other"]
 
 COLUMNS = [
     ("Pub. number", "pub_number"),
+    ("Entry", "_entry"),  # CR-013 §6: "Manual" marker, see _value
     ("Deadline", "deadline"),
     ("Tag line", "tag_line"),
     ("Buyer", "buyer"),
@@ -29,7 +30,7 @@ _HEADER_FILL = PatternFill("solid", fgColor="1F3A5F")
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _THIN = Side(style="thin", color="D9D9D9")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
-_WIDTHS = {"Pub. number": 14, "Deadline": 20, "Tag line": 60, "Buyer": 28, "Country": 9,
+_WIDTHS = {"Pub. number": 14, "Entry": 16, "Deadline": 20, "Tag line": 60, "Buyer": 28, "Country": 9,
            "Procedure": 14, "CPV codes": 22, "Matched terms": 26, "Match": 9, "Link": 40}
 
 
@@ -38,7 +39,19 @@ def _section_of(rec):
     return cat if cat in SECTIONS else "Other"
 
 
+def entry_label(rec):
+    """CR-013 §6: the manual marker as text — "Manual", plus the exclusion an
+    automated rule would have applied (a manual tender is never hidden by
+    one). Empty for a scraped tender."""
+    if rec.get("entry_method") != "manual":
+        return ""
+    reason = rec.get("exclude_reason")
+    return f"Manual · would be excluded: {reason}" if reason else "Manual"
+
+
 def _value(rec, key):
+    if key == "_entry":
+        return entry_label(rec)
     v = rec.get(key)
     if isinstance(v, list):
         return ", ".join(str(x) for x in v)

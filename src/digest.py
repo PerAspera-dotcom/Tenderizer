@@ -12,6 +12,7 @@ about what counts as closing soon.
 from datetime import date, datetime, timezone
 
 import attribution
+import report
 import store
 
 URGENT_DAYS = 7
@@ -28,6 +29,12 @@ def _days_left(iso_date):
     if d.tzinfo is None:
         d = d.replace(tzinfo=timezone.utc)
     return (d.date() - datetime.now(timezone.utc).date()).days
+
+
+def _marker(rec):
+    """CR-013 §6: "[Manual] " / "[Manual · would be excluded: …] " prefix."""
+    label = report.entry_label(rec)
+    return f"[{label}] " if label else ""
 
 
 def build_daily_digest(conn, tenant_id, today=None):
@@ -53,13 +60,13 @@ def build_daily_digest(conn, tenant_id, today=None):
 
     sections = []
     if new_tenders:
-        lines = [f"- {r['tag_line']} ({r['pub_number']}) — {r['buyer']}" for r in new_tenders]
+        lines = [f"- {_marker(r)}{r['tag_line']} ({r['pub_number']}) — {r['buyer']}" for r in new_tenders]
         sections.append(f"New matches today ({len(new_tenders)}):\n" + "\n".join(lines))
     if closing_soon:
         lines = []
         for days, e in closing_soon:
             flag = "\U0001F534" if days <= URGENT_DAYS else "\U0001F7E1"
-            lines.append(f"- {flag} {e['tag_line']} ({e['pub_number']}) — {days} day{'s' if days != 1 else ''} left")
+            lines.append(f"- {flag} {_marker(e)}{e['tag_line']} ({e['pub_number']}) — {days} day{'s' if days != 1 else ''} left")
         sections.append(f"Closing soon ({len(closing_soon)}):\n" + "\n".join(lines))
 
     footer = attribution.email_footer([r["source"] for r in new_tenders]

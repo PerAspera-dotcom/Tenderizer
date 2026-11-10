@@ -498,6 +498,7 @@ def list_tenders(
     has_deadline:     Optional[bool] = None,
     notice_type:      Optional[str]  = None,
     include_excluded: bool           = False,
+    entry_method:     Optional[str]  = None,
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
     sort:   str = "deadline",
@@ -522,6 +523,9 @@ def list_tenders(
 
     if source:
         records = [r for r in records if (r.get("source") or "").upper() == source.upper()]
+    # CR-013 §6: manual / scraped facet
+    if entry_method:
+        records = [r for r in records if (r.get("entry_method") or "scraped") == entry_method]
     if category:
         records = [r for r in records if (r.get("category") or "").lower() == category.lower()]
     if match_source:

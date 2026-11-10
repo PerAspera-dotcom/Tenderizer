@@ -4,6 +4,7 @@ import { listTenders, getScoutSettings } from '../../api';
 import type { Tender } from '../../types';
 import { formatDate, countryFlag, hasTranslatedTagLine, displayTagLine, hoursLeft, PORTAL_OPTS, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import MatchChip from '../../components/MatchChip';
+import { ManualBadge, WouldBeExcluded } from '../../components/ManualTenderPanel';
 
 const MATCH_OPTS = [
   { value: '', label: 'All match types' },
@@ -156,6 +157,8 @@ export default function TenderFeed() {
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <span style={{ fontSize: 14, marginRight: 4 }}>{countryFlag(t.country)}</span>
                     <span style={{ background: '#1a2334', color: '#e2e8f0', padding: '2px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t.source}</span>
+                    {t.entry_method === 'manual' && <ManualBadge />}
+                    {t.entry_method === 'manual' && <WouldBeExcluded reason={t.exclude_reason} />}
                   </td>
                   <td>
                     <span className="mono" style={{ fontSize: 13 }}>{formatDate(t.deadline)}</span>
