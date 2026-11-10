@@ -39,7 +39,7 @@ from schema import (tender_history, vault_document_history, composer_document_hi
                      tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence,
                      tender_notifications, translated_documents, document_tender_links,
                      TRANSLATED_DOCUMENTS_COLUMNS)
-from schema import tenant_origin_sites, manual_tender_counters
+from schema import tenant_origin_sites, manual_tender_counters, manual_tender_drafts
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -2568,3 +2568,74 @@ def last_email_alert_received_at(conn, tenant_id, source):
             (email_alerts.c.tenant_id == tenant_id) & (email_alerts.c.source == source)
         ).order_by(email_alerts.c.id.desc()).limit(1)).fetchone()
     return row[0] if row else None
+
+
+# ── CR-013 §5: manual-entry drafts (PDF path) ────────────────────────────────
+
+_DRAFT_JSON = ("files", "extraction", "confirmed_values")
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _draft_dict(r):
+    d = dict(r._mapping)
+    for col in _DRAFT_JSON:
+        d[col] = json.loads(d[col]) if d.get(col) else ([] if col == "files" else None)
+    return d
+
+
+def create_draft(conn, tenant_id, created_by):
+    now = _now_iso()
+    with conn.begin() as c:
+        res = c.execute(insert(manual_tender_drafts).values(
+            tenant_id=tenant_id, status="uploading", files="[]", created_by=created_by,
+            created_at=now, updated_at=now))
+        return res.inserted_primary_key[0]
+
+
+def get_draft(conn, tenant_id, draft_id):
+    """The draft, or None if it doesn't exist *for this tenant*."""
+    with conn.connect() as c:
+        r = c.execute(select(manual_tender_drafts).where(
+            (manual_tender_drafts.c.tenant_id == tenant_id)
+            & (manual_tender_drafts.c.id == draft_id))).fetchone()
+    return _draft_dict(r) if r else None
+
+
+def list_open_drafts(conn, tenant_id):
+    """Drafts not yet confirmed or discarded, newest first."""
+    with conn.connect() as c:
+        rows = c.execute(select(manual_tender_drafts).where(
+            (manual_tender_drafts.c.tenant_id == tenant_id)
+            & manual_tender_drafts.c.status.in_(("uploading", "extracting", "ready", "failed"))
+        ).order_by(manual_tender_drafts.c.id.desc())).fetchall()
+    return [_draft_dict(r) for r in rows]
+
+
+def update_draft(conn, tenant_id, draft_id, expect_status=None, **values):
+    """Set fields on a draft. With `expect_status` (a status or tuple of
+    statuses) the write only happens if the draft is currently in one of
+    them — a compare-and-set, so two confirms cannot both win. Returns True
+    if a row was updated."""
+    for col in _DRAFT_JSON:
+        if col in values and values[col] is not None:
+            values[col] = json.dumps(values[col])
+    values["updated_at"] = _now_iso()
+    cond = (manual_tender_drafts.c.tenant_id == tenant_id) & (manual_tender_drafts.c.id == draft_id)
+    if expect_status is not None:
+        statuses = (expect_status,) if isinstance(expect_status, str) else tuple(expect_status)
+        cond = cond & manual_tender_drafts.c.status.in_(statuses)
+    with conn.begin() as c:
+        return c.execute(update(manual_tender_drafts).where(cond).values(**values)).rowcount == 1
+
+
+def stale_open_drafts(conn, older_than_iso):
+    """(tenant_id, draft) for every unconfirmed draft last touched before
+    `older_than_iso` — the retention purge's input."""
+    with conn.connect() as c:
+        rows = c.execute(select(manual_tender_drafts).where(
+            manual_tender_drafts.c.status.in_(("uploading", "extracting", "ready", "failed"))
+            & (manual_tender_drafts.c.updated_at < older_than_iso))).fetchall()
+    return [_draft_dict(r) for r in rows]

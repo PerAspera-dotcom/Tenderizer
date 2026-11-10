@@ -21,7 +21,7 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution, visibility, manual_tenders
+import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution, visibility, manual_tenders, manual_drafts
 import object_storage
 import run as engine
 import currency
@@ -103,6 +103,9 @@ async def _lifespan(_app: FastAPI):
         # before nothing else depends on timing here.
         _scheduler.add_job(_run_translation_retention_purge, "cron", hour=5, minute=0,
                             id="translation_retention_purge")
+        # CR-013 §5: unconfirmed manual-entry drafts expire after 30 days.
+        _scheduler.add_job(_run_manual_draft_purge, "cron", hour=5, minute=15,
+                            id="manual_draft_purge")
         _scheduler.start()
     yield
     if _scheduler is not None and _scheduler.running:
@@ -1016,6 +1019,95 @@ def restore_manual_tender(pub_number: str, identity: Identity = Depends(get_curr
         raise HTTPException(404, "No deleted manual tender with that number")
 
 
+# ── CR-013 §5: manual entry from documents (drafts) ─────────────────────────
+# create draft -> add each PDF (presigned upload to area "manual_drafts", or a
+# direct multipart post) -> start extraction (background) -> poll the draft ->
+# confirm with the reviewed fields (same body as typed entry) or discard.
+
+def _draft_or_404(conn, tenant_id, draft_id):
+    d = store.get_draft(conn, tenant_id, draft_id)
+    if d is None:
+        raise HTTPException(404, "Draft not found")
+    return d
+
+
+def _draft_view(conn, tenant_id, draft):
+    return manual_drafts.view(draft, store.get_origin_sites(conn, tenant_id))
+
+
+@app.post("/api/manual-drafts")
+def create_manual_draft(identity: Identity = Depends(get_current_identity)):
+    conn = _db()
+    draft_id = store.create_draft(conn, identity.tenant_id, identity.account_name)
+    return _draft_view(conn, identity.tenant_id, store.get_draft(conn, identity.tenant_id, draft_id))
+
+
+@app.get("/api/manual-drafts")
+def list_manual_drafts(tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    return [_draft_view(conn, tenant_id, d) for d in store.list_open_drafts(conn, tenant_id)]
+
+
+@app.get("/api/manual-drafts/{draft_id}")
+def get_manual_draft(draft_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    return _draft_view(conn, tenant_id, _draft_or_404(conn, tenant_id, draft_id))
+
+
+@app.post("/api/manual-drafts/{draft_id}/files")
+async def add_manual_draft_file(draft_id: int, file: Optional[UploadFile] = File(None),
+                                object_key: Optional[str] = Form(None), filename: Optional[str] = Form(None),
+                                content_type: Optional[str] = Form(None),
+                                tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _draft_or_404(conn, tenant_id, draft_id)
+    up = await run_in_threadpool(_receive_upload, tenant_id, "manual_drafts", None,
+                                 file, object_key, filename, content_type)
+    try:
+        draft = manual_drafts.add_file(conn, tenant_id, draft_id, up)
+    except manual_drafts.DraftError as e:
+        raise HTTPException(422, {"field": "files", "message": str(e)})
+    return _draft_view(conn, tenant_id, draft)
+
+
+@app.post("/api/manual-drafts/{draft_id}/extract")
+def extract_manual_draft(draft_id: int, background: BackgroundTasks,
+                         tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _draft_or_404(conn, tenant_id, draft_id)
+    try:
+        draft = manual_drafts.start_extraction(conn, tenant_id, draft_id)
+    except manual_drafts.DraftError as e:
+        raise HTTPException(422, {"field": "files", "message": str(e)})
+    background.add_task(manual_drafts.process, _db(), tenant_id, draft_id)
+    return _draft_view(conn, tenant_id, draft)
+
+
+@app.post("/api/manual-drafts/{draft_id}/confirm")
+def confirm_manual_draft(draft_id: int, body: ManualTenderBody,
+                         identity: Identity = Depends(get_current_identity)):
+    conn = _db()
+    _draft_or_404(conn, identity.tenant_id, draft_id)
+    try:
+        return manual_drafts.confirm(conn, identity.tenant_id, draft_id, identity.account_name,
+                                     body.model_dump())
+    except manual_tenders.ManualTenderError as e:
+        raise _manual_error(e)
+    except manual_drafts.DraftError as e:
+        raise HTTPException(409, {"field": None, "message": str(e)})
+
+
+@app.post("/api/manual-drafts/{draft_id}/discard")
+def discard_manual_draft(draft_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    _draft_or_404(conn, tenant_id, draft_id)
+    try:
+        manual_drafts.discard(conn, tenant_id, draft_id)
+    except manual_drafts.DraftError as e:
+        raise HTTPException(409, {"field": None, "message": str(e)})
+    return {"status": "discarded"}
+
+
 @app.get("/api/tenders/{pub_number}/history")
 def get_tender_history(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
     return {"pub_number": pub_number, "history": store.get_tender_history(_db(), tenant_id, pub_number)}
@@ -1401,6 +1493,15 @@ def _run_backup_job():
 DOCUMENT_RETENTION_DAYS = int(os.getenv("DOCUMENT_RETENTION_DAYS", "30"))
 
 
+def _run_manual_draft_purge():
+    try:
+        n = manual_drafts.purge_stale(_db())
+        if n:
+            logging.info("purged %d stale manual-entry drafts", n)
+    except Exception:
+        logging.exception("manual draft purge crashed")
+
+
 def _run_translation_retention_purge():
     """CR-012 §2: "originals + translations auto-deleted after 30 days
     (configurable env var)". A single global job (not per-tenant, unlike
@@ -1661,7 +1762,8 @@ DOWNLOAD_LINK_MEDIA_TYPE = "application/vnd.tenderizer.download-link+json"
 
 # Areas a client may request a presigned upload for. composer_output is
 # server-written only. Caps are read at call time (monkeypatchable).
-_UPLOADABLE_AREAS = ("tender_documents", "vault", "composer", "composer_style", "translations")
+_UPLOADABLE_AREAS = ("tender_documents", "vault", "composer", "composer_style", "translations",
+                     "manual_drafts")
 
 
 def _upload_limit(area):

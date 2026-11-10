@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion, OriginSite, ManualTenderInput } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion, OriginSite, ManualTenderInput, ManualDraft } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -18,7 +18,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 // filesystem mode (no bucket configured) the presign call answers "direct"
 // and the file is posted to the endpoint as before.
 
-export type StorageArea = 'tender_documents' | 'vault' | 'composer' | 'composer_style' | 'translations';
+export type StorageArea = 'tender_documents' | 'vault' | 'composer' | 'composer_style' | 'translations' | 'manual_drafts';
 
 interface PresignResponse {
   mode: 'direct' | 's3';
@@ -704,4 +704,34 @@ export function deleteManualTender(pubNumber: string): Promise<{ status: string 
 
 export function restoreManualTender(pubNumber: string): Promise<Tender> {
   return apiSend(`/api/tenders/manual/${encodeURIComponent(pubNumber)}/restore`, 'POST');
+}
+
+// ── CR-013 §5: manual entry from documents (drafts) ─────────────────────────
+
+export function createManualDraft(): Promise<ManualDraft> {
+  return apiSend<ManualDraft>('/api/manual-drafts', 'POST');
+}
+
+export function listManualDrafts(): Promise<ManualDraft[]> {
+  return apiFetch<ManualDraft[]>('/api/manual-drafts');
+}
+
+export function getManualDraft(id: number): Promise<ManualDraft> {
+  return apiFetch<ManualDraft>(`/api/manual-drafts/${id}`);
+}
+
+export function addManualDraftFile(id: number, file: File): Promise<ManualDraft> {
+  return uploadViaStorage<ManualDraft>(`/api/manual-drafts/${id}/files`, 'manual_drafts', file);
+}
+
+export function startManualDraftExtraction(id: number): Promise<ManualDraft> {
+  return apiSend<ManualDraft>(`/api/manual-drafts/${id}/extract`, 'POST');
+}
+
+export function confirmManualDraft(id: number, input: ManualTenderInput): Promise<Tender> {
+  return apiSend<Tender>(`/api/manual-drafts/${id}/confirm`, 'POST', input);
+}
+
+export function discardManualDraft(id: number): Promise<{ status: string }> {
+  return apiSend(`/api/manual-drafts/${id}/discard`, 'POST');
 }

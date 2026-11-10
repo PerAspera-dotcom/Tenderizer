@@ -453,3 +453,33 @@ export interface ManualTenderInput {
   value_currency: string;
   language: string;
 }
+
+// CR-013 §5: manual entry from documents
+export interface ExtractedField {
+  value: string | string[] | number;
+  confidence: number;
+  source: string;
+  site?: OriginSite;  // only on origin_site_id: the matched site
+}
+
+export interface ManualDraftFile {
+  object_key: string;
+  filename: string;
+  size: number;
+  pages?: number;
+  vision_pages?: number;
+  skipped_pages?: number;
+}
+
+export interface ManualDraft {
+  id: number;
+  status: 'uploading' | 'extracting' | 'ready' | 'failed' | 'confirming' | 'confirmed' | 'discarded';
+  files: ManualDraftFile[];
+  error: string | null;
+  created_by: string | null;
+  created_at: string;
+  prefill: Record<string, ExtractedField>;
+  suggestions: Record<string, ExtractedField>;
+  new_origin_site: { name: string; domain: string; confidence: number; source: string } | null;
+  confidence_threshold: number;
+}

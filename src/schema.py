@@ -164,6 +164,33 @@ tenant_origin_sites = Table(
     UniqueConstraint("tenant_id", "name_key", name="uq_tenant_origin_sites_name_key"),
 )
 
+# CR-013 §5: staging for the PDF entry path. Nothing reaches `tenders` until
+# a person confirms (manual_drafts.confirm). The row keeps what the model
+# extracted (`extraction`, per field: value / confidence / source snippet)
+# next to what the person submitted (`confirmed_values`), so it is always
+# possible to tell later what was asserted from what was guessed.
+# status: uploading -> extracting -> ready | failed -> confirmed | discarded
+manual_tender_drafts = Table(
+    "manual_tender_drafts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("status", Text, nullable=False, server_default="uploading"),
+    Column("files", Text, nullable=False, server_default="[]"),
+    Column("extracted_text", Text, nullable=True),
+    Column("extraction", Text, nullable=True),
+    Column("model", Text, nullable=True),
+    Column("error", Text, nullable=True),
+    Column("created_by", Text, nullable=True),
+    Column("created_at", Text, nullable=False, server_default=""),
+    Column("updated_at", Text, nullable=False, server_default=""),
+    Column("confirmed_by", Text, nullable=True),
+    Column("confirmed_at", Text, nullable=True),
+    Column("confirmed_pub_number", Text, nullable=True),
+    Column("confirmed_values", Text, nullable=True),
+)
+Index("ix_manual_tender_drafts_tenant_status", manual_tender_drafts.c.tenant_id,
+      manual_tender_drafts.c.status)
+
 # CR-013 §3 / §9 Q3: manual pub_number sequence, one row per tenant per year.
 # `last_value` is the last number issued; store.next_manual_pub_number bumps
 # it with a single UPDATE ... RETURNING inside the caller's transaction, so

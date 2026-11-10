@@ -18,6 +18,7 @@ import re
 from datetime import date, datetime, timezone
 
 import currency
+import normalize
 import run
 import store
 
@@ -121,7 +122,9 @@ def clean(conn, tenant_id, fields):
         "buyer": _text(f["buyer"]),
         "country": _text(f["country"]),
         "place": _text(f["place"]),
-        "category": _text(f["category"]),
+        # same report sections a scraped record maps to (Supply/Services/Works/
+        # Training/Other) — normalize.map_category, not free text
+        "category": normalize.map_category(_text(f["category"])) if _text(f["category"]) else "",
         "procedure": _text(f["procedure"]),
         "pub_date": pub_date,
         "deadline": deadline,

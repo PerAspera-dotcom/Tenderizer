@@ -48,8 +48,9 @@ AREAS = frozenset({
     "composer_style",     # Composer style-guide example proposals
     "composer_output",    # generated proposal / filled matrix / gaps report
     "translations",       # Scout document translation originals + results
+    "manual_drafts",      # CR-013 §5: PDFs of a manual-entry draft, before it has a pub_number
 })
-TENANT_WIDE_AREAS = frozenset({"vault", "composer_style", "translations"})
+TENANT_WIDE_AREAS = frozenset({"vault", "composer_style", "translations", "manual_drafts"})
 
 # 100 MB per file. Tender document packs (drawings, scanned annexes) routinely
 # exceed the old 20 MB "minimal-slice sanity cap"; 100 MB covers a full
