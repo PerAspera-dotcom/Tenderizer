@@ -54,3 +54,11 @@
 - name: PhilGEPS
   type: api
   enabled: true
+# CR-013 §3: reserved source for tenders entered by hand. `type: manual` —
+# listed on Portal Health but never fetched: run._default_sources only builds
+# the connectors it names, so this has no source_health rows and can never
+# trip the consecutive-failure alert. Its value is part of every manual
+# tender's hash (source|pub_number) — do not rename.
+- name: Manual
+  type: manual
+  enabled: true

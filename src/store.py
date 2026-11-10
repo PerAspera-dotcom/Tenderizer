@@ -39,6 +39,7 @@ from schema import (tender_history, vault_document_history, composer_document_hi
                      tender_duplicates, tenant_dedup_settings, tenant_scout_settings, tender_presence,
                      tender_notifications, translated_documents, document_tender_links,
                      TRANSLATED_DOCUMENTS_COLUMNS)
+from schema import tenant_origin_sites, manual_tender_counters
 
 _JSON = {"cpv_codes", "matched_terms", "supersedes"}
 _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
@@ -52,7 +53,9 @@ _EMPTY_DEFAULT = {"value", "value_currency", "value_eur", "fx_rate_date",
 # then treat as a spurious match against another equally-empty record).
 _NULL_DEFAULT = {"dismissal_reason", "dismissed_by", "dismissed_at",
                  "awarded_to", "awarded_value", "awarded_currency",
-                 "internal_identifier", "reason_category", "assigned_to"}
+                 "internal_identifier", "reason_category", "assigned_to",
+                 # CR-013 §3: manual-entry fields, NULL on every scraped row
+                 "origin_site_id", "created_by", "created_at", "deleted_at", "deleted_by"}
 # Same "never fabricate absence" rule as _NULL_DEFAULT, but the value itself
 # is a JSON object rather than plain text when present — needs its own
 # json.dumps/loads pass, unlike _JSON's columns (which always default to an
@@ -107,6 +110,13 @@ _TENDERS_MIGRATIONS = [
     "ALTER TABLE composer_documents ADD COLUMN object_key TEXT DEFAULT NULL",
     "ALTER TABLE composer_matrix ADD COLUMN object_key TEXT DEFAULT NULL",
     "ALTER TABLE composer_style_examples ADD COLUMN object_key TEXT DEFAULT NULL",
+    # CR-013 §3: manual tender entry
+    "ALTER TABLE tenders ADD COLUMN entry_method TEXT NOT NULL DEFAULT 'scraped'",
+    "ALTER TABLE tenders ADD COLUMN origin_site_id INTEGER DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN created_by TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN created_at TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN deleted_at TEXT DEFAULT NULL",
+    "ALTER TABLE tenders ADD COLUMN deleted_by TEXT DEFAULT NULL",
 ]
 
 
@@ -871,6 +881,8 @@ def upsert(conn, tenant_id, record):
                 values[col] = record.get("status", "new")
             elif col == "notice_type":
                 values[col] = record.get("notice_type") or "tender"
+            elif col == "entry_method":
+                values[col] = record.get("entry_method") or "scraped"
             elif col in _JSON:
                 values[col] = json.dumps(record.get(col, []))
             elif col in _EMPTY_DEFAULT:
@@ -1108,10 +1120,17 @@ def get_last_forwarded_to(conn, tenant_id):
     return latest
 
 
-def all_records(conn, tenant_id):
+def all_records(conn, tenant_id, include_deleted=False):
+    """Every tender for the tenant. Soft-deleted manual rows (CR-013 §9 Q6)
+    are left out unless `include_deleted` — so the Review Queue, dedup,
+    translation, screening, rescore, digest and report all skip them without
+    each needing its own check. Scraped rows are never soft-deleted, so for
+    them this is exactly the old query."""
+    q = select(*[tenders.c[col] for col in COLUMNS]).where(tenders.c.tenant_id == tenant_id)
+    if not include_deleted:
+        q = q.where(tenders.c.deleted_at.is_(None))
     with conn.connect() as c:
-        rows = c.execute(select(*[tenders.c[col] for col in COLUMNS])
-                          .where(tenders.c.tenant_id == tenant_id)).fetchall()
+        rows = c.execute(q).fetchall()
     out = []
     for r in rows:
         rec = dict(zip(COLUMNS, r))
@@ -1121,6 +1140,97 @@ def all_records(conn, tenant_id):
             rec[col] = json.loads(rec[col]) if rec[col] else None
         out.append(rec)
     return out
+
+
+# ── CR-013 §3: manual tender identity ────────────────────────────────────────
+
+MANUAL_SOURCE = "Manual"
+
+
+def next_manual_pub_number(c, tenant_id, year=None):
+    """Draw the next `MAN-{year}-{NNNN}` for this tenant (§9 Q3).
+
+    `c` is a connection already inside the transaction that will insert the
+    tender, so a rollback hands the number back to nobody (a gap, never a
+    duplicate). The bump is one UPDATE ... RETURNING: concurrent callers
+    serialise on that row (Postgres row lock / SQLite's single writer). The
+    year's first number races on INSERT instead; the loser's savepoint rolls
+    back on the primary key and it falls through to the UPDATE. The tenders
+    primary key (tenant_id, hash of source|pub_number) is the backstop.
+    """
+    year = int(year or datetime.now(timezone.utc).year)
+    key = ((manual_tender_counters.c.tenant_id == tenant_id)
+           & (manual_tender_counters.c.year == year))
+    bump = (update(manual_tender_counters).where(key)
+            .values(last_value=manual_tender_counters.c.last_value + 1)
+            .returning(manual_tender_counters.c.last_value))
+    for _ in range(3):
+        row = c.execute(bump).fetchone()
+        if row is not None:
+            return f"MAN-{year}-{row[0]:04d}"
+        try:
+            with c.begin_nested():
+                c.execute(insert(manual_tender_counters).values(
+                    tenant_id=tenant_id, year=year, last_value=1))
+            return f"MAN-{year}-0001"
+        except IntegrityError:
+            continue  # another creator inserted the year's row first
+    raise RuntimeError("could not allocate a manual pub_number")
+
+
+def _origin_site_key(name):
+    return " ".join((name or "").split()).lower()
+
+
+def _origin_site_dict(r):
+    return {"id": r.id, "name": r.name, "domain": r.domain, "active": bool(r.active),
+            "created_by": r.created_by, "created_at": r.created_at}
+
+
+def get_origin_sites(conn, tenant_id, active_only=True):
+    q = select(tenant_origin_sites).where(tenant_origin_sites.c.tenant_id == tenant_id)
+    if active_only:
+        q = q.where(tenant_origin_sites.c.active.is_(True))
+    with conn.connect() as c:
+        rows = c.execute(q.order_by(tenant_origin_sites.c.name)).fetchall()
+    return [_origin_site_dict(r) for r in rows]
+
+
+def get_origin_site(conn, tenant_id, site_id):
+    """The site, or None if it doesn't exist *for this tenant* — callers use
+    this as the tenant-isolation check before writing origin_site_id."""
+    with conn.connect() as c:
+        r = c.execute(select(tenant_origin_sites).where(
+            (tenant_origin_sites.c.tenant_id == tenant_id)
+            & (tenant_origin_sites.c.id == site_id))).fetchone()
+    return _origin_site_dict(r) if r else None
+
+
+def add_origin_site(conn, tenant_id, name, domain=None, created_by=None):
+    """The form's "add new site" path. Idempotent on the normalised name:
+    "DTVP", " dtvp " and "Dtvp" all return the one existing row (reactivated
+    if it had been switched off) rather than creating a near-duplicate."""
+    name = " ".join((name or "").split())
+    if not name:
+        raise ValueError("origin site name is required")
+    key = _origin_site_key(name)
+    where = (tenant_origin_sites.c.tenant_id == tenant_id) & (tenant_origin_sites.c.name_key == key)
+    with conn.begin() as c:
+        existing = c.execute(select(tenant_origin_sites).where(where)).fetchone()
+        if existing is None:
+            try:
+                with c.begin_nested():
+                    c.execute(insert(tenant_origin_sites).values(
+                        tenant_id=tenant_id, name=name, name_key=key,
+                        domain=(domain or "").strip() or None, active=True,
+                        created_by=created_by,
+                        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            except IntegrityError:
+                pass  # concurrent add of the same name — fall through to read it
+        elif not existing.active:
+            c.execute(update(tenant_origin_sites).where(where).values(active=True))
+        row = c.execute(select(tenant_origin_sites).where(where)).fetchone()
+    return _origin_site_dict(row)
 
 
 def pub_number_exists_for_other_tenant(conn, tenant_id, pub_number):

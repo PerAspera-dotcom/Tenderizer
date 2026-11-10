@@ -21,7 +21,7 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, send_default_pii=False)
 
-import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution
+import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution, visibility
 import object_storage
 import run as engine
 import currency
@@ -515,7 +515,7 @@ def list_tenders(
     # them (run.py's `surfaced`). include_excluded=true is the audit escape
     # hatch (e.g. to show why a notice didn't make the cut).
     if not include_excluded:
-        records = [r for r in records if not r.get("exclude_reason")]
+        records = [r for r in records if not visibility.is_hidden(r)]
 
     if source:
         records = [r for r in records if (r.get("source") or "").upper() == source.upper()]
@@ -585,7 +585,7 @@ def get_tender(pub_number: str, include_excluded: bool = False,
     _attach_notifications(conn, tenant_id, records)
     for r in records:
         if r["pub_number"] == pub_number:
-            if r.get("exclude_reason") and not include_excluded:
+            if visibility.is_hidden(r) and not include_excluded:
                 raise HTTPException(404, "Tender not found")
             return r
     # Own tenant has no such record: 403 if it belongs to another tenant
@@ -1034,6 +1034,7 @@ _PORTAL_DESCRIPTIONS = {
     "TenderNed": "Dutch national portal (JSON feed) · CPV or keyword, filtered locally",
     "PhilGEPS": "Philippine national e-procurement, no codes · title keyword + budget lookup",
     "DeepL": "Translates non-English notices and documents to English",
+    "Manual": "Tenders entered by hand from portals the Scout cannot scrape",
     "AusTender": "Australian federal tenders · via email alerts (not set up yet)",
     "GeBIZ": "Singapore government tenders · via email alerts (not set up yet)",
     "Etimad": "Saudi government tenders · via email alerts (not set up yet)",
@@ -1096,6 +1097,11 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     # same "the Portal Health panel already renders any {name, region,
     # status, detail} shape generically" reuse CR-011 §1 relied on for DeepL.
     result.extend(_email_alert_health(conn, tenant_id))
+    # CR-013 §3: the Manual source is listed (portals.yaml type: manual) but
+    # never fetched, so it has no source_health rows and must not look like a
+    # portal that is failing or waiting for its first run.
+    result.append({"name": store.MANUAL_SOURCE, "region": "Manual intake", "status": "manual",
+                   "detail": "Entered by hand; not scraped, no health checks"})
     for entry in result:
         entry["description"] = _PORTAL_DESCRIPTIONS.get(entry["name"], "")
     return result

@@ -15,7 +15,7 @@ rather than each spending their own DeepL quota on it.
 """
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer, MetaData,
                          PrimaryKeyConstraint, String, Table, Text)
-from sqlalchemy import Index
+from sqlalchemy import Index, UniqueConstraint
 
 metadata = MetaData()
 
@@ -125,7 +125,56 @@ tenders = Table(
     # fills it so far (solicitation number, notice type, contact, contract
     # period, trade agreements — see connectors/canadabuys.notice_detail).
     Column("notice_detail", Text, nullable=True),
+    # CR-013 §3: manual tender entry. `entry_method` is the authoritative
+    # manual/scraped marker (filters, badges, exports) — redundant with
+    # source='Manual' by design: `source` drives existing grouping and the
+    # hash, `entry_method` survives any future renaming of that source.
+    Column("entry_method", Text, nullable=False, server_default="scraped"),
+    # Manual only (NULL on scraped rows). origin_site_id points at
+    # tenant_origin_sites.id — no DB foreign key, same as pipeline's link to
+    # tenders by pub_number; the API checks the site belongs to the tenant.
+    # created_by/created_at are stamped server-side from the Clerk identity,
+    # never client-supplied, exactly like dismissed_by/dismissed_at.
+    Column("origin_site_id", Integer, nullable=True),
+    Column("created_by", Text, nullable=True),
+    Column("created_at", Text, nullable=True),
+    # Soft delete (CR-013 §9 Q6) — manual rows only. A deleted row is left in
+    # place (pipeline, history, Composer links intact, restorable) and
+    # store.all_records leaves it out unless asked for it.
+    Column("deleted_at", Text, nullable=True),
+    Column("deleted_by", Text, nullable=True),
     PrimaryKeyConstraint("tenant_id", "hash"),
+)
+
+# CR-013 §3: where a manually entered tender was found. A per-tenant lookup,
+# not free text, so "DTVP", "dtvp.de" and "Deutsches Vergabeportal" cannot
+# become three sources: `name_key` (lower-cased, whitespace-collapsed name) is
+# unique per tenant. Any org member may add one from the entry form; it ships
+# empty — the seed list is a separate, client-confirmed step.
+tenant_origin_sites = Table(
+    "tenant_origin_sites", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("name_key", Text, nullable=False),
+    Column("domain", Text, nullable=True),
+    Column("active", Boolean, nullable=False, server_default="1"),
+    Column("created_by", Text, nullable=True),
+    Column("created_at", Text, nullable=True),
+    UniqueConstraint("tenant_id", "name_key", name="uq_tenant_origin_sites_name_key"),
+)
+
+# CR-013 §3 / §9 Q3: manual pub_number sequence, one row per tenant per year.
+# `last_value` is the last number issued; store.next_manual_pub_number bumps
+# it with a single UPDATE ... RETURNING inside the caller's transaction, so
+# concurrent creators serialise on the row lock (Postgres) or the database
+# write lock (SQLite) and can never draw the same number.
+manual_tender_counters = Table(
+    "manual_tender_counters", metadata,
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False),
+    Column("year", Integer, nullable=False),
+    Column("last_value", Integer, nullable=False),
+    PrimaryKeyConstraint("tenant_id", "year"),
 )
 
 # Column order matters to callers that build dicts positionally — keep it

@@ -18,6 +18,8 @@ from datetime import date, timedelta
 from difflib import SequenceMatcher
 from unidecode import unidecode
 
+import visibility
+
 TITLE_SIMILARITY_FLOOR = 0.9
 DEADLINE_WINDOW = timedelta(days=7)
 
@@ -74,7 +76,7 @@ def find_duplicate_groups(records):
     to give the same-source link a stable, human-readable ordering (which
     side reads as "kept" in the UI), not to decide anything.
     """
-    candidates = [r for r in records if not r.get("exclude_reason")]
+    candidates = [r for r in records if not visibility.is_hidden(r)]
     by_buyer = defaultdict(list)
     for r in candidates:
         key = _normalize(r.get("buyer"))
@@ -135,7 +137,7 @@ def find_cross_portal_duplicates(records, similarity_threshold=DESCRIPTION_SIMIL
     tuples, `pub_number_a < pub_number_b`, each pair appearing at most once
     even if both signals would have flagged it (reference wins).
     """
-    candidates = [r for r in records if not r.get("exclude_reason")]
+    candidates = [r for r in records if not visibility.is_hidden(r)]
     matches = []
     seen_pairs = set()
 

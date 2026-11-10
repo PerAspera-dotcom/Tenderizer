@@ -21,6 +21,7 @@ import dedup
 import translate
 import alerts
 import screening
+import visibility
 from schema import DEFAULT_TENANT_ID
 from report import build_report
 import json, os
@@ -150,7 +151,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
     # text across notices, or across tenants, is never sent twice either.
     translated_this_run = 0
     for r in store.all_records(conn, tenant_id):
-        if r.get("exclude_reason") or not r.get("language") or r["language"] == "eng":
+        if visibility.is_hidden(r) or not r.get("language") or r["language"] == "eng":
             continue
         if r.get("translation_status") == "ok":
             continue
@@ -197,7 +198,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
         question_ids = [q["id"] for q in questions]
         by_id = {q["id"]: q for q in questions}
         for r in store.all_records(conn, tenant_id):
-            if r.get("exclude_reason"):
+            if visibility.is_hidden(r):
                 continue
             missing_ids = store.missing_screening_question_ids(conn, tenant_id, r["pub_number"], question_ids)
             if not missing_ids:
@@ -207,7 +208,7 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
                 store.set_screening_answer(conn, tenant_id, r["pub_number"], q_id, answer_text, snippet, status)
 
     records = store.all_records(conn, tenant_id)
-    surfaced = [r for r in records if not r.get("exclude_reason")]
+    surfaced = [r for r in records if not visibility.is_hidden(r)]
     build_report(surfaced, health, out_path)
     _write_last_run(db_path, tenant_id, health, this_run_records)
     return health

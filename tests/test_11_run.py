@@ -379,7 +379,10 @@ def test_default_sources_filters_by_enabled_portals(tmp_path):
     # computed from config.portals() rather than hardcoded, so this doesn't
     # need updating every time a portal's shipped default enabled state
     # changes (e.g. CR-010's Bekanntmachungsservice go-live, 2026-10-16).
-    expected = {p["name"] for p in config.portals() if p["enabled"]} - {"BOAMP"}
+    # CR-013 §3: a `type: manual` portal (the Manual source) is listed and
+    # enabled but is never a fetched connector.
+    expected = {p["name"] for p in config.portals()
+                if p["enabled"] and p.get("type", "api") != "manual"} - {"BOAMP"}
     assert {s["name"] for s in sources} == expected
 
 
