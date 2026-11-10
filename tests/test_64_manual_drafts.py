@@ -67,21 +67,29 @@ class FakeClaude:
     """Stands in for anthropic.Anthropic(): image requests are transcribed,
     the text request returns `reply`. Records what it was asked."""
 
-    def __init__(self, reply=None):
+    def __init__(self, reply=None, stop_reason="end_turn"):
         self.reply = reply if reply is not None else _fields_json()
-        self.vision_calls = 0
-        self.prompts = []
+        self.stop_reason = stop_reason
+        self.calls = 0
+        self.prompts = []          # the text block of each request
+        self.document_pages = []   # page count of the attached PDF per request (0 = none)
         self.messages = self
 
     def create(self, model, max_tokens, messages):
-        content = messages[0]["content"]
-        if isinstance(content, list):  # vision
-            self.vision_calls += 1
-            text = "Gescannte Seite: Zelte und Planen"
-        else:
-            self.prompts.append(content)
-            text = self.reply
-        return type("M", (), {"content": [type("B", (), {"text": text})()]})()
+        import base64
+        import fitz
+        self.calls += 1
+        blocks = messages[0]["content"]
+        docs = [b for b in blocks if b["type"] == "document"]
+        pages = 0
+        for d in docs:
+            assert d["source"]["media_type"] == "application/pdf"
+            with fitz.open(stream=base64.b64decode(d["source"]["data"]), filetype="pdf") as pdf:
+                pages += len(pdf)
+        self.document_pages.append(pages)
+        self.prompts.append(next(b["text"] for b in blocks if b["type"] == "text"))
+        return type("M", (), {"stop_reason": self.stop_reason,
+                              "content": [type("B", (), {"text": self.reply})()]})()
 
 
 @pytest.fixture
@@ -138,25 +146,71 @@ def test_failed_and_discarded_drafts_write_nothing(conn):
     assert store.all_records(conn, TEST_TENANT_ID, include_deleted=True) == []
 
 
-# ── text extraction ──────────────────────────────────────────────────────────
+# ── reading ──────────────────────────────────────────────────────────────────
 
-def test_text_layer_pages_are_read_locally_and_scanned_pages_go_to_vision(conn):
+TEXT_PAGE = "Lieferung von Zelten fuer die Bundeswehr, 200 Stueck, CPV 39522530"
+
+
+def test_one_call_text_layer_as_text_scanned_pages_as_native_pdf(conn):
     client = FakeClaude()
-    d = _ready_draft(conn, client=client, pages=("Lieferung von Zelten fuer die Bundeswehr, 200 Stueck", None))
-    assert client.vision_calls == 1
+    d = _ready_draft(conn, client=client, pages=(TEXT_PAGE, None, TEXT_PAGE + " Lose 2", None))
+    assert client.calls == 1                      # no per-page transcription calls
+    assert client.document_pages == [2]           # both scanned pages, as one attached PDF
     (f,) = d["files"]
-    assert (f["pages"], f["vision_pages"], f["skipped_pages"]) == (2, 1, 0)
-    text = store.get_draft(conn, TEST_TENANT_ID, d["id"])["extracted_text"]
-    assert "Lieferung von Zelten" in text and "Gescannte Seite" in text
-    assert "[notice.pdf · p.2]" in text
+    assert (f["pages"], f["text_pages"], f["scanned_pages"], f["skipped_pages"]) == (4, 2, 2, 0)
+    (prompt,) = client.prompts
+    assert "[notice.pdf · p.1]" in prompt and "[notice.pdf · p.3]" in prompt
+    assert "PDF page 1 = notice.pdf p.2; PDF page 2 = notice.pdf p.4" in prompt
+    record = store.get_draft(conn, TEST_TENANT_ID, d["id"])["extracted_text"]
+    assert "Scanned pages, read from images: notice.pdf p.2, notice.pdf p.4" in record
 
 
-def test_vision_stops_at_the_cap_and_counts_what_it_skipped(conn, monkeypatch):
-    monkeypatch.setattr(manual_drafts, "VISION_PAGE_CAP", 2)
+def test_text_only_pack_attaches_no_document(conn):
     client = FakeClaude()
-    d = _ready_draft(conn, client=client, pages=("Titel der Ausschreibung: Lieferung von Zelten", None, None, None))
-    assert client.vision_calls == 2
-    assert (d["files"][0]["vision_pages"], d["files"][0]["skipped_pages"]) == (2, 1)
+    _ready_draft(conn, client=client, pages=(TEXT_PAGE,))
+    assert client.document_pages == [0]
+
+
+def test_scanned_only_pack_is_read_from_the_pdf(conn):
+    client = FakeClaude()
+    d = _ready_draft(conn, client=client, pages=(None, None))
+    assert d["status"] == "ready" and client.document_pages == [2]
+    assert "no text layer" in client.prompts[0]
+
+
+def test_page_budget_is_per_draft_shared_across_files(conn, monkeypatch):
+    monkeypatch.setattr(manual_drafts, "MAX_PAGES_PER_DRAFT", 3)
+    client = FakeClaude()
+    draft_id = store.create_draft(conn, TEST_TENANT_ID, TEST_ACCOUNT_NAME)
+    manual_drafts.add_file(conn, TEST_TENANT_ID, draft_id, _upload("a.pdf", _pdf([TEXT_PAGE, None])))
+    manual_drafts.add_file(conn, TEST_TENANT_ID, draft_id, _upload("b.pdf", _pdf([None, TEXT_PAGE, TEXT_PAGE])))
+    manual_drafts.start_extraction(conn, TEST_TENANT_ID, draft_id)
+    manual_drafts.process(conn, TEST_TENANT_ID, draft_id, client=client)
+    a, b = store.get_draft(conn, TEST_TENANT_ID, draft_id)["files"]
+    assert (a["text_pages"], a["scanned_pages"], a["skipped_pages"]) == (1, 1, 0)
+    assert (b["text_pages"], b["scanned_pages"], b["skipped_pages"]) == (0, 1, 2)
+    assert client.document_pages == [2]
+
+
+def test_text_limit_counts_pages_it_could_not_send(conn, monkeypatch):
+    monkeypatch.setattr(manual_drafts, "MAX_TEXT_CHARS", 150)
+    d = _ready_draft(conn, pages=(TEXT_PAGE, TEXT_PAGE, TEXT_PAGE))
+    (f,) = d["files"]
+    assert (f["text_pages"], f["skipped_pages"]) == (1, 2)
+
+
+def test_scanned_size_limit_counts_pages_it_could_not_attach(conn, monkeypatch):
+    monkeypatch.setattr(manual_drafts, "MAX_SCANNED_PDF_BYTES", 1)
+    client = FakeClaude()
+    d = _ready_draft(conn, client=client, pages=(TEXT_PAGE, None))
+    (f,) = d["files"]
+    assert (f["scanned_pages"], f["skipped_pages"]) == (0, 1)
+    assert client.document_pages == [0]
+
+
+def test_truncated_model_response_fails_the_draft(conn):
+    d = _ready_draft(conn, client=FakeClaude(stop_reason="max_tokens"))
+    assert d["status"] == "failed" and "cut off" in d["error"]
 
 
 def test_no_api_key_fails_cleanly_so_the_user_can_type(conn, monkeypatch):

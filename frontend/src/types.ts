@@ -467,8 +467,9 @@ export interface ManualDraftFile {
   filename: string;
   size: number;
   pages?: number;
-  vision_pages?: number;
-  skipped_pages?: number;
+  text_pages?: number;     // read from the text layer
+  scanned_pages?: number;  // read from page images
+  skipped_pages?: number;  // past the draft's limits (200 pages / text size / attachment size)
 }
 
 export interface ManualDraft {

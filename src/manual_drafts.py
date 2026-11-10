@@ -1,17 +1,23 @@
 """CR-013 §5 — manual tender entry from documents (the PDF path).
 
     upload (1..MAX_FILES PDFs, object storage area "manual_drafts")
-      -> text extraction: PyMuPDF per page; a page with almost no text layer
-         is rendered and read by Claude Vision (capped at VISION_PAGE_CAP
-         pages per draft)
-      -> field extraction: one Claude call maps the text onto the manual-entry
-         fields, each with a confidence and the snippet it came from
+      -> reading (read_documents): PyMuPDF per page, one shared budget of
+         MAX_PAGES_PER_DRAFT pages per draft
+           * a page with a text layer contributes its text (up to
+             MAX_TEXT_CHARS in total)
+           * a scanned page is re-rendered as a grayscale image into one PDF
+             of scanned pages (kept under MAX_SCANNED_PDF_BYTES)
+      -> field extraction: ONE Claude call gets the text plus the scanned
+         pages as a native PDF document block and returns every field with a
+         confidence and the passage it came from (no per-page transcription)
       -> a person reviews it on the same form as typed entry
       -> confirm: manual_tenders.create (the typed path, unchanged), then the
          files are attached to the new tender's document list
 
-Nothing is written to `tenders` before confirm. The draft row keeps the
-model's extraction next to what the person submitted.
+Anything past a limit is counted per file (skipped_pages) and shown on the
+form, never silently dropped. Nothing is written to `tenders` before
+confirm. The draft row keeps the model's extraction next to what the person
+submitted.
 
 Translation is not done here: on confirm the record goes through
 run.translate_record like any other (DeepL + its content-hash cache), so
@@ -22,6 +28,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import manual_tenders
@@ -31,10 +38,13 @@ import store
 
 CLAUDE_MODEL = "claude-sonnet-4-6"  # matches vault.CLAUDE_MODEL / composer.CLAUDE_MODEL
 MAX_FILES = 10
-VISION_PAGE_CAP = 20            # agreed cap: pages per draft sent to Claude Vision
+MAX_PAGES_PER_DRAFT = 200       # agreed: pages read per draft, text-layer and scanned together
+MAX_TEXT_CHARS = 400_000        # agreed: text-layer characters sent to the extraction call
+MAX_SCANNED_PDF_BYTES = 80 * 1024 * 1024  # raw; base64 adds a third -> ~107 MB of the 128 MB request limit
 SCANNED_PAGE_CHARS = 40         # a page with fewer text-layer chars counts as scanned
-VISION_DPI = 150
-MAX_PROMPT_CHARS = 60_000       # text sent to the field-extraction call
+SCAN_DPI = 130                   # ~ what the model keeps of an A4 page (1,568 px long edge)
+SCAN_JPEG_QUALITY = 60
+EXTRACT_MAX_TOKENS = 8000
 CONFIDENCE_THRESHOLD = 0.7      # agreed: below this a field is suggested, not pre-filled
 DRAFT_RETENTION_DAYS = 30
 
@@ -64,8 +74,8 @@ _FIELD_GUIDE = {
                     '"domain": "dtvp.de"}; null if the document does not say'),
 }
 
-_EXTRACT_PROMPT = """You are reading a public procurement notice or tender document so that a \
-person can register the tender. Map the document text below onto these fields:
+_EXTRACT_PROMPT = """You are reading a public procurement notice or tender documents so that a \
+person can register the tender. Map the documents onto these fields:
 
 {guide}
 
@@ -73,17 +83,13 @@ Return ONLY a JSON object (no markdown fences, no other text) shaped exactly:
 {{"fields": {{"<field>": {{"value": <string, or list of strings for cpv_codes, or null>, \
 "confidence": <number 0..1>, "source": "<the short passage the value came from, quoted>"}}}}}}
 
-Rules: include every field listed. If the document does not state a field, use null with \
+Rules: include every field listed. If the documents do not state a field, use null with \
 confidence 0 — never guess or fill in a plausible value. Confidence reflects how clearly the \
-document states the value, not how plausible it is. Quote "source" from the text verbatim.
-
+documents state the value, not how plausible it is. Quote "source" verbatim.
+{scanned}
 Document text (page markers in [brackets]):
 {text}
 """
-
-_VISION_PROMPT = ("Transcribe all text on this page of a procurement document, verbatim, in its "
-                  "original language. Preserve headings and table cells as plain lines. Output "
-                  "only the transcription.")
 
 
 class DraftError(ValueError):
@@ -94,61 +100,88 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-# ── text extraction ──────────────────────────────────────────────────────────
-
 def _claude():
     import anthropic
     return anthropic.Anthropic()
 
 
-def _vision_page_text(client, page):
-    import fitz  # PyMuPDF
-    mat = fitz.Matrix(VISION_DPI / 72, VISION_DPI / 72)
-    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
-    b64 = base64.standard_b64encode(pix.tobytes("png")).decode("utf-8")
-    msg = client.messages.create(model=CLAUDE_MODEL, max_tokens=4000, messages=[{"role": "user", "content": [
-        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-        {"type": "text", "text": _VISION_PROMPT},
-    ]}])
-    return msg.content[0].text.strip()
+# ── reading ──────────────────────────────────────────────────────────────────
+
+@dataclass
+class Reading:
+    text: str = ""
+    scanned_pdf: bytes = b""
+    scanned_pages: list = field(default_factory=list)  # [(filename, page_no)] in attached-PDF order
+    stats: list = field(default_factory=list)          # per file: pages/text_pages/scanned_pages/skipped_pages
+
+    @property
+    def empty(self):
+        return not self.text.strip() and not self.scanned_pages
 
 
-def extract_text(files, vision_budget=None, client=None):
-    """Text of every file, page-marked. Returns (text, per_file_stats).
-    Scanned pages go to Claude Vision while the shared budget lasts; past it
-    they are skipped and counted, so the reviewer knows text is missing."""
+def _scan_image(page):
     import fitz  # PyMuPDF
-    parts, stats = [], []
-    budget = VISION_PAGE_CAP if vision_budget is None else vision_budget  # read at call time
-    for f in files:
-        data = object_storage.get(f["object_key"])
-        st = {"object_key": f["object_key"], "pages": 0, "vision_pages": 0, "skipped_pages": 0}
-        try:
-            doc = fitz.open(stream=data, filetype="pdf")
-        except Exception as e:  # not a readable PDF
-            raise DraftError(f"Could not read {f.get('filename') or 'a file'} as a PDF ({type(e).__name__})")
-        try:
-            with doc:
-                st["pages"] = len(doc)
-                for i, page in enumerate(doc, start=1):
-                    text = page.get_text().strip()
-                    if len(text) < SCANNED_PAGE_CHARS:
-                        if budget > 0 and os.getenv("ANTHROPIC_API_KEY"):
-                            client = client or _claude()
-                            text = _vision_page_text(client, page)
-                            budget -= 1
-                            st["vision_pages"] += 1
-                        else:
+    mat = fitz.Matrix(SCAN_DPI / 72, SCAN_DPI / 72)
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+    return pix.tobytes("jpeg", jpg_quality=SCAN_JPEG_QUALITY)
+
+
+def read_documents(files):
+    """Read every file within the draft's limits (all read at call time).
+    Pages past a limit are counted in that file's skipped_pages."""
+    import fitz  # PyMuPDF
+    parts, chars = [], 0
+    reading = Reading()
+    scanned_doc, scanned_bytes = fitz.open(), 0
+    budget = MAX_PAGES_PER_DRAFT
+    try:
+        for f in files:
+            name = f.get("filename") or "document"
+            data = object_storage.get(f["object_key"])
+            st = {"object_key": f["object_key"], "pages": 0, "text_pages": 0, "scanned_pages": 0,
+                  "skipped_pages": 0}
+            try:
+                doc = fitz.open(stream=data, filetype="pdf")
+            except Exception as e:  # not a readable PDF
+                raise DraftError(f"Could not read {name} as a PDF ({type(e).__name__})")
+            try:
+                with doc:
+                    st["pages"] = len(doc)
+                    for i, page in enumerate(doc, start=1):
+                        if budget <= 0:
                             st["skipped_pages"] += 1
                             continue
-                    if text:
-                        parts.append(f"[{f.get('filename') or 'document'} · p.{i}]\n{text}")
-        except DraftError:
-            raise
-        except Exception as e:
-            raise DraftError(f"Could not read {f.get('filename') or 'a file'} ({type(e).__name__})")
-        stats.append(st)
-    return "\n\n".join(parts), stats
+                        text = page.get_text().strip()
+                        if len(text) >= SCANNED_PAGE_CHARS:
+                            chunk = f"[{name} · p.{i}]\n{text}"
+                            if chars + len(chunk) > MAX_TEXT_CHARS:
+                                st["skipped_pages"] += 1
+                                continue
+                            parts.append(chunk)
+                            chars += len(chunk) + 2
+                            st["text_pages"] += 1
+                        else:
+                            img = _scan_image(page)
+                            if scanned_bytes + len(img) > MAX_SCANNED_PDF_BYTES:
+                                st["skipped_pages"] += 1
+                                continue
+                            out = scanned_doc.new_page(width=page.rect.width, height=page.rect.height)
+                            out.insert_image(out.rect, stream=img)
+                            scanned_bytes += len(img)
+                            reading.scanned_pages.append((name, i))
+                            st["scanned_pages"] += 1
+                        budget -= 1
+            except DraftError:
+                raise
+            except Exception as e:
+                raise DraftError(f"Could not read {name} ({type(e).__name__})")
+            reading.stats.append(st)
+        reading.text = "\n\n".join(parts)
+        if reading.scanned_pages:
+            reading.scanned_pdf = scanned_doc.tobytes(garbage=3, deflate=True)
+    finally:
+        scanned_doc.close()
+    return reading
 
 
 # ── field extraction ─────────────────────────────────────────────────────────
@@ -207,12 +240,31 @@ def _normalise_value(field, value):
     return value
 
 
-def extract_fields(text, client=None):
-    """{field: {value, confidence, source}} for EXTRACTED_FIELDS."""
-    client = client or _claude()
+def _extract_content(reading):
+    """The single request's user content: the scanned pages as a native PDF
+    document block (if any), then the instructions with the text layer."""
     guide = "\n".join(f"- {f}: {_FIELD_GUIDE[f]}" for f in EXTRACTED_FIELDS)
-    msg = client.messages.create(model=CLAUDE_MODEL, max_tokens=4000, messages=[{
-        "role": "user", "content": _EXTRACT_PROMPT.format(guide=guide, text=text[:MAX_PROMPT_CHARS])}])
+    scanned, content = "", []
+    if reading.scanned_pages:
+        content.append({"type": "document", "source": {
+            "type": "base64", "media_type": "application/pdf",
+            "data": base64.standard_b64encode(reading.scanned_pdf).decode("ascii")}})
+        index = "; ".join(f"PDF page {n} = {name} p.{p}"
+                          for n, (name, p) in enumerate(reading.scanned_pages, start=1))
+        scanned = ("\nThe attached PDF holds the scanned pages, which have no text layer; read them "
+                   f"as part of the documents. Page map: {index}.\n")
+    content.append({"type": "text", "text": _EXTRACT_PROMPT.format(
+        guide=guide, scanned=scanned, text=reading.text or "(no text layer; see the attached PDF)")})
+    return content
+
+
+def extract_fields(reading, client=None):
+    """{field: {value, confidence, source}} for EXTRACTED_FIELDS, in one call."""
+    client = client or _claude()
+    msg = client.messages.create(model=CLAUDE_MODEL, max_tokens=EXTRACT_MAX_TOKENS,
+                                 messages=[{"role": "user", "content": _extract_content(reading)}])
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        raise DraftError("The documents could not be read into fields (the response was cut off)")
     data = _parse_json(msg.content[0].text)
     if data is None:
         raise DraftError("The document could not be read into fields (unexpected model output)")
@@ -328,14 +380,18 @@ def process(conn, tenant_id, draft_id, client=None):
         if not os.getenv("ANTHROPIC_API_KEY") and client is None:
             raise DraftError("Reading documents is not configured (no Anthropic API key). "
                              "You can still type the details.")
-        text, stats = extract_text(draft["files"], client=client)
-        files = [dict(f, **next((s for s in stats if s["object_key"] == f["object_key"]), {}))
+        reading = read_documents(draft["files"])
+        files = [dict(f, **next((s for s in reading.stats if s["object_key"] == f["object_key"]), {}))
                  for f in draft["files"]]
-        if not text.strip():
-            raise DraftError("No readable text was found in the documents")
-        extraction = extract_fields(text, client=client)
+        if reading.empty:
+            raise DraftError("No readable pages were found in the documents")
+        extraction = extract_fields(reading, client=client)
+        record = reading.text
+        if reading.scanned_pages:
+            record += ("\n\n[Scanned pages, read from images: "
+                       + ", ".join(f"{n} p.{p}" for n, p in reading.scanned_pages) + "]")
         store.update_draft(conn, tenant_id, draft_id, expect_status="extracting", status="ready",
-                           files=files, extracted_text=text, extraction=extraction, model=CLAUDE_MODEL,
+                           files=files, extracted_text=record, extraction=extraction, model=CLAUDE_MODEL,
                            error=None)
     except Exception as e:
         logging.exception("manual draft %s extraction failed", draft_id)

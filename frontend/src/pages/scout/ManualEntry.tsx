@@ -363,7 +363,7 @@ export default function ManualEntry() {
       {draft && draft.status === 'extracting' && (
         <div className="card" style={{ padding: 20 }}>
           <div className="loading" style={{ padding: 0 }}>Reading {draft.files.length} document{draft.files.length === 1 ? '' : 's'}…</div>
-          <div style={noteStyle}>Scanned pages take longer. You can leave this page; the draft stays under “Unfinished drafts”.</div>
+          <div style={noteStyle}>Large packs take a minute or two. You can leave this page; the draft stays under “Unfinished drafts”.</div>
         </div>
       )}
 
@@ -376,7 +376,9 @@ export default function ManualEntry() {
       )}
       {draft && draft.status === 'ready' && draft.files.some(f => f.skipped_pages) && (
         <div style={{ ...noteStyle, marginBottom: 12 }}>
-          Some scanned pages were not read (page limit reached). Check the documents for anything missing.
+          {draft.files.reduce((n, f) => n + (f.skipped_pages ?? 0), 0)} page(s) were not read because the draft
+          reached its limit (200 pages per draft). Check those pages for anything missing:{' '}
+          {draft.files.filter(f => f.skipped_pages).map(f => `${f.filename} (${f.skipped_pages})`).join(', ')}.
         </div>
       )}
 
