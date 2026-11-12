@@ -3,8 +3,8 @@
 Wraps the standalone `proposal_tool/*.py` scripts (a working, human-run
 Python pipeline) as per-tender, importable functions — following the same
 pattern `vault.py` already established for Vault: per-tenant/per-tender
-paths, plain functions with explicit params, `ANTHROPIC_API_KEY` from the
-environment (never hardcoded), additive (not destructive) Chroma upserts.
+paths, plain functions with explicit params, Claude reached only through
+the llm gateway (CR-015), additive (not destructive) Chroma upserts.
 
 Reuses `vault.chunk_text`/`vault.parse_document`/`vault._embedding_model`
 directly rather than reimplementing identical parsing/chunking logic.
@@ -35,6 +35,7 @@ from docx import Document
 from docx.shared import RGBColor
 from openpyxl.styles import Font as XLFont, PatternFill
 
+import llm
 import vault
 
 CHROMA_ROOT = "data/composer_chroma"
@@ -191,14 +192,14 @@ def enrich_datasheet(path):
     file-caching side effect (the caller re-ingests the returned text
     directly rather than writing a sibling _extracted.txt). Returns the
     concatenated extracted text (empty string if no page had content), or
-    None if ANTHROPIC_API_KEY isn't configured.
+    None if the llm gateway refuses any page's call — partial text is never
+    returned, so the document stays image-heavy and can be enriched again
+    rather than being marked done with pages missing.
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not llm.available("composer"):
         return None
-    import anthropic
     import fitz  # PyMuPDF
 
-    client = anthropic.Anthropic()
     doc = fitz.open(path)
     try:
         page_count = min(len(doc), MAX_ENRICH_PAGES)
@@ -208,14 +209,16 @@ def enrich_datasheet(path):
             mat = fitz.Matrix(ENRICH_DPI / 72, ENRICH_DPI / 72)
             pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
             b64 = base64.standard_b64encode(pix.tobytes("png")).decode("utf-8")
-            message = client.messages.create(
-                model=CLAUDE_MODEL, max_tokens=2000,
+            message = llm.create(
+                "composer", model=CLAUDE_MODEL, max_tokens=2000,
                 messages=[{"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
                     {"type": "text", "text": _ENRICH_PROMPT},
                 ]}],
             )
-            text = message.content[0].text
+            text = llm.text_of(message)
+            if text is None:
+                return None
             if "NO TECHNICAL CONTENT" not in text.upper():
                 extracted_pages.append(text.strip())
         return "\n\n".join(extracted_pages)
@@ -257,11 +260,11 @@ def extract_requirements(documents):
     """documents: [{"filename": str, "role": "sow"|"parta", "pages": [str, ...]}]
     (parta docs should already be clipped via extract_parta_section before
     being passed in). Returns [{"title", "extracted", "source", "confidence",
-    "source_verified"}], or [] if ANTHROPIC_API_KEY isn't configured or
+    "source_verified"}], or [] if the llm gateway refuses the call or
     nothing parseable came back — same graceful-skip convention as
     vault.extract_metadata.
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not llm.available("composer"):
         return []
     blocks = []
     for doc in documents:
@@ -272,13 +275,14 @@ def extract_requirements(documents):
         return []
     text = "\n\n".join(blocks)[:_MAX_REQUIREMENTS_CONTEXT_CHARS]
 
-    import anthropic
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=CLAUDE_MODEL, max_tokens=4096,
+    message = llm.create(
+        "composer", model=CLAUDE_MODEL, max_tokens=4096,
         messages=[{"role": "user", "content": _REQUIREMENTS_PROMPT.format(text=text)}],
     )
-    parsed = _parse_requirements_response(message.content[0].text)
+    reply = llm.text_of(message)
+    if reply is None:
+        return []
+    parsed = _parse_requirements_response(reply)
     for item in parsed:
         item["source_verified"] = _verify_source(item["source"], documents)
     return parsed
@@ -402,11 +406,9 @@ def generate_response(requirement_text, evidence_chunks, style_guide=None):
     style_block = f"\nWRITING STYLE GUIDE — follow this precisely:\n{style_guide}\n" if style_guide else ""
     prompt = _RESPONSE_PROMPT.format(
         requirement=requirement_text, evidence=_evidence_block(evidence_chunks), style_block=style_block)
-    import anthropic
-    client = anthropic.Anthropic()
-    message = client.messages.create(model=CLAUDE_MODEL, max_tokens=1000,
-                                      messages=[{"role": "user", "content": prompt}])
-    return message.content[0].text.strip()
+    reply = llm.text_of(llm.create("composer", model=CLAUDE_MODEL, max_tokens=1000,
+                                   messages=[{"role": "user", "content": prompt}]))
+    return reply.strip() if reply is not None else None
 
 
 _STYLE_PROMPT = """You are analysing a set of example technical proposals to extract a reusable \
@@ -427,19 +429,17 @@ about the examples themselves."""
 
 def extract_style_guide(example_texts):
     """Synthesizes a single house-style guide from one or more example
-    proposals' extracted text. Returns None if ANTHROPIC_API_KEY isn't
-    configured or there's no text to learn from — caller leaves the
-    tenant's style guide unchanged rather than overwriting it with nothing.
+    proposals' extracted text. Returns None if the llm gateway refuses the
+    call or there's no text to learn from — caller leaves the tenant's style
+    guide unchanged rather than overwriting it with nothing.
     """
-    if not os.getenv("ANTHROPIC_API_KEY") or not example_texts:
+    if not example_texts:
         return None
     examples = "\n\n---\n\n".join(example_texts)
     prompt = _STYLE_PROMPT.format(examples=examples)
-    import anthropic
-    client = anthropic.Anthropic()
-    message = client.messages.create(model=CLAUDE_MODEL, max_tokens=1200,
-                                      messages=[{"role": "user", "content": prompt}])
-    return message.content[0].text.strip()
+    reply = llm.text_of(llm.create("composer", model=CLAUDE_MODEL, max_tokens=1200,
+                                   messages=[{"role": "user", "content": prompt}]))
+    return reply.strip() if reply is not None else None
 
 
 _REFINE_PROMPT = """You wrote this proposal response:
@@ -457,17 +457,16 @@ Rewrite the response incorporating the feedback. Keep it 150-250 words. Return o
 def refine_section(requirement_text, current_response, feedback, evidence_chunks):
     """Section-scoped regenerate — the real, working version of
     proposal_tool/refine.py's logic (that script assigns a bare API-key
-    string where an anthropic.Anthropic() client is expected, so
+    string where an SDK client object is expected, so
     `claude.messages.create(...)` there would raise; this is a rewrite, not
-    a port, using the env-var client like everywhere else in this module).
+    a port). None if the llm gateway refuses the call — the caller then
+    keeps the current response rather than overwriting it.
     """
     prompt = _REFINE_PROMPT.format(current=current_response, feedback=feedback,
                                     evidence=_evidence_block(evidence_chunks))
-    import anthropic
-    client = anthropic.Anthropic()
-    message = client.messages.create(model=CLAUDE_MODEL, max_tokens=800,
-                                      messages=[{"role": "user", "content": prompt}])
-    return message.content[0].text.strip()
+    reply = llm.text_of(llm.create("composer", model=CLAUDE_MODEL, max_tokens=800,
+                                   messages=[{"role": "user", "content": prompt}]))
+    return reply.strip() if reply is not None else None
 
 
 # CR-007 Phase F: cap on how many Vault chunks blend into each requirement's
@@ -519,7 +518,7 @@ def run_generate(tenant_id, pub_number, requirements, style_guide=None,
             # Still worth persisting gap_status/similarity/citations without a
             # key configured (informative for Gaps Report); only the prose
             # generation itself needs Claude.
-            if os.getenv("ANTHROPIC_API_KEY"):
+            if llm.available("composer"):
                 response_text = generate_response(req["extracted"], combined_chunks, style_guide)
         results.append({"id": req["id"], "gap_status": status, "similarity": best_sim,
                          "response_text": response_text, "citations": citations})
@@ -719,11 +718,12 @@ def _generate_matrix_cell(requirement, doc_guidance, tent_label, evidence_chunks
     prompt = _MATRIX_CELL_PROMPT.format(
         requirement=requirement, tent_label=tent_label, doc_guidance=doc_guidance,
         evidence=_evidence_block(evidence_chunks))
-    import anthropic
-    client = anthropic.Anthropic()
-    message = client.messages.create(model=CLAUDE_MODEL, max_tokens=800,
-                                      messages=[{"role": "user", "content": prompt}])
-    return _parse_matrix_cell_response(message.content[0].text)
+    reply = llm.text_of(llm.create("composer", model=CLAUDE_MODEL, max_tokens=800,
+                                   messages=[{"role": "user", "content": prompt}]))
+    if reply is None:
+        return {"yes_no": "?", "cross_ref": "",
+                "remark": f"Not generated: {llm.last_refusal() or 'Claude unavailable'}", "proposal_text": ""}
+    return _parse_matrix_cell_response(reply)
 
 
 def _parse_matrix_cell_response(raw):
@@ -745,10 +745,10 @@ def _parse_matrix_cell_response(raw):
 
 
 def fill_compliance_matrix(tenant_id, pub_number, matrix_path, out_path):
-    """Requires ANTHROPIC_API_KEY for any TO_BE_LINKED/COMPLETE cell (raises
-    via anthropic's own client if unset — unlike the SOW path, there's no
-    graceful partial-fill mode here since a matrix with unset cells isn't a
-    useful deliverable; call only when a key is configured).
+    """Needs Claude for every TO_BE_LINKED/COMPLETE cell. The caller only
+    starts it when llm.available("composer"); if the gateway refuses a cell
+    part-way (budget spent, API failure) that cell is written as "?" with the
+    reason in its remark instead of raising (CR-015 §3.5).
     """
     requirements = _load_matrix_requirements(matrix_path)
     wb = openpyxl.load_workbook(matrix_path)

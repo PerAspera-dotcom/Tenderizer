@@ -144,6 +144,7 @@ def test_find_vault_documents_filters_by_tag(tmp_path):
 
 def test_extract_metadata_includes_extra_hints_in_prompt(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setenv("LLM_VAULT", "on")
     monkeypatch.setattr(vault, "_pdf_first_pages_as_images", lambda path: ["base64imagedata"])
 
     class _FakeContentBlock:
@@ -184,6 +185,7 @@ def test_extract_style_guide_no_examples_returns_none(monkeypatch):
 
 def test_extract_style_guide_returns_claude_text(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setenv("LLM_COMPOSER", "on")
 
     class _FakeContentBlock:
         text = "Tone: formal.\nPhrases to use: 'we hereby confirm'."

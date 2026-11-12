@@ -123,6 +123,7 @@ def test_extract_requirements_no_pages_returns_empty(monkeypatch):
 
 def test_extract_requirements_parses_claude_json_response(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setenv("LLM_COMPOSER", "on")  # CR-015: a key alone no longer switches Composer on
 
     class _FakeContentBlock:
         text = ('[{"title": "Fire resistance", "extracted": "M2 required", '

@@ -23,6 +23,7 @@ if _sentry_dsn:
 
 import store, config, auth, vault, composer, relevance, dedup, translate_document, email_alerts, attribution, visibility, manual_tenders, manual_drafts
 import object_storage
+import llm, screening
 import run as engine
 import currency
 from schema import RELEVANCE_REASON_CATEGORIES
@@ -1217,6 +1218,7 @@ _PORTAL_DESCRIPTIONS = {
     "TenderNed": "Dutch national portal (JSON feed) · CPV or keyword, filtered locally",
     "PhilGEPS": "Philippine national e-procurement, no codes · title keyword + budget lookup",
     "DeepL": "Translates non-English notices and documents to English",
+    "Claude": "Reads manual-entry documents; optional screening, Vault and Composer help",
     "Manual": "Tenders entered by hand from portals the Scout cannot scrape",
     "AusTender": "Australian federal tenders · via email alerts (not set up yet)",
     "GeBIZ": "Singapore government tenders · via email alerts (not set up yet)",
@@ -1280,6 +1282,7 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     # same "the Portal Health panel already renders any {name, region,
     # status, detail} shape generically" reuse CR-011 §1 relied on for DeepL.
     result.extend(_email_alert_health(conn, tenant_id))
+    result.append(_claude_health(conn, tenant_id))
     # CR-013 §3: the Manual source is listed (portals.yaml type: manual) but
     # never fetched, so it has no source_health rows and must not look like a
     # portal that is failing or waiting for its first run.
@@ -1288,6 +1291,33 @@ def get_health(tenant_id: int = Depends(get_current_tenant_id)):
     for entry in result:
         entry["description"] = _PORTAL_DESCRIPTIONS.get(entry["name"], "")
     return result
+
+
+def _claude_health(conn, tenant_id):
+    """CR-015: the Claude API on Portal Health — which features are switched
+    on, this month's calls against the ceiling, and the last scheduled
+    screening pass (source_health rows written by run._scheduled_screening;
+    there are none unless scheduled screening is switched on)."""
+    st = llm.status()
+    health = store.get_source_health(conn, tenant_id, engine.CLAUDE_HEALTH_SOURCE)
+    on = [f.replace("_", " ") for f, enabled in st["features"].items() if enabled]
+    usage = st["usage"]
+    if not st["key_present"]:
+        status, detail = "paused", "No Anthropic API key configured"
+    elif usage is None:
+        status, detail = "failing", f"Usage counter unavailable, so every call is refused ({st['usage_error']})"
+    elif (health.get("last_result") or "").startswith("error:"):
+        status, detail = "failing", health["last_result"]
+    elif llm._budget_reason(usage):
+        status, detail = "failing", (f"{llm._budget_reason(usage)}: {usage['calls']} calls, "
+                                     f"~${usage['usd']:.2f} this month")
+    else:
+        status = "live" if on else "paused"
+        detail = (f"On for: {', '.join(on) or 'nothing'}. "
+                  f"This month: {usage['calls']} of {usage['limit']} calls, "
+                  f"~${usage['usd']:.2f} of ${usage['usd_limit']:.2f}.")
+    return {"name": "Claude", "region": "AI", "status": status, "detail": detail,
+            **health, "llm": st}
 
 
 def _deepl_status_label(deepl_health):
@@ -2696,6 +2726,31 @@ def put_scout_settings_config(body: ScoutSettingsBody, tenant_id: int = Depends(
     return {"saved": True}
 
 
+# CR-015 §3.4: screening one tender on request — an interactive call, made
+# only when a person asks for it, instead of the scheduled run answering
+# every surfaced tender. Answers the tender's missing enabled questions
+# (a newly added or edited question included) and returns all its answers.
+@app.post("/api/tenders/{pub_number}/screen")
+def screen_tender(pub_number: str, tenant_id: int = Depends(get_current_tenant_id)):
+    conn = _db()
+    record = store.get_record(conn, tenant_id, pub_number)
+    if record is None:
+        raise HTTPException(404, "Tender not found")
+    questions = store.get_tenant_screening_questions(conn, tenant_id, enabled_only=True)
+    if not questions:
+        raise HTTPException(409, "No screening questions are enabled (Matching Config → Screening Questions)")
+    if not screening.has_text(record):
+        raise HTTPException(409, "This tender has no notice text to screen")
+    reason = llm.unavailable_reason("screening")
+    if reason:
+        raise HTTPException(409, f"Screening is not available: {reason}")
+    stored = screening.screen_record(conn, tenant_id, record, questions)
+    if stored is None:
+        raise HTTPException(502, f"Screening failed: {llm.last_refusal() or 'the reply could not be read'}")
+    answers = store.get_all_screening_answers_for_tenant(conn, tenant_id).get(pub_number, [])
+    return {"pub_number": pub_number, "answered": stored, "screening_answers": answers}
+
+
 # CR-011 §3: per-organization configurable screening questions ("add / edit
 # / reorder / disable"). Gated the same way every other settings endpoint in
 # this file already is — tenant membership via get_current_tenant_id, no
@@ -3077,7 +3132,7 @@ def _run_composer_generate(tenant_id, pub_number):
                                "text/plain")
 
         matrix = store.get_composer_matrix(conn, tenant_id, pub_number)
-        if matrix and os.getenv("ANTHROPIC_API_KEY"):
+        if matrix and llm.available("composer"):
             filled_path = out_dir / "matrix_filled.xlsx"
             with object_storage.row_local_copy(matrix) as matrix_path:
                 composer.fill_compliance_matrix(tenant_id, pub_number, matrix_path, str(filled_path))
@@ -3109,6 +3164,9 @@ def _run_composer_refine(tenant_id, pub_number, requirement_id, feedback, vault_
         extra_citations = [{"doc": f"Vault: {c['source']}", "score": c["similarity"]} for c in vault_chunks]
     new_text = composer.refine_section(req["extracted"], req["response"] or "", feedback,
                                         vault_chunks + tech_chunks)
+    if new_text is None:  # CR-015: the gateway refused — keep the current response
+        logging.warning("composer refine for requirement %s skipped: %s", requirement_id, llm.last_refusal())
+        return
     store.update_composer_requirement_refined(conn, tenant_id, requirement_id, new_text, feedback,
                                                extra_citations=extra_citations)
 
@@ -3266,7 +3324,7 @@ def extract_composer_style(tenant_id: int = Depends(get_current_tenant_id)):
         raise HTTPException(409, "Upload at least one example proposal before extracting a style guide")
     guide = composer.extract_style_guide(texts)
     if guide is None:
-        raise HTTPException(409, "ANTHROPIC_API_KEY is not configured")
+        raise HTTPException(409, f"Could not extract a style guide: {llm.last_refusal() or 'Claude is not available'}")
     store.set_style_guide(conn, tenant_id, guide, len(texts), datetime.now(timezone.utc).isoformat())
     return store.get_style_guide(conn, tenant_id)
 

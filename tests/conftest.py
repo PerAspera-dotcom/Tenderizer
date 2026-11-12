@@ -51,6 +51,20 @@ def _isolated_object_storage(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_llm_gateway(tmp_path_factory, monkeypatch):
+    """CR-015: every test gets its own usage counters (a fresh SQLite file,
+    never data/tenders.db), and starts from the gateway's defaults regardless
+    of LLM_* variables in a developer's environment/.env. A test that needs a
+    feature on sets it."""
+    import os
+    import llm
+    for name in list(os.environ):
+        if name.startswith("LLM_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(llm, "SQLITE_PATH", tmp_path_factory.mktemp("llm") / "llm_usage.db")
+
+
+@pytest.fixture(autouse=True)
 def _no_retry_delay(monkeypatch):
     """connectors.retry waits 10 s / 20 s between attempts — never in tests."""
     from connectors import retry

@@ -176,8 +176,15 @@ def _run_with_spies(tmp_path, monkeypatch, scraped, manual):
 
     monkeypatch.setattr(run.translate, "translate_cached", fake_translate)
     monkeypatch.setattr(run.translate, "check_health", lambda: ("ok", None))
+    # CR-015: scheduled screening only runs when switched on, and only for
+    # tenders someone has acted on — widened to "new" here so this test keeps
+    # checking the visibility rule on the screening pass.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("LLM_SCREENING", "on")
+    monkeypatch.setenv("LLM_SCHEDULED_SCREENING", "on")
+    monkeypatch.setattr(run, "SCHEDULED_SCREENING_STATUSES", ("new", "shortlisted", "needs_review"))
     monkeypatch.setattr(store, "get_tenant_screening_questions",
-                        lambda *_a, **_k: [{"id": 1, "question": "q"}])
+                        lambda *_a, **_k: [{"id": 1, "question_text": "q"}])
     monkeypatch.setattr(store, "missing_screening_question_ids", lambda *_a: [1])
 
     def fake_answer(rec, questions):

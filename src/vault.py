@@ -10,8 +10,8 @@ step is meant to query the same per-tenant collection this module populates —
 see `design_handoff_vault_composer/README.md`.
 
 PDF and DOCX only for now (matches what `proposal_tool` actually parses).
-`ANTHROPIC_API_KEY` must be a real env var; if unset, metadata extraction is
-skipped (chunk/embed still happens) rather than crashing.
+Metadata extraction goes through the llm gateway (CR-015); when it refuses (no key,
+LLM_VAULT off, budget spent) extraction is skipped and chunk/embed still happens.
 """
 import base64
 import json
@@ -23,6 +23,8 @@ import chromadb
 import pdfplumber
 from docx import Document as DocxDocument
 from sentence_transformers import SentenceTransformer
+
+import llm
 
 CHUNK_SIZE = 400
 OVERLAP = 50
@@ -184,7 +186,7 @@ def _valid_iso_date_or_none(value):
 def extract_metadata(path, content_type, extra_hints=None):
     """(doc_type, metadata_dict, cpv_codes, confidence, valid_until) via
     Claude Vision — PDF only (no visual content to extract from a DOCX the
-    same way). Returns None if ANTHROPIC_API_KEY isn't configured, the file
+    same way). Returns None if the llm gateway refuses the call, the file
     isn't a PDF, or the response couldn't be parsed — caller leaves the doc
     `processing` rather than treating any of these as a crash.
 
@@ -193,12 +195,11 @@ def extract_metadata(path, content_type, extra_hints=None):
     steer the model toward fields it wouldn't otherwise think to check
     without hand-writing a new prompt per tenant.
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not llm.available("vault"):
         return None
     if not _is_pdf(path, content_type):
         return None
 
-    import anthropic
     images = _pdf_first_pages_as_images(path)
     if not images:
         return None
@@ -209,12 +210,14 @@ def extract_metadata(path, content_type, extra_hints=None):
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
                for img in images]
     content.append({"type": "text", "text": prompt})
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=CLAUDE_MODEL, max_tokens=1024,
+    message = llm.create(
+        "vault", model=CLAUDE_MODEL, max_tokens=1024,
         messages=[{"role": "user", "content": content}],
     )
-    parsed = _parse_metadata_response(message.content[0].text)
+    reply = llm.text_of(message)
+    if reply is None:
+        return None
+    parsed = _parse_metadata_response(reply)
     if parsed is None:
         return None
     doc_type = parsed.get("doc_type") or "Other"

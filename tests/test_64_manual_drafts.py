@@ -405,7 +405,8 @@ def test_api_flow_end_to_end(conn, monkeypatch):
     import asyncio
     import io
     store.add_origin_site(conn, TEST_TENANT_ID, "DTVP", domain="dtvp.de")
-    monkeypatch.setattr(manual_drafts, "_claude", lambda: FakeClaude())
+    import llm
+    monkeypatch.setattr(llm.anthropic, "Anthropic", lambda: FakeClaude())
     d = api.create_manual_draft(identity=make_identity())
     up = UploadFile(file=io.BytesIO(_pdf(["Lieferung von Zelten"])), filename="n.pdf",
                     headers={"content-type": "application/pdf"})

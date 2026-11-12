@@ -1,4 +1,4 @@
-import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion, OriginSite, ManualTenderInput, ManualDraft } from './types';
+import type { Tender, TenderListResponse, Stats, PortalHealth, PipelineEntry, FollowupEntry, PipelineHistoryEntry, DocumentEntry, VaultDoc, VaultSearchResponse, VaultRules, VaultSettings, ComposerSession, ComposerDoc, ComposerMatrix, CpvConfigEntry, KeywordsConfig, SettingsConfig, ComposerSettings, ComposerStyleGuide, ComposerStyleExample, DedupSettings, ScoutSettings, TenderNotification, TranslatedDocument, TranslationQuota, ScreeningQuestion, ScreeningAnswer, OriginSite, ManualTenderInput, ManualDraft } from './types';
 import { getAuthToken } from './authToken';
 
 const BASE = (import.meta.env.VITE_API_BASE as string) ?? 'http://localhost:8000';
@@ -680,6 +680,12 @@ async function apiSend<T>(path: string, method: string, body?: unknown): Promise
     throw new ApiError(r.status, message, field);
   }
   return r.json() as Promise<T>;
+}
+
+// CR-015 §3.4: screen one tender on request (one Claude call). Errors keep
+// the server's reason (switched off, budget reached, no questions…).
+export function screenTender(pubNumber: string): Promise<{ pub_number: string; answered: number; screening_answers: ScreeningAnswer[] }> {
+  return apiSend(`/api/tenders/${encodeURIComponent(pubNumber)}/screen`, 'POST');
 }
 
 export function getOriginSites(): Promise<OriginSite[]> {

@@ -22,6 +22,8 @@ import translate
 import alerts
 import screening
 import visibility
+import llm
+import logging
 from schema import DEFAULT_TENANT_ID
 from report import build_report
 import json, os
@@ -122,6 +124,14 @@ def _maybe_alert_consecutive_failures(conn, tenant_id, source):
 
 
 def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=None, fx_rates=None):
+    # CR-015 §3.2: every Claude call reached from here — whatever the path —
+    # is a scheduled call, refused by the llm gateway unless that feature's
+    # own scheduled switch is on, and capped per run.
+    with llm.scheduled_run() as llm_run:
+        return _run_pipeline(sources, db_path, out_path, tenant_id, now, fx_rates, llm_run)
+
+
+def _run_pipeline(sources, db_path, out_path, tenant_id, now, fx_rates, llm_run):
     conn = store.init_db(db_path)
     store.ensure_tenant(conn, tenant_id)  # make sure this tenant (and its default config) exists
     tenant_kw = store.get_tenant_keywords(conn, tenant_id)
@@ -219,33 +229,66 @@ def run_pipeline(sources, db_path, out_path, tenant_id=DEFAULT_TENANT_ID, now=No
             store.all_records(conn, tenant_id), dedup_settings["similarity_threshold"]):
         store.upsert_tender_duplicate(conn, tenant_id, pub_a, pub_b, match_type, similarity)
 
-    # CR-011 §3: screening questions — after translation (same requirement
-    # as cross-portal dedup above: operates on tag_line_en/description_en).
-    # Backfills whatever's MISSING for every surfaced tender, not just this
-    # run's own fetches — the same mechanism that answers a brand-new
-    # tender's questions also answers an already-ingested tender's newly-
-    # added/edited question, with no separate backfill script needed (an
-    # edited question's stale answers were already deleted by store.
-    # update_screening_question, making them "missing" again here).
-    questions = store.get_tenant_screening_questions(conn, tenant_id, enabled_only=True)
-    if questions:
-        question_ids = [q["id"] for q in questions]
-        by_id = {q["id"]: q for q in questions}
-        for r in store.all_records(conn, tenant_id):
-            if visibility.is_hidden(r):
-                continue
-            missing_ids = store.missing_screening_question_ids(conn, tenant_id, r["pub_number"], question_ids)
-            if not missing_ids:
-                continue
-            answers = screening.answer_questions(r, [by_id[q_id] for q_id in missing_ids])
-            for q_id, (answer_text, snippet, status) in answers.items():
-                store.set_screening_answer(conn, tenant_id, r["pub_number"], q_id, answer_text, snippet, status)
+    # CR-011 §3 / CR-015 §3.4: screening questions — after translation (it
+    # reads tag_line_en/description_en). No longer walks the corpus: this
+    # pass only runs when LLM_SCHEDULED_SCREENING is on, only for tenders
+    # someone has acted on (SCHEDULED_SCREENING_STATUSES), and only up to
+    # the gateway's per-run budget. A newly added or edited question is
+    # backfilled on request (the Review Queue's "Screen this tender") or by
+    # src/screening_backfill.py, not here. Never fatal (§3.5): whatever
+    # happens, the report and last-run file below are still written.
+    _scheduled_screening(conn, tenant_id, run_date, health, llm_run)
 
     records = store.all_records(conn, tenant_id)
     surfaced = [r for r in records if not visibility.is_hidden(r)]
     build_report(surfaced, health, out_path)
     _write_last_run(db_path, tenant_id, health, this_run_records)
     return health
+
+
+SCHEDULED_SCREENING_STATUSES = ("shortlisted", "needs_review")
+CLAUDE_HEALTH_SOURCE = "Claude"
+
+
+def _scheduled_screening(conn, tenant_id, run_date, health, llm_run):
+    """The run's screening pass. Records nothing and touches no tender when
+    the gateway would refuse scheduled screening outright (the default)."""
+    if not llm.available("screening"):
+        return
+    try:
+        questions = store.get_tenant_screening_questions(conn, tenant_id, enabled_only=True)
+        if not questions:
+            return
+        screened = 0
+        for r in store.all_records(conn, tenant_id):
+            if visibility.is_hidden(r) or r.get("status") not in SCHEDULED_SCREENING_STATUSES:
+                continue
+            if not llm.available("screening"):
+                break  # per-run or monthly budget reached, or a systemic failure stopped calls
+            try:
+                if screening.screen_record(conn, tenant_id, r, questions):
+                    screened += 1
+            except Exception as e:  # one tender failing must not stop the rest
+                logging.exception("screening %s failed", r.get("pub_number"))
+                llm_run.errors.append(f"{r.get('pub_number')}: {type(e).__name__}: {e}")
+        stop_reason = llm.unavailable_reason("screening")
+        problem = llm_run.stopped or (stop_reason if stop_reason and "budget" in stop_reason else None)
+        detail = "; ".join(filter(None, [problem, f"{len(llm_run.errors)} failed call(s)" if llm_run.errors else None]))
+        health[f"{CLAUDE_HEALTH_SOURCE} screening"] = (
+            f"error: {detail}" if llm_run.stopped else
+            f"screened {screened}" + (f"; {detail}" if detail else ""))
+        store.record_source_health(
+            conn, tenant_id, CLAUDE_HEALTH_SOURCE, run_date,
+            "failed" if llm_run.stopped else "ok",
+            notices_pulled=screened, error_detail=detail or None)
+    except Exception as e:  # the screening pass as a whole must never fail the run
+        logging.exception("scheduled screening pass failed")
+        health[f"{CLAUDE_HEALTH_SOURCE} screening"] = f"error: {type(e).__name__}: {e}"
+        try:
+            store.record_source_health(conn, tenant_id, CLAUDE_HEALTH_SOURCE, run_date, "failed",
+                                       error_detail=f"{type(e).__name__}: {e}")
+        except Exception:
+            logging.exception("could not record Claude health")
 
 
 def _write_last_run(db_path, tenant_id, health, this_run_records):

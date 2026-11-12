@@ -204,6 +204,33 @@ manual_tender_counters = Table(
     PrimaryKeyConstraint("tenant_id", "year"),
 )
 
+# CR-015: the Claude spend guard. Global, not per tenant — the Anthropic
+# console cap it has to stay under is one account-wide number. Kept in the
+# database rather than a file so the guard fails closed: if these tables
+# cannot be read or written, llm.create() refuses the call.
+#
+# llm_usage_months — one row per calendar month (UTC, "YYYY-MM"). `calls` is
+# bumped by a single conditional UPDATE ... WHERE calls < limit RETURNING,
+# so concurrent callers can never take the month past its call ceiling.
+llm_usage_months = Table(
+    "llm_usage_months", metadata,
+    Column("month", Text, primary_key=True),
+    Column("calls", Integer, nullable=False, server_default="0"),
+)
+
+# llm_usage — calls and tokens per month, feature and model; the estimated
+# spend (llm.month_usage) is priced from these rows.
+llm_usage = Table(
+    "llm_usage", metadata,
+    Column("month", Text, nullable=False),
+    Column("feature", Text, nullable=False),
+    Column("model", Text, nullable=False),
+    Column("calls", Integer, nullable=False, server_default="0"),
+    Column("input_tokens", Integer, nullable=False, server_default="0"),
+    Column("output_tokens", Integer, nullable=False, server_default="0"),
+    PrimaryKeyConstraint("month", "feature", "model"),
+)
+
 # Column order matters to callers that build dicts positionally — keep it
 # identical to the table's declared order (also store.py's previous COLUMNS list).
 TENDERS_COLUMNS = [c.name for c in tenders.columns]

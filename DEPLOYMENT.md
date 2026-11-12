@@ -42,6 +42,23 @@ Status as of 2026-07-08. **tender-izer.com is fully live and verified end-to-end
 - **`CLERK_SECRET_KEY` isn't used anywhere in this codebase** — backend auth only verifies JWTs against the public JWKS, nothing calls Clerk's server-side SDK. Not set on Railway since nothing reads it; flag me if a future feature needs it.
 - **Railway's automated-backup availability wasn't confirmed** — the mutations exist in their API schema but I couldn't verify plan-tier availability without guessing. Worth a quick check: Postgres service → Settings → Backups.
 
+## Claude API (CR-015)
+
+Every Claude call goes through `src/llm.py`. A key alone switches on only
+manual-draft extraction; everything else needs its own variable on the
+`backend` service. See `.env.example` for the full list and defaults.
+
+- `LLM_MANUAL_DRAFTS` (default on), `LLM_SCREENING`, `LLM_VAULT`, `LLM_COMPOSER` (default off)
+- `LLM_SCHEDULED_SCREENING` (default off): the nightly run screens shortlisted / needs-review tenders only
+- `LLM_MAX_CALLS_PER_RUN` (default 10), `LLM_MAX_CALLS_PER_MONTH` (default 60), `LLM_MAX_USD_PER_MONTH` (default 7, estimated from recorded tokens)
+- Usage per month, feature and model: Postgres tables `llm_usage_months` and `llm_usage` (migration `a7c3e9f1b5d2`); status on Portal Health ("Claude"). Until the migration has run, every Claude call is refused — run it before deploying the gateway.
+- Screening backfill, explicit and bounded: `python src/cli.py screen-backfill --tenant N --limit 50 [--dry-run]`
+
+The $10/month limit in the Anthropic console is the outer backstop; when it
+is exhausted every call fails, manual extraction included, until the month
+resets. The internal $7 ceiling is set to refuse first, gracefully, with the
+remaining ~$3 covering calls already in flight.
+
 ## Owners / IDs
 
 - **Frontend:** https://tender-izer.com — Vercel project `frontend`, team `schafermaximilian1994-7909's projects`

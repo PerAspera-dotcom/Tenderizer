@@ -9,6 +9,7 @@ import MatchChip from '../../components/MatchChip';
 import NoticeTypeBadge from '../../components/NoticeTypeBadge';
 import ForwardTender from '../../components/ForwardTender';
 import SourceNotice from '../../components/SourceNotice';
+import ScreenTender from '../../components/ScreenTender';
 import ManualTenderPanel, { ManualBadge, WouldBeExcluded } from '../../components/ManualTenderPanel';
 
 // CR-008 W4: 'status' sorts by decision (see STATUS_SORT_RANK below).
@@ -878,11 +879,10 @@ export default function ReviewQueue() {
                     </div>
                   )}
 
-                  {/* CR-011 §3: configured screening questions, answered from
-                      notice text at ingest — empty until the tenant adds
-                      questions (Matching Config → Screening Questions), or
-                      until the next pipeline run picks up a brand-new
-                      question. "Not stated" shown plainly, same as a missing
+                  {/* CR-011 §3 / CR-015 §3.4: configured screening questions,
+                      answered from notice text when someone screens this
+                      tender (button below) — no longer precomputed for every
+                      notice. "Not stated" shown plainly, same as a missing
                       value — never a blank or an omitted row. */}
                   {selected.screening_answers?.length > 0 && (
                     <div style={{ marginTop: 12 }}>
@@ -904,6 +904,16 @@ export default function ReviewQueue() {
                       </div>
                     </div>
                   )}
+                  <ScreenTender
+                    key={selected.pub_number}
+                    pubNumber={selected.pub_number}
+                    hasAnswers={selected.screening_answers?.length > 0}
+                    onAnswers={answers => {
+                      const pub = selected.pub_number;
+                      setSelected(s => (s && s.pub_number === pub ? { ...s, screening_answers: answers } : s));
+                      setTenders(ts => ts.map(t => (t.pub_number === pub ? { ...t, screening_answers: answers } : t)));
+                    }}
+                  />
                 </div>
 
                 {/* Confidence & Signals */}

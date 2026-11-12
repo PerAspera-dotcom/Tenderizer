@@ -8,10 +8,10 @@ store.py: question CRUD (add/edit/disable/reorder), the seed-once-ever
 backfill (_sync_screening_questions, called from ensure_tenant), answer
 caching (set/get, missing-question detection, edit-invalidates-answers).
 
-run.py: pipeline wiring — a surfaced tender with a missing answer gets one
-computed; an excluded tender doesn't; nothing happens with zero enabled
-questions; editing a question backfills across already-ingested tenders on
-the NEXT run, with no separate script.
+run.py: pipeline wiring (CR-015) — the run screens only shortlisted /
+needs-review tenders, and only with scheduled screening switched on; an
+excluded tender never; nothing happens with zero enabled questions; an
+edited question is backfilled by screening.backfill, not by the run.
 
 api.py: the three CRUD endpoints, and _attach_screening_answers' shape on
 list_tenders/get_tender.
@@ -77,6 +77,7 @@ def _fake_client(response_text):
 
 def test_answer_questions_parses_claude_json_response(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("LLM_SCREENING", "on")
     response = ('[{"question_id": 1, "answer": "Brussels", "source_snippet": "delivery in Brussels"},'
                 ' {"question_id": 2, "answer": "Not stated", "source_snippet": ""}]')
     monkeypatch.setattr(anthropic, "Anthropic", lambda: _fake_client(response))
@@ -90,6 +91,7 @@ def test_answer_questions_parses_claude_json_response(monkeypatch):
 
 def test_answer_questions_ignores_unknown_question_ids(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("LLM_SCREENING", "on")
     response = '[{"question_id": 999, "answer": "x", "source_snippet": ""}]'
     monkeypatch.setattr(anthropic, "Anthropic", lambda: _fake_client(response))
     record = {"tag_line_en": "t", "description_en": "d"}
@@ -98,6 +100,7 @@ def test_answer_questions_ignores_unknown_question_ids(monkeypatch):
 
 def test_answer_questions_malformed_response_returns_empty(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("LLM_SCREENING", "on")
     monkeypatch.setattr(anthropic, "Anthropic", lambda: _fake_client("not json at all"))
     record = {"tag_line_en": "t", "description_en": "d"}
     assert screening.answer_questions(record, _questions("Delivery location?")) == {}
@@ -113,6 +116,7 @@ def test_answer_text_literally_not_stated_normalizes_status(monkeypatch):
     # the LLM might answer "Not stated" as the "answer" string itself rather
     # than leaving it empty -- both must land as status 'not_stated'.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("LLM_SCREENING", "on")
     response = '[{"question_id": 1, "answer": "not stated", "source_snippet": "whatever"}]'
     monkeypatch.setattr(anthropic, "Anthropic", lambda: _fake_client(response))
     record = {"tag_line_en": "t", "description_en": "d"}
@@ -218,9 +222,17 @@ def _src(raw_ted_supply):
     return {"name": "TED", "fetch": lambda: [raw_ted_supply], "normalize": normalize.normalize_ted}
 
 
-def test_pipeline_computes_answers_for_a_surfaced_tender(tmp_path, monkeypatch, raw_ted_supply):
+def _scheduled_screening_on(monkeypatch):
+    # CR-015: the run screens only when both switches are on
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
-    response = '[{"question_id": %d, "answer": "Not stated", "source_snippet": ""}]'
+    monkeypatch.setenv("LLM_SCREENING", "on")
+    monkeypatch.setenv("LLM_SCHEDULED_SCREENING", "on")
+
+
+def test_pipeline_screens_only_tenders_someone_has_acted_on(tmp_path, monkeypatch, raw_ted_supply):
+    # CR-015 §3.4: a freshly ingested ('new') tender is not screened by the
+    # run, even with scheduled screening on; a shortlisted one is.
+    _scheduled_screening_on(monkeypatch)
     calls = []
 
     def fake_answer_questions(record, questions):
@@ -230,32 +242,31 @@ def test_pipeline_computes_answers_for_a_surfaced_tender(tmp_path, monkeypatch, 
     monkeypatch.setattr(run.screening, "answer_questions", fake_answer_questions)
 
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
+    pub = raw_ted_supply["publication-number"]
     run.run_pipeline([_src(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
+    assert calls == []
 
-    assert len(calls) == 1  # one call for the one ingested tender
     conn = store.init_db(db)
-    answers = store.get_screening_answers_for_tender(conn, TEST_TENANT_ID, raw_ted_supply["publication-number"])
-    assert len(answers) == 5  # all 5 default questions answered
+    store.set_status(conn, TEST_TENANT_ID, pub, "shortlisted")
+    run.run_pipeline([_src(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
+    assert len(calls) == 1
+    assert len(store.get_screening_answers_for_tender(conn, TEST_TENANT_ID, pub)) == 5
 
 
 def test_pipeline_skips_tenders_with_no_missing_questions(tmp_path, monkeypatch, raw_ted_supply):
+    _scheduled_screening_on(monkeypatch)
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
     calls = []
     monkeypatch.setattr(run.screening, "answer_questions",
                          lambda record, questions: calls.append(1) or {})
+    pub = raw_ted_supply["publication-number"]
     run.run_pipeline([_src(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
-    first_call_count = len(calls)
-    assert first_call_count == 1
-
-    # second run, same tender already fully answered (first call returned {}
-    # above, so nothing actually got cached -- re-seed real answers directly
-    # to simulate a prior successful run, then confirm a third run skips it)
     conn = store.init_db(db)
+    store.set_status(conn, TEST_TENANT_ID, pub, "shortlisted")
     for q in store.get_tenant_screening_questions(conn, TEST_TENANT_ID):
-        store.set_screening_answer(conn, TEST_TENANT_ID, raw_ted_supply["publication-number"],
-                                    q["id"], "x", None, "answered")
+        store.set_screening_answer(conn, TEST_TENANT_ID, pub, q["id"], "x", None, "answered")
     run.run_pipeline([_src(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
-    assert len(calls) == first_call_count  # no new call -- nothing was missing
+    assert calls == []  # nothing was missing
 
 
 def test_pipeline_skips_excluded_tenders(tmp_path, monkeypatch):
@@ -290,22 +301,29 @@ def test_pipeline_does_nothing_with_zero_enabled_questions(tmp_path, monkeypatch
     assert calls == []
 
 
-def test_editing_a_question_backfills_on_the_next_run(tmp_path, monkeypatch, raw_ted_supply):
-    # CR-011 §3: "answers refresh" when the question set changes -- no
-    # separate backfill script, just the normal next pipeline run.
+def test_editing_a_question_is_backfilled_by_the_command_not_the_run(tmp_path, monkeypatch, raw_ted_supply):
+    # CR-015 §3.4: the run no longer backfills an edited question across the
+    # corpus; the bounded backfill command (screening.backfill) does.
     db = str(tmp_path / "t.db"); out = str(tmp_path / "r.xlsx")
+    pub = raw_ted_supply["publication-number"]
     monkeypatch.setattr(run.screening, "answer_questions",
                          lambda record, questions: {q["id"]: ("A", None, "answered") for q in questions})
     run.run_pipeline([_src(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
-
     conn = store.init_db(db)
-    q = store.get_tenant_screening_questions(conn, TEST_TENANT_ID)[0]
+    questions = store.get_tenant_screening_questions(conn, TEST_TENANT_ID)
+    for q in questions:
+        store.set_screening_answer(conn, TEST_TENANT_ID, pub, q["id"], "old", None, "answered")
+    q = questions[0]
     store.update_screening_question(conn, TEST_TENANT_ID, q["id"], question_text="Rewritten question?")
-    assert store.missing_screening_question_ids(
-        conn, TEST_TENANT_ID, raw_ted_supply["publication-number"], [q["id"]]) == [q["id"]]
 
     run.run_pipeline([_src(raw_ted_supply)], db, out, tenant_id=TEST_TENANT_ID, fx_rates=FX_RATES, now=NOW)
-    answers = store.get_screening_answers_for_tender(conn, TEST_TENANT_ID, raw_ted_supply["publication-number"])
+    assert store.missing_screening_question_ids(conn, TEST_TENANT_ID, pub, [q["id"]]) == [q["id"]]
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("LLM_SCREENING", "on")
+    summary = screening.backfill(conn, TEST_TENANT_ID, limit=5, statuses=("new",))
+    assert summary["screened"] == 1
+    answers = store.get_screening_answers_for_tender(conn, TEST_TENANT_ID, pub)
     assert any(a["question_id"] == q["id"] and a["answer_text"] == "A" for a in answers)
 
 

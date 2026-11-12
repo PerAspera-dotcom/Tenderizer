@@ -76,10 +76,10 @@ export interface Tender {
   // there's never been one. See api._attach_notifications.
   forwarded_to: string | null;
   last_notification_at: string | null;
-  // CR-011 §3: the tenant's enabled screening questions, answered from
-  // notice text at ingest — always present, empty when none cached yet
-  // (not yet run through a pipeline pass since the question was added, or
-  // ANTHROPIC_API_KEY unset). See api._attach_screening_answers.
+  // CR-011 §3 / CR-015: the tenant's enabled screening questions, answered
+  // from notice text — always present, empty until someone screens the
+  // tender (Review Queue "Screen this tender", or the bounded backfill).
+  // See api._attach_screening_answers.
   screening_answers: ScreeningAnswer[];
 }
 

@@ -67,9 +67,30 @@ def _storage_restore_local(args):
         print(f"  {k}: {v}")
 
 
+def _screen_backfill(args):
+    """CR-015 §3.4 — screening backfill, bounded and explicitly invoked."""
+    import store
+    import screening
+    conn = store.init_db("data/tenders.db")
+    statuses = tuple(s.strip() for s in args.status.split(",") if s.strip())
+    summary = screening.backfill(conn, args.tenant, args.limit, statuses=statuses, dry_run=args.dry_run)
+    print("DRY RUN — no Claude calls made" if args.dry_run else "Screening backfill complete")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="tenderizer")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    # CR-015 §3.4 — the bounded replacement for the run's old corpus-wide screening backfill
+    sb = sub.add_parser("screen-backfill", help="Screen up to --limit tenders' missing answers (Claude calls).")
+    sb.add_argument("--tenant", type=int, required=True, help="Tenant id.")
+    sb.add_argument("--limit", type=int, required=True, help="Most tenders to screen in this pass.")
+    sb.add_argument("--status", default=",".join(("shortlisted", "needs_review")),
+                    help="Comma-separated tender statuses to include (default: shortlisted,needs_review).")
+    sb.add_argument("--dry-run", action="store_true", help="Count what would be screened; make no calls.")
+    sb.set_defaults(func=_screen_backfill)
 
     # CR-013 §2 — object-storage cutover (see storage_migration.py's docstring)
     sub.add_parser("storage-check", help="Verify the documents bucket credentials end to end."

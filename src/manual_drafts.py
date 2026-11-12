@@ -26,11 +26,11 @@ there is one translation route.
 import base64
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+import llm
 import manual_tenders
 import normalize
 import object_storage
@@ -98,11 +98,6 @@ class DraftError(ValueError):
 
 def _now():
     return datetime.now(timezone.utc)
-
-
-def _claude():
-    import anthropic
-    return anthropic.Anthropic()
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
@@ -259,10 +254,14 @@ def _extract_content(reading):
 
 
 def extract_fields(reading, client=None):
-    """{field: {value, confidence, source}} for EXTRACTED_FIELDS, in one call."""
-    client = client or _claude()
-    msg = client.messages.create(model=CLAUDE_MODEL, max_tokens=EXTRACT_MAX_TOKENS,
-                                 messages=[{"role": "user", "content": _extract_content(reading)}])
+    """{field: {value, confidence, source}} for EXTRACTED_FIELDS, in one call
+    through the llm gateway (`client` is the test seam). A refused or failed
+    call raises DraftError with the gateway's reason."""
+    msg = llm.create("manual_drafts", client=client, model=CLAUDE_MODEL, max_tokens=EXTRACT_MAX_TOKENS,
+                     messages=[{"role": "user", "content": _extract_content(reading)}])
+    if msg is None:
+        raise DraftError(f"Reading the documents is not available right now: {llm.last_refusal()}. "
+                         "You can still type the details.")
     if getattr(msg, "stop_reason", None) == "max_tokens":
         raise DraftError("The documents could not be read into fields (the response was cut off)")
     data = _parse_json(msg.content[0].text)
@@ -377,8 +376,12 @@ def process(conn, tenant_id, draft_id, client=None):
     if draft is None or draft["status"] != "extracting":
         return
     try:
-        if not os.getenv("ANTHROPIC_API_KEY") and client is None:
+        reason = llm.unavailable_reason("manual_drafts", has_client=client is not None)
+        if reason == "No Anthropic API key is configured":
             raise DraftError("Reading documents is not configured (no Anthropic API key). "
+                             "You can still type the details.")
+        if reason:
+            raise DraftError(f"Reading documents is not available right now: {reason}. "
                              "You can still type the details.")
         reading = read_documents(draft["files"])
         files = [dict(f, **next((s for s in reading.stats if s["object_key"] == f["object_key"]), {}))

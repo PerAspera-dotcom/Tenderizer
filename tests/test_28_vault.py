@@ -110,6 +110,7 @@ def test_extract_metadata_non_pdf_returns_none(monkeypatch):
 
 def test_extract_metadata_parses_claude_json_response(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setenv("LLM_VAULT", "on")  # CR-015: a key alone no longer switches Vault on
     monkeypatch.setattr(vault, "_pdf_first_pages_as_images", lambda path: ["base64imagedata"])
 
     class _FakeContentBlock:
