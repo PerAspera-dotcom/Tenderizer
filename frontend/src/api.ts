@@ -663,6 +663,19 @@ export class ApiError extends Error {
   }
 }
 
+// FastAPI's own request validation (wrong type, missing or unknown field)
+// answers 422 with `detail` as a list of {loc, msg}. Show the first one as
+// "field: reason" instead of a bare status line; a swallowed validation
+// error here once hid a broken form for days.
+function describeValidationErrors(errors: unknown[], fallback: string): { message: string; field?: string } {
+  const first = errors[0] as { loc?: unknown; msg?: unknown } | null;
+  const loc = Array.isArray(first?.loc) ? first.loc.filter(p => p !== 'body').map(String) : [];
+  const reason = first?.msg ? String(first.msg) : 'invalid';
+  const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : '';
+  if (!first) return { message: fallback };
+  return { message: `${loc.length ? `${loc.join('.')}: ` : ''}${reason}${more}`, field: loc[0] };
+}
+
 async function apiSend<T>(path: string, method: string, body?: unknown): Promise<T> {
   const token = await getAuthToken();
   const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -676,6 +689,7 @@ async function apiSend<T>(path: string, method: string, body?: unknown): Promise
       const d = j?.detail;
       if (d && typeof d === 'object' && 'message' in d) { message = String(d.message); field = d.field; }
       else if (typeof d === 'string') message = d;
+      else if (Array.isArray(d) && d.length) ({ message, field } = describeValidationErrors(d, message));
     } catch { /* not JSON */ }
     throw new ApiError(r.status, message, field);
   }

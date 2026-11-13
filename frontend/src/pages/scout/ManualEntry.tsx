@@ -70,12 +70,28 @@ function fromDraft(d: ManualDraft): Form {
   return f;
 }
 
+// The request body is built from an explicit field list, never by spreading
+// form state: the API refuses unknown fields (ManualTenderBody, extra="forbid"),
+// and a spread once sent the form-only `cpv_text` along, which broke create,
+// edit and confirm. tests/test_66_manual_payload.py checks these keys against
+// the API model.
 function toInput(f: Form): ManualTenderInput {
   return {
-    ...f,
     origin_site_id: Number(f.origin_site_id),
+    url: f.url,
+    tag_line: f.tag_line,
+    description: f.description,
+    buyer: f.buyer,
+    country: f.country,
+    place: f.place,
+    category: f.category,
+    procedure: f.procedure,
+    pub_date: f.pub_date,
+    deadline: f.deadline,
     cpv_codes: f.cpv_text.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean),
+    value: f.value,
     value_currency: f.value.trim() ? f.value_currency : '',
+    language: f.language,
   };
 }
 
