@@ -53,3 +53,20 @@ export function deadlineBands<T extends Pick<Tender, 'deadline'>>(sorted: T[], b
   if (dated.length) bands.push({ label: undated.length ? 'By deadline, closing soonest first' : null, tenders: dated });
   return bands;
 }
+
+// CR-017 §1.3: whole days between an expired tender's deadline and `today`
+// (both read as calendar dates, YYYY-MM-DD prefix) — for the expired view's
+// "expired N days ago". `today` is a parameter so tests pin it.
+export function daysSinceDeadline(deadline: string, today: string): number | null {
+  const d = Date.parse(deadline.slice(0, 10) + 'T00:00:00Z');
+  const t = Date.parse(today.slice(0, 10) + 'T00:00:00Z');
+  if (Number.isNaN(d) || Number.isNaN(t)) return null;
+  return Math.round((t - d) / 86_400_000);
+}
+
+export function expiredLabel(deadline: string, today: string): string {
+  const n = daysSinceDeadline(deadline, today);
+  if (n === null) return 'Expired';
+  if (n <= 0) return 'Expired today';
+  return n === 1 ? 'Expired yesterday' : `Expired ${n} days ago`;
+}

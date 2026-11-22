@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { listTenders, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, resolveDuplicate, unresolveDuplicate, type OrgMember } from '../../api';
+import { listTenders, listExpiredUndecided, patchTender, patchTenderRelevance, postTenderPresence, getScoutSettings, getOrgMembers, getCpvLabels, resolveDuplicate, unresolveDuplicate, type OrgMember } from '../../api';
 import type { Tender, TenderDuplicate } from '../../types';
 import { formatDate, formatTime, countryFlag, confidenceFromMatchSource, formatValue, needsTranslation, hasTranslatedTagLine, hasTranslatedDescription, displayTagLine, displayDescription, hoursLeft, sortCpvCodesBySpecificity, tenderLink, PORTAL_FALLBACK_TITLE } from '../../utils';
 import NoticeText from '../../components/NoticeText';
@@ -11,7 +11,7 @@ import ForwardTender from '../../components/ForwardTender';
 import SourceNotice from '../../components/SourceNotice';
 import ScreenTender from '../../components/ScreenTender';
 import ManualTenderPanel, { ManualBadge, WouldBeExcluded } from '../../components/ManualTenderPanel';
-import { DEFAULT_SORT, deadlineBands, sortTenders, type SortBy } from './queueOrder';
+import { DEFAULT_SORT, deadlineBands, expiredLabel, sortTenders, type SortBy } from './queueOrder';
 // CR-007 Phase B (B1/B2): 'dismissed' is now stage 1/soft (still queued,
 // greyed out); 'dismissed_final' is stage 2 (the Dismissed tab).
 // CR-008 W3: 'reviewed' dropped as a filter option — the action that set it
@@ -152,16 +152,28 @@ export default function ReviewQueue() {
   // batched call (see api.getCpvLabels), not per-row.
   const [cpvLabels, setCpvLabels] = useState<Record<string, { en: string | null }>>({});
 
+  // CR-017 §1.3: tenders whose deadline passed while still new / needs
+  // review. The default list drops them; this keeps them countable and
+  // viewable — the feedback loop on the deadline sort (§1.2).
+  const [expired, setExpired] = useState<Tender[]>([]);
+  const [expiredTotal, setExpiredTotal] = useState(0);
+  const [view, setView] = useState<'queue' | 'expired'>('queue');
+
   function load() {
-    listTenders({ limit: 500 }).then(r => {
+    Promise.all([listTenders({ limit: 500 }), listExpiredUndecided()]).then(([r, ex]) => {
       // CR-007 Phase B (B1): only the final dismiss stage leaves the queue —
       // a soft-dismissed ("dismissed") tender stays, greyed out (see the row
       // rendering below).
       const filtered = r.results.filter(t => t.status !== 'dismissed_final');
       setTenders(sortTenders(filtered, sortBy));
+      setExpired(ex.results);
+      setExpiredTotal(ex.total);
+      // CR-017 §1.3: a selection made in the expired view must survive a
+      // reload too, so look it up across both lists.
+      const everything = [...r.results, ...ex.results];
       setSelected(prev => {
         if (pubParam && pubParam !== appliedPubParamRef.current) {
-          const fromParam = r.results.find(t => t.pub_number === pubParam);
+          const fromParam = everything.find(t => t.pub_number === pubParam);
           appliedPubParamRef.current = pubParam;  // consume this value, even if not found
           if (fromParam) return fromParam;
         }
@@ -170,11 +182,11 @@ export default function ReviewQueue() {
         // just `filtered` — a tender just dismissed drops out of the left list,
         // but the detail pane should still show it (with its dismiss note) until
         // the user picks something else, rather than silently jumping away.
-        return r.results.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
+        return everything.find(t => t.pub_number === prev.pub_number) ?? filtered[0] ?? null;
       });
       // CR-008 W5: batched, deduped-by-the-Set lookup for every code any
       // loaded tender carries.
-      const codes = Array.from(new Set(r.results.flatMap(t => t.cpv_codes)));
+      const codes = Array.from(new Set(everything.flatMap(t => t.cpv_codes)));
       getCpvLabels(codes).then(setCpvLabels).catch(() => {});
     }).catch(() => setError('Failed to load tenders'))
       .finally(() => setLoading(false));
@@ -375,8 +387,12 @@ export default function ReviewQueue() {
   // CR-011 §2: counts cross_portal_group collapses too now, not just
   // same_source — isNonCanonicalMember below is the one shared rule.
   const collapsedDuplicateCount = tenders.filter(isNonCanonicalMember).length;
-  const visibleTenders = tenders
-    .filter(t => statusFilter === 'all' || t.status === statusFilter)
+  // CR-017 §1.3: the expired view lists the expired tenders instead, in the
+  // server's order (most recently expired first); status pills don't apply.
+  const listSource = view === 'expired' ? expired : tenders;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const visibleTenders = listSource
+    .filter(t => view === 'expired' || statusFilter === 'all' || t.status === statusFilter)
     .filter(t => !regionFilter || t.country === regionFilter)
     .filter(t => entryFilter === 'all' || (t.entry_method ?? 'scraped') === entryFilter)
     // "unique" keeps every tender with no active group, plus exactly the
@@ -420,6 +436,15 @@ export default function ReviewQueue() {
         >
           ● {needsReviewCount} needs review
         </button>
+        {/* CR-017 §1.3: always shown — 0 is the number we want to see. */}
+        <button
+          className="pill pill-grey"
+          title="Deadline passed while still new or needing review — nobody decided in time"
+          style={{ cursor: 'pointer', color: expiredTotal > 0 ? '#e3b341' : undefined, border: view === 'expired' ? '1px solid #e3b341' : undefined }}
+          onClick={() => setView(v => (v === 'expired' ? 'queue' : 'expired'))}
+        >
+          ⌛ {expiredTotal} expired undecided
+        </button>
         {/* CR-008 W4: region filter — a <select> rather than pills since the
             candidate set is whatever countries are actually present, not a
             fixed small set like status. */}
@@ -455,7 +480,7 @@ export default function ReviewQueue() {
             🔗 Unique only{duplicateFilter === 'unique' ? '' : ` (−${collapsedDuplicateCount})`}
           </button>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {view === 'queue' && <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#8892a4', fontSize: 12 }}>Sort by</span>
           <select
             value={sortBy}
@@ -466,11 +491,23 @@ export default function ReviewQueue() {
             <option value="pub_date">Release date (newest first)</option>
             <option value="status">Decision</option>
           </select>
-        </div>
+        </div>}
       </div>
 
-      {tenders.length === 0 ? (
-        <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>No tenders to review.</div>
+      {view === 'expired' && (
+        <div style={{ marginBottom: 16, padding: 10, background: 'rgba(227,179,65,0.06)', border: '1px solid rgba(227,179,65,0.25)', borderRadius: 8, fontSize: 12, color: '#c8d0de', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>
+            ⌛ These deadlines passed while the tender was still new or needed review. They no longer
+            appear in the queue. Dismissing one with the category "Deadline missed" records why.
+          </span>
+          <button className="btn btn-ghost" style={{ fontSize: 12, marginLeft: 'auto' }} onClick={() => setView('queue')}>← Back to queue</button>
+        </div>
+      )}
+
+      {listSource.length === 0 ? (
+        <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>
+          {view === 'expired' ? 'Nothing has expired undecided.' : 'No tenders to review.'}
+        </div>
       ) : visibleTenders.length === 0 ? (
         <div className="card" style={{ padding: 32, textAlign: 'center', color: '#8892a4' }}>
           No tenders match this filter.{' '}
@@ -481,9 +518,9 @@ export default function ReviewQueue() {
           {/* Left list */}
           <div className="card" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a2334', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#8892a4', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#151d2c', zIndex: 1 }}>
-              Queue · {visibleTenders.length} matches
+              {view === 'expired' ? `Expired undecided · ${visibleTenders.length}` : `Queue · ${visibleTenders.length} matches`}
             </div>
-            {deadlineBands(visibleTenders, sortBy).map(band => (
+            {(view === 'expired' ? [{ label: null, tenders: visibleTenders }] : deadlineBands(visibleTenders, sortBy)).map(band => (
               <div key={band.label ?? 'all'}>
             {/* CR-017 §1.2: tenders with no stated deadline lead, under their
                 own label — an unknown deadline could be tomorrow. */}
@@ -544,6 +581,11 @@ export default function ReviewQueue() {
                             </span>
                           );
                         })()}
+                        {view === 'expired' && (
+                          <span title={`Deadline ${formatDate(t.deadline)}`} style={{ color: '#e3b341', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                            ⌛ {expiredLabel(t.deadline, todayIso)}
+                          </span>
+                        )}
                         {closingSoon && (
                           <span title={`Due within ${deadlineFloorHours}h`} style={{ color: '#f87171', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                             ⏱ Closing soon

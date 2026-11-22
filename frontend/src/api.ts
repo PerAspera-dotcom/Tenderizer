@@ -116,6 +116,13 @@ export function countTenders(filters: Pick<TenderFilters, 'status' | 'notice_typ
   return apiFetch<{ total: number }>(`/api/tenders/count${qs ? '?' + qs : ''}`);
 }
 
+// CR-017 §1.3: tenders whose deadline passed while still new or needs_review
+// (api.list_expired_undecided) — the default list drops these silently.
+// Most recently expired first.
+export function listExpiredUndecided(limit = 200): Promise<TenderListResponse> {
+  return apiFetch<TenderListResponse>(`/api/tenders/expired?limit=${limit}`);
+}
+
 export function getTender(pub_number: string): Promise<Tender> {
   return apiFetch<Tender>(`/api/tenders/${encodeURIComponent(pub_number)}`);
 }

@@ -1,7 +1,7 @@
 // CR-017 §1.2 — run with `npm test` (Node's built-in runner, no extra deps).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SORT, deadlineBands, sortTenders } from './queueOrder.ts';
+import { DEFAULT_SORT, daysSinceDeadline, deadlineBands, expiredLabel, sortTenders } from './queueOrder.ts';
 
 const t = (pub: string, deadline: string, pub_date = '2026-07-01', status = 'new') =>
   ({ pub_number: pub, deadline, pub_date, status });
@@ -57,4 +57,21 @@ test('no tender is lost or duplicated by banding', () => {
   const bands = deadlineBands(sortTenders(LIST, 'deadline'), 'deadline');
   const all = bands.flatMap(b => b.tenders.map(x => x.pub_number)).sort();
   assert.deepEqual(all, LIST.map(x => x.pub_number).sort());
+});
+
+// CR-017 §1.3 — the date is pinned, never read from the clock.
+const TODAY = '2026-07-15';
+
+test('days since deadline counts calendar days, ignoring the time part', () => {
+  assert.equal(daysSinceDeadline('2026-07-14T23:59:00', TODAY), 1);
+  assert.equal(daysSinceDeadline('2026-07-01', TODAY), 14);
+  assert.equal(daysSinceDeadline('2026-06-30', TODAY), 15);   // across a month end
+  assert.equal(daysSinceDeadline('not a date', TODAY), null);
+});
+
+test('expired label wording', () => {
+  assert.equal(expiredLabel('2026-07-14', TODAY), 'Expired yesterday');
+  assert.equal(expiredLabel('2026-07-05T10:00:00+02:00', TODAY), 'Expired 10 days ago');
+  assert.equal(expiredLabel(TODAY, TODAY), 'Expired today');
+  assert.equal(expiredLabel('', TODAY), 'Expired');
 });
