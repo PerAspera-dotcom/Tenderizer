@@ -11,9 +11,7 @@ import ForwardTender from '../../components/ForwardTender';
 import SourceNotice from '../../components/SourceNotice';
 import ScreenTender from '../../components/ScreenTender';
 import ManualTenderPanel, { ManualBadge, WouldBeExcluded } from '../../components/ManualTenderPanel';
-
-// CR-008 W4: 'status' sorts by decision (see STATUS_SORT_RANK below).
-type SortBy = 'pub_date' | 'deadline' | 'status';
+import { DEFAULT_SORT, deadlineBands, sortTenders, type SortBy } from './queueOrder';
 // CR-007 Phase B (B1/B2): 'dismissed' is now stage 1/soft (still queued,
 // greyed out); 'dismissed_final' is stage 2 (the Dismissed tab).
 // CR-008 W3: 'reviewed' dropped as a filter option — the action that set it
@@ -48,12 +46,6 @@ function isNonCanonicalMember(t: Tender): boolean {
   return (!!t.duplicate_group && t.duplicate_group.canonical_pub_number !== t.pub_number)
     || (!!t.cross_portal_group && t.cross_portal_group.canonical_pub_number !== t.pub_number);
 }
-
-// CR-008 W4: undecided-first, then decided-positive, then decided-negative —
-// a more useful grouping than alphabetical when sorting "by decision".
-const STATUS_SORT_RANK: Record<string, number> = {
-  new: 0, needs_review: 1, reviewed: 2, shortlisted: 3, dismissed: 4, dismissed_final: 5,
-};
 
 // CR-007 Phase B (B3): mirrors schema.RELEVANCE_REASON_CATEGORIES — required
 // alongside a dismiss reason so relevance scoring can aggregate on it.
@@ -124,8 +116,9 @@ export default function ReviewQueue() {
   const [selected, setSelected] = useState<Tender | null>(null);
   const [patching, setPatching] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
-  // CR-002 C3: publication_date (newest first) is the Review Queue's default order.
-  const [sortBy, setSortBy] = useState<SortBy>('pub_date');
+  // CR-017 §1.2: deadline, closing soonest first, is the default order (was
+  // CR-002 C3's publication date, newest first). See queueOrder.ts.
+  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT);
   // CR-007 Phase D (D2): fetched once — the tenant's "closing soon" window,
   // formerly a hard 72h exclude, now purely a display threshold.
   const [deadlineFloorHours, setDeadlineFloorHours] = useState(72);
@@ -158,18 +151,6 @@ export default function ReviewQueue() {
   // loaded tenders actually carry — fetched once per load() as a single
   // batched call (see api.getCpvLabels), not per-row.
   const [cpvLabels, setCpvLabels] = useState<Record<string, { en: string | null }>>({});
-
-  function sortTenders(list: Tender[], by: SortBy): Tender[] {
-    const sorted = [...list];
-    if (by === 'pub_date') {
-      sorted.sort((a, b) => (b.pub_date || '').localeCompare(a.pub_date || ''));
-    } else if (by === 'status') {
-      sorted.sort((a, b) => (STATUS_SORT_RANK[a.status] ?? 99) - (STATUS_SORT_RANK[b.status] ?? 99));
-    } else {
-      sorted.sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
-    }
-    return sorted;
-  }
 
   function load() {
     listTenders({ limit: 500 }).then(r => {
@@ -481,8 +462,8 @@ export default function ReviewQueue() {
             onChange={e => setSortBy(e.target.value as SortBy)}
             style={{ background: '#151d2c', border: '1px solid #1a2334', color: '#e2e8f0', padding: '5px 10px', borderRadius: 6, fontSize: 13, cursor: 'pointer', outline: 'none' }}
           >
+            <option value="deadline">Deadline (closing soonest first)</option>
             <option value="pub_date">Release date (newest first)</option>
-            <option value="deadline">Deadline</option>
             <option value="status">Decision</option>
           </select>
         </div>
@@ -502,7 +483,16 @@ export default function ReviewQueue() {
             <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a2334', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#8892a4', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#151d2c', zIndex: 1 }}>
               Queue · {visibleTenders.length} matches
             </div>
-            {visibleTenders.map(t => {
+            {deadlineBands(visibleTenders, sortBy).map(band => (
+              <div key={band.label ?? 'all'}>
+            {/* CR-017 §1.2: tenders with no stated deadline lead, under their
+                own label — an unknown deadline could be tomorrow. */}
+            {band.label && (
+              <div style={{ padding: '6px 16px', borderBottom: '1px solid #1a2334', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: band.label === 'No deadline stated' ? '#e3b341' : '#4c5a70', textTransform: 'uppercase', background: 'rgba(0,0,0,0.15)' }}>
+                {band.label} · {band.tenders.length}
+              </div>
+            )}
+            {band.tenders.map(t => {
               const conf = confidenceFromMatchSource(t.match_source);
               const isActive = selected?.pub_number === t.pub_number;
               const dotColor = statusDotColor(t.status);
@@ -617,6 +607,8 @@ export default function ReviewQueue() {
                 </div>
               );
             })}
+              </div>
+            ))}
           </div>
 
           {/* Right detail */}

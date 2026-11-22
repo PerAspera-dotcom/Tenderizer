@@ -21,5 +21,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // CR-017: *.test.ts run under Node (`npm test`), not the browser build
+  "exclude": ["src/**/*.test.ts"]
 }
