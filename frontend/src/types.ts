@@ -199,6 +199,9 @@ export interface AwardDetail {
 export interface TenderListResponse {
   total: number;
   results: Tender[];
+  // CR-017 §1.4: present only on a `pub`-restricted refresh — every
+  // pub_number the server considered (see queueRows.mergeRefreshed).
+  scope?: string[];
 }
 
 export interface Stats {

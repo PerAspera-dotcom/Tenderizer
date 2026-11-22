@@ -1311,6 +1311,12 @@ def expired_undecided_where(conn, tenant_id, *, today):
     )
 
 
+def restrict_to_pub_numbers(where, pub_numbers):
+    """`where`, narrowed to these pub_numbers (CR-017 §1.4's refresh — a
+    tender's duplicate component, so a handful of values)."""
+    return and_(where, tenders.c.pub_number.in_(sorted(pub_numbers)))
+
+
 def select_records(conn, where):
     """Tender rows matching `where` (callers include the tenant clause),
     parsed exactly as all_records parses them. No ORDER BY, like

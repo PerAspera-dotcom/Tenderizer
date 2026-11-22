@@ -35,7 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from typing import List, Optional
 
 ROOT          = _HERE.parent
 DB_PATH       = str(ROOT / "data" / "tenders.db")
@@ -448,15 +448,23 @@ def _duplicate_context(conn, tenant_id, records):
     can't under-collect, because each group _attach_duplicates forms is a
     connected component of a subset of these edges. Soft-deleted rows aren't
     loaded, matching all_records — an edge to one is skipped there too."""
+    have = {r["pub_number"] for r in records}
+    extra = _linked_pub_numbers(conn, tenant_id, have) - have
+    return store.records_by_pub_numbers(conn, tenant_id, extra) if extra else []
+
+
+def _linked_pub_numbers(conn, tenant_id, pub_numbers):
+    """`pub_numbers` plus every pub_number reachable from them through any
+    duplicate edge, resolved or not, transitively."""
+    seen = set(pub_numbers)
     edges = store.get_tender_duplicates_for_tenant(conn, tenant_id)
     if not edges:
-        return []
+        return seen
     adjacent = {}
     for d in edges:
         adjacent.setdefault(d["pub_number_a"], set()).add(d["pub_number_b"])
         adjacent.setdefault(d["pub_number_b"], set()).add(d["pub_number_a"])
-    have = {r["pub_number"] for r in records}
-    seen, frontier = set(have), [p for p in have if p in adjacent]
+    frontier = [p for p in seen if p in adjacent]
     while frontier:
         nxt = []
         for p in frontier:
@@ -465,8 +473,20 @@ def _duplicate_context(conn, tenant_id, records):
                     seen.add(q)
                     nxt.append(q)
         frontier = nxt
-    extra = seen - have
-    return store.records_by_pub_numbers(conn, tenant_id, extra) if extra else []
+    return seen
+
+
+def _refresh_scope(conn, tenant_id, pub):
+    """CR-017 §1.4: the set of pub_numbers an in-place refresh covers — the
+    tenders acted on plus every tender linked to them through duplicates.
+    A decision on one propagates to its whole group (_propagate_status_to_
+    duplicates), and resolving or reinstating a member changes the others'
+    group size and canonical, so all of them must be re-read, not just the
+    one clicked. None when `pub` isn't a non-empty list (a direct Python
+    call that omits it gets FastAPI's Query default object, not None)."""
+    if not isinstance(pub, (list, tuple)) or not pub:
+        return None
+    return _linked_pub_numbers(conn, tenant_id, pub)
 
 
 def _attach_screening_answers(conn, tenant_id, records):
@@ -543,6 +563,7 @@ def list_tenders(
     entry_method:     Optional[str]  = None,
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
+    pub:    Optional[List[str]] = Query(None),
     identity: Identity = Depends(get_current_identity),
 ):
     """The Review Queue / Tender Feed list.
@@ -562,6 +583,12 @@ def list_tenders(
 
     CR-017 §1.2: the `sort` parameter is gone. It was accepted and ignored;
     the order is always deadline ascending, empty deadlines last.
+
+    CR-017 §1.4: `pub` (repeatable) restricts the list to those tenders and
+    everything duplicate-linked to them — the Review Queue's in-place
+    refresh after an action. Each returned row is identical to the same row
+    in the unrestricted list; `scope` names every pub_number considered, so
+    the client drops any of them that no longer qualify.
     """
     tenant_id = identity.tenant_id
     conn = _db()
@@ -569,6 +596,9 @@ def list_tenders(
         conn, tenant_id, today=_today(), status=status, notice_type=notice_type,
         include_excluded=include_excluded, entry_method=entry_method,
         has_deadline=has_deadline, hide_expired=(status != "dismissed_final"))
+    scope = _refresh_scope(conn, tenant_id, pub)
+    if scope is not None:
+        where = store.restrict_to_pub_numbers(where, scope)
     records = store.select_records(conn, where)
 
     if source:
@@ -591,7 +621,10 @@ def list_tenders(
 
     _enrich_for_list(conn, tenant_id, records, identity)
     records.sort(key=lambda r: (r.get("deadline") or "9999-99-99"))
-    return {"total": len(records), "results": records[offset: offset + limit]}
+    out = {"total": len(records), "results": records[offset: offset + limit]}
+    if scope is not None:
+        out["scope"] = sorted(scope)
+    return out
 
 
 def _today():
@@ -637,18 +670,29 @@ def count_tenders(
 def list_expired_undecided(
     limit:  int = Query(200, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
+    pub:    Optional[List[str]] = Query(None),
     identity: Identity = Depends(get_current_identity),
 ):
     """CR-017 §1.3: what expired while nobody decided — status new or
     needs_review, visible, not a past_tender notice, deadline before today
     (store.expired_undecided_where). The default list drops these silently;
-    this is where they stay visible. Most recently expired first."""
+    this is where they stay visible. Most recently expired first.
+
+    `pub` works as on list_tenders (CR-017 §1.4) — with it, `total` counts
+    only the refreshed rows, not the whole expired set."""
     tenant_id = identity.tenant_id
     conn = _db()
-    records = store.select_records(conn, store.expired_undecided_where(conn, tenant_id, today=_today()))
+    where = store.expired_undecided_where(conn, tenant_id, today=_today())
+    scope = _refresh_scope(conn, tenant_id, pub)
+    if scope is not None:
+        where = store.restrict_to_pub_numbers(where, scope)
+    records = store.select_records(conn, where)
     _enrich_for_list(conn, tenant_id, records, identity)
     records.sort(key=lambda r: r["deadline"], reverse=True)
-    return {"total": len(records), "results": records[offset: offset + limit]}
+    out = {"total": len(records), "results": records[offset: offset + limit]}
+    if scope is not None:
+        out["scope"] = sorted(scope)
+    return out
 
 
 @app.get("/api/tenders/{pub_number}")

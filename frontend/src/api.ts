@@ -88,6 +88,9 @@ export interface TenderFilters {
   notice_type?: string;
   limit?: number;
   offset?: number;
+  // CR-017 §1.4: restrict to these tenders and everything duplicate-linked
+  // to them (the Review Queue's in-place refresh).
+  pub?: string[];
 }
 
 export function listTenders(filters: TenderFilters = {}): Promise<TenderListResponse> {
@@ -102,6 +105,7 @@ export function listTenders(filters: TenderFilters = {}): Promise<TenderListResp
   if (filters.notice_type) params.set('notice_type', filters.notice_type);
   if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.offset !== undefined) params.set('offset', String(filters.offset));
+  filters.pub?.forEach(p => params.append('pub', p));
   const qs = params.toString();
   return apiFetch<TenderListResponse>(`/api/tenders${qs ? '?' + qs : ''}`);
 }
@@ -119,8 +123,10 @@ export function countTenders(filters: Pick<TenderFilters, 'status' | 'notice_typ
 // CR-017 §1.3: tenders whose deadline passed while still new or needs_review
 // (api.list_expired_undecided) — the default list drops these silently.
 // Most recently expired first.
-export function listExpiredUndecided(limit = 200): Promise<TenderListResponse> {
-  return apiFetch<TenderListResponse>(`/api/tenders/expired?limit=${limit}`);
+export function listExpiredUndecided(limit = 200, pub?: string[]): Promise<TenderListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  pub?.forEach(p => params.append('pub', p));
+  return apiFetch<TenderListResponse>(`/api/tenders/expired?${params}`);
 }
 
 export function getTender(pub_number: string): Promise<Tender> {

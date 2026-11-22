@@ -12,6 +12,7 @@ import SourceNotice from '../../components/SourceNotice';
 import ScreenTender from '../../components/ScreenTender';
 import ManualTenderPanel, { ManualBadge, WouldBeExcluded } from '../../components/ManualTenderPanel';
 import { DEFAULT_SORT, deadlineBands, expiredLabel, sortTenders, type SortBy } from './queueOrder';
+import { applyExpiredRefresh, applyQueueRefresh, pickSelection } from './queueRows';
 // CR-007 Phase B (B1/B2): 'dismissed' is now stage 1/soft (still queued,
 // greyed out); 'dismissed_final' is stage 2 (the Dismissed tab).
 // CR-008 W3: 'reviewed' dropped as a filter option — the action that set it
@@ -192,6 +193,25 @@ export default function ReviewQueue() {
       .finally(() => setLoading(false));
   }
 
+  // CR-017 §1.4: after an action, re-read only the affected rows — the
+  // tenders acted on and everything duplicate-linked to them (the server
+  // expands the set and says which rows it covered) — and update them in
+  // place, in both the queue and the expired list. A full load() stays for
+  // first render, a notification click-through and a manual delete.
+  async function refreshRows(pubs: string[]) {
+    const [q, ex] = await Promise.all([listTenders({ pub: pubs, limit: 1000 }), listExpiredUndecided(1000, pubs)]);
+    const nextQueue = applyQueueRefresh(tenders, q, sortBy);
+    const nextExpired = applyExpiredRefresh(expired, expiredTotal, ex);
+    setTenders(nextQueue);
+    setExpired(nextExpired.list);
+    setExpiredTotal(nextExpired.total);
+    const fallback = (view === 'expired' ? nextExpired.list : nextQueue)[0] ?? null;
+    setSelected(prev => pickSelection(prev, [q, ex], fallback));
+    const known = new Set(Object.keys(cpvLabels));
+    const codes = Array.from(new Set([...q.results, ...ex.results].flatMap(t => t.cpv_codes))).filter(c => !known.has(c));
+    if (codes.length) getCpvLabels(codes).then(l => setCpvLabels(prev => ({ ...prev, ...l }))).catch(() => {});
+  }
+
   // CR-006 D2 / CR-007 B1-B2: a required-note action in progress — dismiss
   // (either stage) or "needs further review". Generalizes what used to be a
   // dismiss-only inline panel (dismissOpen/dismissNote) into one shared
@@ -254,7 +274,7 @@ export default function ReviewQueue() {
     setPatching(true);
     try {
       await patchTender(selected.pub_number, status, note, category, assignee);
-      load();
+      await refreshRows([selected.pub_number]);
     } finally {
       setPatching(false);
     }
@@ -307,7 +327,7 @@ export default function ReviewQueue() {
     setResolvingDuplicate(true);
     try {
       await resolveDuplicate(selected.pub_number, otherPubNumber);
-      load();
+      await refreshRows([selected.pub_number, otherPubNumber]);
     } finally {
       setResolvingDuplicate(false);
     }
@@ -318,7 +338,7 @@ export default function ReviewQueue() {
     setResolvingDuplicate(true);
     try {
       await unresolveDuplicate(selected.pub_number, otherPubNumber);
-      load();
+      await refreshRows([selected.pub_number, otherPubNumber]);
     } finally {
       setResolvingDuplicate(false);
     }
@@ -369,7 +389,7 @@ export default function ReviewQueue() {
     try {
       await patchTenderRelevance(selected.pub_number, score, relevanceNoteInput.trim() || undefined);
       setRelevanceEditing(false);
-      load();
+      await refreshRows([selected.pub_number]);
     } finally {
       setPatching(false);
     }
