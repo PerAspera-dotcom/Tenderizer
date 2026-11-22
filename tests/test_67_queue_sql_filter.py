@@ -244,9 +244,15 @@ def _assert_same(reference, live):
     ref_pubs = [r["pub_number"] for r in reference]
     live_pubs = [r["pub_number"] for r in live["results"]]
     assert set(live_pubs) == set(ref_pubs)          # the requirement
-    assert live_pubs == ref_pubs                     # and the order
-    for ref, got in zip(reference, live["results"]):
-        assert got == ref, ref["pub_number"]         # every field, scores and groups included
+    # The order, as far as it was ever defined: by deadline (empties last).
+    # Among equal deadlines both paths keep the database's scan order, which
+    # Postgres doesn't guarantee — comparing pub_numbers position by position
+    # passed or failed by luck of the heap layout.
+    sort_key = lambda r: r.get("deadline") or "9999-99-99"
+    assert [sort_key(r) for r in live["results"]] == [sort_key(r) for r in reference]
+    by_pub = {r["pub_number"]: r for r in live["results"]}
+    for ref in reference:
+        assert by_pub[ref["pub_number"]] == ref, ref["pub_number"]   # every field, scores and groups included
 
 
 # Every combination of the facets that moved into SQL.
