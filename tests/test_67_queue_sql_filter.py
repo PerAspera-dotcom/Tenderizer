@@ -17,10 +17,20 @@ scores (their training pools include hidden, expired and past rows) and
 duplicate groups (whose members can sit outside the filtered set).
 
 The date is pinned (api._today), never date.today().
+
+Postgres: production runs on Postgres, where text comparison follows the
+database collation; store.queue_where forces byte order there. Set
+CR017_PG_URL to a disposable local database to run this whole module
+against Postgres instead of SQLite, e.g.
+    CR017_PG_URL=postgresql://tenderizer:dev@localhost:5432/cr017_test
+The schema in that database is dropped and rebuilt for every test, so the
+URL must point at localhost and the database name must contain "test".
 """
 import itertools
+import os
 import random
 import shutil
+from urllib.parse import urlparse
 
 import pytest
 from sqlalchemy import insert, update
@@ -29,13 +39,19 @@ import api
 import store
 import visibility
 from conftest import TEST_TENANT_ID, make_identity
-from schema import tender_duplicates, tenders
+from schema import metadata, tender_duplicates, tenders
 
 TODAY = "2026-07-15"
 
 STATUSES = ["new", "needs_review", "reviewed", "shortlisted", "dismissed", "dismissed_final", ""]
 ENTRY = ["scraped", "manual"]
-DEADLINES = ["", "2026-07-01", "2026-07-14T23:59:00", TODAY, f"{TODAY}T09:00:00+02:00", "2026-08-01", "2027-01-31"]
+# The last two are malformed on purpose: under a locale collation (Postgres
+# en_US) punctuation is ignored at first level, so "2026/07/01" compares as
+# "20260701" — before TODAY, i.e. expired — whereas the old Python path, and
+# byte order, put it after. They are what makes this module catch a missing
+# COLLATE "C" on Postgres.
+DEADLINES = ["", "2026-07-01", "2026-07-14T23:59:00", TODAY, f"{TODAY}T09:00:00+02:00", "2026-08-01", "2027-01-31",
+             "2026/07/01", "2026.06.30"]
 NOTICE_TYPES = ["tender", "past_tender", "award"]
 EXCLUDE = ["", "F3: value below floor"]
 
@@ -48,11 +64,19 @@ TITLES = ["Tentes de réception", "Équipement événementiel", "Zelte für Bund
 BUYERS = ["Ville de Liège", "BAAINBw", "Gemeente Utrecht", "SPF Intérieur", "Public Works Canada"]
 
 
+PG_URL = os.getenv("CR017_PG_URL")
+if PG_URL:
+    _u = urlparse(PG_URL)
+    assert _u.hostname in ("localhost", "127.0.0.1") and "test" in _u.path,         "CR017_PG_URL must be a local database whose name contains 'test' — its schema is dropped"
+
+
 @pytest.fixture(scope="module")
 def template_db(tmp_path_factory):
     """The fixture database, built once per module; each test gets a copy.
     Module scope runs before conftest's per-test DATABASE_URL guard, so it
     applies the same guard itself."""
+    if PG_URL:
+        return None, None
     path = tmp_path_factory.mktemp("cr017") / "template.db"
     with pytest.MonkeyPatch.context() as mp:
         mp.delenv("DATABASE_URL", raising=False)
@@ -64,6 +88,16 @@ def template_db(tmp_path_factory):
 
 @pytest.fixture
 def conn(tmp_path, monkeypatch, template_db):
+    monkeypatch.setattr(api, "_today", lambda: TODAY)
+    if PG_URL:
+        monkeypatch.setenv("DATABASE_URL", PG_URL)
+        engine = store.init_db(str(tmp_path / "unused.db"))
+        metadata.drop_all(engine)
+        engine = store.init_db(str(tmp_path / "unused.db"))
+        assert engine.dialect.name == "postgresql"
+        store.ensure_tenant(engine, TEST_TENANT_ID)
+        _PUBS[:] = _populate(engine)
+        return engine
     template, pubs = template_db
     db_path = tmp_path / "t.db"
     shutil.copyfile(template, db_path)
