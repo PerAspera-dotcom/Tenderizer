@@ -241,3 +241,63 @@ def test_dismissing_a_tender_with_no_duplicate_link_is_a_plain_no_propagation(tm
     body = StatusBody(status="dismissed", note="Not relevant", reason_category="other")
     result = api.patch_tender("SOLO", body, identity=make_identity())
     assert result["status"] == "dismissed"  # no crash, no counterpart to touch
+
+
+# ── CR-017: the FINAL dismiss propagates too ─────────────────────────────────
+# patch_tender used to write dismissed_final before resolving the group, and
+# the group walk skips edges touching a dismissed_final row — the primary's
+# own — so a final dismiss never reached the linked duplicates, although the
+# Review Queue says it will. The group is now resolved before the write.
+
+def test_final_dismiss_propagates_to_cross_portal_duplicate(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    store.upsert(conn, TEST_TENANT_ID, _tender("TED-1", source="TED"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("BOAMP-1", source="BOAMP"))
+    store.upsert_tender_duplicate(conn, TEST_TENANT_ID, "TED-1", "BOAMP-1", "reference")
+
+    from api import StatusBody
+    api.patch_tender("BOAMP-1", StatusBody(status="dismissed_final", note="Out of scope", reason_category="other"),
+                     identity=make_identity())
+
+    rec_ted = api.get_tender("TED-1", identity=make_identity())
+    assert rec_ted["status"] == "dismissed_final"
+    assert "Linked duplicate of BOAMP-1" in rec_ted["dismissal_reason"]
+    assert rec_ted["dismissal_reason_category"] == "other"
+
+
+def test_two_stage_dismiss_ends_with_every_member_final(tmp_path, monkeypatch):
+    # the real Review Queue flow: "Dismiss" (stage 1, propagates), then
+    # "Dismiss permanently" on the same tender (stage 2)
+    conn = _db(tmp_path, monkeypatch)
+    store.upsert(conn, TEST_TENANT_ID, _tender("KEPT", pub_date="2026-06-20"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("C1", pub_date="2026-06-01"))
+    store.upsert(conn, TEST_TENANT_ID, _tender("C2", pub_date="2026-06-10"))
+    store.upsert_tender_duplicate(conn, TEST_TENANT_ID, "KEPT", "C1", "same_source")
+    store.upsert_tender_duplicate(conn, TEST_TENANT_ID, "KEPT", "C2", "same_source")
+
+    from api import StatusBody
+    identity = make_identity()
+    api.patch_tender("C1", StatusBody(status="dismissed", note="Dup", reason_category="duplicate"), identity=identity)
+    assert {api.get_tender(p, identity=identity)["status"] for p in ("KEPT", "C1", "C2")} == {"dismissed"}
+    api.patch_tender("C1", StatusBody(status="dismissed_final", note="Dup", reason_category="duplicate"), identity=identity)
+    # from a leaf of the star: must reach C2 through KEPT
+    assert {api.get_tender(p, identity=identity)["status"] for p in ("KEPT", "C1", "C2")} == {"dismissed_final"}
+
+
+def test_final_dismiss_leaves_an_already_final_member_alone(tmp_path, monkeypatch):
+    # a member someone already dismissed for good isn't part of the active
+    # group, so its own reason isn't overwritten by an inherited one
+    conn = _db(tmp_path, monkeypatch)
+    for pub in ("A", "B", "C"):
+        store.upsert(conn, TEST_TENANT_ID, _tender(pub))
+    store.upsert_tender_duplicate(conn, TEST_TENANT_ID, "A", "B", "reference")
+    store.upsert_tender_duplicate(conn, TEST_TENANT_ID, "A", "C", "reference")
+
+    from api import StatusBody
+    identity = make_identity()
+    store.set_status(conn, TEST_TENANT_ID, "C", "dismissed_final", dismissal_reason="Own reason",
+                     dismissed_by="someone", dismissed_at="2026-07-01", reason_category="other")
+    api.patch_tender("A", StatusBody(status="dismissed_final", note="Dup", reason_category="duplicate"), identity=identity)
+    assert api.get_tender("B", identity=identity)["status"] == "dismissed_final"
+    rec_c = api.get_tender("C", identity=identity)
+    assert rec_c["dismissal_reason"] == "Own reason" and rec_c["dismissal_reason_category"] == "other"

@@ -157,7 +157,7 @@ def test_shortlist_propagates_and_refresh_shows_every_member_decided(conn, cheap
     assert all(screen[p]["status"] == "shortlisted" for p in ("G-A", "G-B", "G-C"))
 
 
-def test_final_dismiss_drops_the_member_and_regroups_the_rest(conn, cheap_scores):
+def test_final_dismiss_propagates_and_refresh_shows_the_whole_group_gone(conn, cheap_scores):
     _build(conn)
     _group(conn, "H-A", "H-B", "H-C", match_type="reference")
     identity = make_identity()
@@ -171,22 +171,29 @@ def test_final_dismiss_drops_the_member_and_regroups_the_rest(conn, cheap_scores
     _status("H-C", "new")           # "Reset to new" — doesn't propagate
     screen = _act_and_refresh(identity, screen, ["H-C"])
 
+    # "Dismiss permanently" propagates to the whole group (fixed in CR-017,
+    # see test_53), and every member leaves its group
     _status("H-C", "dismissed_final", note="dup", reason_category="duplicate")
     screen = _act_and_refresh(identity, screen, ["H-C"])
-    # H-C leaves the group; the two left behind regroup as a pair, and the
-    # refresh has to re-read them for that (their group size drops 3 -> 2)
-    # even though only H-C was acted on.
-    assert screen["H-C"]["status"] == "dismissed_final"
+    assert all(screen[p]["status"] == "dismissed_final" for p in ("H-A", "H-B", "H-C"))
+    assert all(screen[p]["cross_portal_group"] is None for p in ("H-A", "H-B", "H-C"))
+
+
+def test_a_member_leaving_regroups_the_rest_in_place(conn, cheap_scores):
+    """A member reaching dismissed_final without propagation (written
+    directly, as any path other than patch_tender would) leaves the other
+    two as a pair: their group size drops 3 -> 2, and the refresh must
+    re-read them although only H-C was touched."""
+    _build(conn)
+    _group(conn, "H-A", "H-B", "H-C", match_type="reference")
+    identity = make_identity()
+    screen = _full(identity)
+    store.set_status(conn, TEST_TENANT_ID, "H-C", "dismissed_final", dismissal_reason="gone",
+                     dismissed_by="x", dismissed_at="2026-07-10", reason_category="other")
+    screen = _act_and_refresh(identity, screen, ["H-C"])
     assert screen["H-C"]["cross_portal_group"] is None
     assert screen["H-A"]["cross_portal_group"]["size"] == 2
     assert screen["H-B"]["cross_portal_group"]["size"] == 2
-    # Pre-existing, found here, not fixed in CR-017 (outside §1.4): a FINAL
-    # dismiss doesn't propagate. patch_tender writes dismissed_final before
-    # _propagate_status_to_duplicates walks the group, and the walk skips
-    # edges touching a dismissed_final row — the primary's own — so it finds
-    # no group. H-A / H-B stay soft-dismissed. The screen still matches a
-    # reload, which is all this test asserts about their status.
-    assert {screen["H-A"]["status"], screen["H-B"]["status"]} == {"dismissed"}
 
 
 def test_resolve_and_unresolve_regroup_in_place(conn, cheap_scores):

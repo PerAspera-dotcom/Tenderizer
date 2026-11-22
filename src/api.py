@@ -797,6 +797,12 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
     # (client feedback reversed CR-007 Phase A's personal-per-account split —
     # see schema.py's tender_reviews retirement comment) — "shortlisted" is
     # no longer a special case among statuses.
+    # CR-017: resolve the duplicate group from the rows as they were BEFORE
+    # this write. Afterwards a dismissed_final primary has dropped out of its
+    # own group (the walk skips dismissed_final rows), so a final dismiss
+    # used to propagate to nobody.
+    group = (_active_duplicate_group(conn, tenant_id, pub_number, records)
+             if body.status in _PROPAGATE_TO_DUPLICATES else None)
     store.set_status(
         conn, tenant_id, pub_number, body.status,
         dismissal_reason=body.note.strip() if body.status in _NOTE_REQUIRED_STATUSES else None,
@@ -814,8 +820,8 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
         if background is not None:
             background.add_task(_send_needs_review_ping_email, tenant_id, pub_number,
                                  assigned_to, body.note.strip(), identity.account_name)
-    if body.status in _PROPAGATE_TO_DUPLICATES:
-        _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity)
+    if group:
+        _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity, group)
     return {"pub_number": pub_number, "status": body.status}
 
 
@@ -831,7 +837,30 @@ def patch_tender(pub_number: str, body: StatusBody, background: BackgroundTasks 
 _PROPAGATE_TO_DUPLICATES = {"shortlisted"} | _DISMISS_STATUSES
 
 
-def _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity):
+def _active_duplicate_group(conn, tenant_id, pub_number, records):
+    """`pub_number`'s unresolved duplicate group, or None — computed from
+    `records` (the tenant's rows), so patch_tender can pass the state from
+    before its own write. See _propagate_status_to_duplicates for the rules.
+    """
+    by_pub = {r["pub_number"]: r for r in records}
+    if pub_number not in by_pub:
+        return None
+
+    same_source_edges, cross_portal_edges = [], []
+    for d in store.get_tender_duplicates_for_tenant(conn, tenant_id):
+        if d["resolved_by"]:
+            continue
+        a, b = by_pub.get(d["pub_number_a"]), by_pub.get(d["pub_number_b"])
+        if a is None or b is None or a.get("status") == "dismissed_final" or b.get("status") == "dismissed_final":
+            continue
+        edge = (d["pub_number_a"], d["pub_number_b"])
+        (same_source_edges if d["match_type"] == "same_source" else cross_portal_edges).append(edge)
+
+    return (dedup.group_same_source_duplicates(by_pub, same_source_edges).get(pub_number)
+            or dedup.group_cross_portal_duplicates(by_pub, cross_portal_edges).get(pub_number))
+
+
+def _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity, group):
     """Applies `pub_number`'s just-set status to every OTHER member of its
     unresolved duplicate group (same_source or cross-portal — whichever
     `pub_number` is actually in; a tender can only be in one or the other's
@@ -855,27 +884,11 @@ def _propagate_status_to_duplicates(conn, tenant_id, pub_number, body, identity)
     record — see schema.py's tender_history for why this distinction stays
     visible rather than being indistinguishable from a reviewer opening that
     exact tender themselves.
+
+    `group` is resolved by the caller from the rows as they were before the
+    primary's write (_active_duplicate_group) — CR-017: resolved after it,
+    a final dismiss found no group and propagated to nobody.
     """
-    records = store.all_records(conn, tenant_id)
-    by_pub = {r["pub_number"]: r for r in records}
-    if pub_number not in by_pub:
-        return
-
-    same_source_edges, cross_portal_edges = [], []
-    for d in store.get_tender_duplicates_for_tenant(conn, tenant_id):
-        if d["resolved_by"]:
-            continue
-        a, b = by_pub.get(d["pub_number_a"]), by_pub.get(d["pub_number_b"])
-        if a is None or b is None or a.get("status") == "dismissed_final" or b.get("status") == "dismissed_final":
-            continue
-        edge = (d["pub_number_a"], d["pub_number_b"])
-        (same_source_edges if d["match_type"] == "same_source" else cross_portal_edges).append(edge)
-
-    group = (dedup.group_same_source_duplicates(by_pub, same_source_edges).get(pub_number)
-             or dedup.group_cross_portal_duplicates(by_pub, cross_portal_edges).get(pub_number))
-    if not group:
-        return
-
     note = (body.note or "").strip()
     inherited_note = f"[Linked duplicate of {pub_number}] {note}".strip() if note else f"Linked duplicate of {pub_number}"
     now = datetime.now(timezone.utc).isoformat()
