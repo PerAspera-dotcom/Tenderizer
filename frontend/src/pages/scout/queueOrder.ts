@@ -15,6 +15,12 @@ export const STATUS_SORT_RANK: Record<string, number> = {
   new: 0, needs_review: 1, reviewed: 2, shortlisted: 3, dismissed: 4, dismissed_final: 5,
 };
 
+// Code-unit order, as Python compares strings on the server (localeCompare
+// would order punctuation in pub_numbers differently from api.list_tenders).
+export function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function hasDeadline(t: Pick<Tender, 'deadline'>): boolean {
   return !!(t.deadline && t.deadline.trim());
 }
@@ -23,8 +29,10 @@ export function hasDeadline(t: Pick<Tender, 'deadline'>): boolean {
 // labelled band (see deadlineBands): an unknown deadline could be tomorrow,
 // so it must neither sink below every dated tender nor pass silently as one.
 // The server's own order (api.list_tenders) puts them last; the queue
-// re-orders client-side so the band can lead.
-export function sortTenders<T extends Pick<Tender, 'deadline' | 'pub_date' | 'status'>>(list: T[], by: SortBy): T[] {
+// re-orders client-side so the band can lead. Ties — same deadline, or both
+// undated — break on pub_number (CR-017), matching the server, so the order
+// is the same on every load.
+export function sortTenders<T extends Pick<Tender, 'deadline' | 'pub_date' | 'status' | 'pub_number'>>(list: T[], by: SortBy): T[] {
   const sorted = [...list];
   if (by === 'pub_date') {
     sorted.sort((a, b) => (b.pub_date || '').localeCompare(a.pub_date || ''));
@@ -34,7 +42,7 @@ export function sortTenders<T extends Pick<Tender, 'deadline' | 'pub_date' | 'st
     sorted.sort((a, b) => {
       const ad = hasDeadline(a), bd = hasDeadline(b);
       if (ad !== bd) return ad ? 1 : -1;
-      return ad ? a.deadline.localeCompare(b.deadline) : 0;
+      return (ad ? cmp(a.deadline, b.deadline) : 0) || cmp(a.pub_number, b.pub_number);
     });
   }
   return sorted;

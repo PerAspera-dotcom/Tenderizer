@@ -25,9 +25,21 @@ test('deadline order: no-deadline tenders first, then closing soonest first', ()
   assert.deepEqual(pubs.slice(3), ['soon', 'mid', 'late']);
 });
 
-test('deadline order keeps the server order within the no-deadline band', () => {
+test('ties break on pub_number: within the no-deadline band and on equal deadlines', () => {
   const pubs = sortTenders(LIST, 'deadline').map(x => x.pub_number);
-  assert.deepEqual(pubs.slice(0, 3), ['none-a', 'blank', 'none-b']);
+  assert.deepEqual(pubs.slice(0, 3), ['blank', 'none-a', 'none-b']);
+  const same = [t('Z-1', '2026-08-01'), t('A-9', '2026-08-01'), t('M-5', '2026-08-01'), t('B', '2026-07-20')];
+  assert.deepEqual(sortTenders(same, 'deadline').map(x => x.pub_number), ['B', 'A-9', 'M-5', 'Z-1']);
+});
+
+test('deadline order is the same whatever order the rows arrive in', () => {
+  const same = [t('Z-1', '2026-08-01'), t('A-9', '2026-08-01'), t('m-5', '2026-08-01'), t('MAN-2026-0001', ''), t('2026/S 1', '')];
+  const want = sortTenders(same, 'deadline').map(x => x.pub_number);
+  for (const perm of [[...same].reverse(), [same[2], same[0], same[4], same[1], same[3]]]) {
+    assert.deepEqual(sortTenders(perm, 'deadline').map(x => x.pub_number), want);
+  }
+  // code-unit order, as the server: digits < uppercase < lowercase
+  assert.deepEqual(want, ['2026/S 1', 'MAN-2026-0001', 'A-9', 'Z-1', 'm-5']);
 });
 
 test('the no-deadline band is labelled, and the dated band says what it is', () => {

@@ -155,3 +155,10 @@ def test_pagination_reports_the_full_total(conn):
         _add(conn, f"p{i}", deadline=f"2026-07-0{i + 1}")
     page = api.list_expired_undecided(identity=make_identity(), limit=2, offset=2)
     assert page["total"] == 5 and len(page["results"]) == 2
+
+
+def test_equal_expiry_dates_order_by_pub_number(conn):
+    for pub in ("Z", "M", "A"):                   # reverse insertion
+        _add(conn, pub, deadline="2026-07-10")
+    _add(conn, "newer", deadline="2026-07-12")
+    assert [r["pub_number"] for r in _expired()["results"]] == ["newer", "A", "M", "Z"]

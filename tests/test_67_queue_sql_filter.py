@@ -367,3 +367,29 @@ def test_list_is_tenant_scoped(conn):
     _build(conn)
     store.ensure_tenant(conn, 2)
     assert _live(make_identity(tenant_id=2))["total"] == 0
+
+
+# ── CR-017: deadline ties break on pub_number ────────────────────────────────
+
+def _tie_row(conn, pub, deadline):
+    store.upsert(conn, TEST_TENANT_ID, {
+        "source": "TED", "pub_number": pub, "tag_line": "Tentes", "description": "", "buyer": "Ville",
+        "country": "BE", "category": "Supply", "deadline": deadline, "cpv_codes": ["39522530"],
+        "matched_terms": [], "match_source": "cpv", "url": "", "status": "new", "exclude_reason": "",
+        "notice_type": "tender", "entry_method": "scraped"})
+
+
+def test_equal_deadlines_order_by_pub_number(conn, cheap_scores):
+    """Same-day closers keep one order across loads. Inserted in reverse, so
+    insertion / scan order would put them backwards."""
+    _build(conn)
+    for pub in ("TIE-Z", "TIE-M", "TIE-A"):
+        _tie_row(conn, pub, "2026-09-30")
+    for pub in ("UND-Z", "UND-A"):
+        _tie_row(conn, pub, "")
+    results = _live(make_identity())["results"]
+    pubs = [r["pub_number"] for r in results]
+    assert [p for p in pubs if p.startswith("TIE-")] == ["TIE-A", "TIE-M", "TIE-Z"]
+    assert [p for p in pubs if p.startswith("UND-")] == ["UND-A", "UND-Z"]
+    key = lambda r: (r.get("deadline") or "9999-99-99", r["pub_number"])
+    assert [key(r) for r in results] == sorted(key(r) for r in results)   # the whole list, not just these

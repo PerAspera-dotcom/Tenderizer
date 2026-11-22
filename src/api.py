@@ -620,7 +620,9 @@ def list_tenders(
                    or ql in (r.get("buyer") or "").lower()]
 
     _enrich_for_list(conn, tenant_id, records, identity)
-    records.sort(key=lambda r: (r.get("deadline") or "9999-99-99"))
+    # CR-017: pub_number breaks deadline ties, so same-day closers keep
+    # their order between loads (before, ties kept the database's scan order).
+    records.sort(key=lambda r: (r.get("deadline") or "9999-99-99", r["pub_number"]))
     out = {"total": len(records), "results": records[offset: offset + limit]}
     if scope is not None:
         out["scope"] = sorted(scope)
@@ -688,7 +690,8 @@ def list_expired_undecided(
         where = store.restrict_to_pub_numbers(where, scope)
     records = store.select_records(conn, where)
     _enrich_for_list(conn, tenant_id, records, identity)
-    records.sort(key=lambda r: r["deadline"], reverse=True)
+    records.sort(key=lambda r: r["pub_number"])                 # tiebreak, ascending
+    records.sort(key=lambda r: r["deadline"], reverse=True)     # stable: newest expiry first
     out = {"total": len(records), "results": records[offset: offset + limit]}
     if scope is not None:
         out["scope"] = sorted(scope)

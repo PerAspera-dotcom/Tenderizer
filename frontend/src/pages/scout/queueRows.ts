@@ -14,7 +14,7 @@
 // shortlist or final dismiss changes the scoring pools, so they drift until
 // the next full load — preferred to numbers changing under the reviewer.
 import type { Tender } from '../../types';
-import { sortTenders, type SortBy } from './queueOrder.ts';
+import { cmp, sortTenders, type SortBy } from './queueOrder.ts';
 
 export interface Refresh<T> { results: T[]; scope?: string[] }
 
@@ -54,7 +54,7 @@ export function applyQueueRefresh<T extends Row & Pick<Tender, 'status' | 'deadl
 export function applyExpiredRefresh<T extends Row & Pick<Tender, 'deadline'>>(
   expired: T[], total: number, fresh: Refresh<T>,
 ): { list: T[]; total: number } {
-  const list = mergeRefreshed(expired, fresh).sort((a, b) => b.deadline.localeCompare(a.deadline));
+  const list = mergeRefreshed(expired, fresh).sort((a, b) => cmp(b.deadline, a.deadline) || cmp(a.pub_number, b.pub_number));
   return { list, total: Math.max(0, total + list.length - expired.length) };
 }
 
