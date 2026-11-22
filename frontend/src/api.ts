@@ -88,7 +88,6 @@ export interface TenderFilters {
   notice_type?: string;
   limit?: number;
   offset?: number;
-  sort?: string;
 }
 
 export function listTenders(filters: TenderFilters = {}): Promise<TenderListResponse> {
@@ -103,9 +102,18 @@ export function listTenders(filters: TenderFilters = {}): Promise<TenderListResp
   if (filters.notice_type) params.set('notice_type', filters.notice_type);
   if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.offset !== undefined) params.set('offset', String(filters.offset));
-  if (filters.sort) params.set('sort', filters.sort);
   const qs = params.toString();
   return apiFetch<TenderListResponse>(`/api/tenders${qs ? '?' + qs : ''}`);
+}
+
+// CR-017: the list's `total` without fetching any rows — the nav badge.
+// Accepts only the facets the server applies in SQL (api.count_tenders).
+export function countTenders(filters: Pick<TenderFilters, 'status' | 'notice_type'> = {}): Promise<{ total: number }> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.notice_type) params.set('notice_type', filters.notice_type);
+  const qs = params.toString();
+  return apiFetch<{ total: number }>(`/api/tenders/count${qs ? '?' + qs : ''}`);
 }
 
 export function getTender(pub_number: string): Promise<Tender> {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { UserButton, OrganizationSwitcher, useOrganization, useOrganizationList, CreateOrganization } from '@clerk/clerk-react';
 import { useNavigate, useLocation, Link } from '../router';
-import { getStats, getHealth, postRun, listTenders } from '../api';
+import { getStats, getHealth, postRun, countTenders } from '../api';
 import type { Stats, PortalHealth } from '../types';
 import { formatTime } from '../utils';
 import NotificationBell from './NotificationBell';
@@ -120,7 +120,7 @@ export default function Layout({ children }: Props) {
   useEffect(() => {
     getStats().then(setStats).catch(() => {});
     getHealth().then(setHealth).catch(() => {});
-    listTenders({ status: 'new', limit: 1000 }).then(r => setNewCount(r.total)).catch(() => {});
+    countTenders({ status: 'new' }).then(r => setNewCount(r.total)).catch(() => {});
   }, [location.pathname]);
 
   const engineLive = health.some(h => h.status === 'live');

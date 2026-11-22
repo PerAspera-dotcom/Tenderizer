@@ -64,7 +64,7 @@ def _scraped(conn, pub, **over):
 
 def _list(**kw):
     return [r["pub_number"] for r in api.list_tenders(
-        identity=make_identity(), limit=1000, offset=0, sort="deadline", source=None, category=None,
+        identity=make_identity(), limit=1000, offset=0, source=None, category=None,
         match_source=None, country=None, q=None, status=None, has_deadline=None, notice_type=None,
         include_excluded=False, **kw)["results"]]
 

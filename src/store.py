@@ -18,7 +18,7 @@ import json
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import and_, func, insert, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import config
@@ -1227,6 +1227,10 @@ def all_records(conn, tenant_id, include_deleted=False):
         q = q.where(tenders.c.deleted_at.is_(None))
     with conn.connect() as c:
         rows = c.execute(q).fetchall()
+    return _parse_tender_rows(rows)
+
+
+def _parse_tender_rows(rows):
     out = []
     for r in rows:
         rec = dict(zip(COLUMNS, r))
@@ -1236,6 +1240,112 @@ def all_records(conn, tenant_id, include_deleted=False):
             rec[col] = json.loads(rec[col]) if rec[col] else None
         out.append(rec)
     return out
+
+
+# ── CR-017 §1.1: the Review Queue's predicate, in SQL ────────────────────────
+#
+# api.list_tenders used to load every row (all_records) and filter in Python.
+# These build the same predicate as a WHERE clause, so only the rows the list
+# can show are loaded and enriched. Each clause mirrors one Python test from
+# the old path, including its handling of empty values — `(x or "default")`
+# becomes coalesce(nullif(x, ''), 'default'). The free-text facets (q,
+# source, country, category, match_source) deliberately stay in Python, on
+# the already-reduced set: SQLite's lower()/upper() are ASCII-only, and
+# matching an accented title differently from before would silently change
+# what the queue shows. tests/test_67_queue_sql_filter.py proves the two
+# paths return the same set.
+
+def _or_default(col, default):
+    return func.coalesce(func.nullif(col, ""), default)
+
+
+def _binary(conn, expr):
+    """Byte-order string comparison, as Python's. Postgres compares text
+    under the database collation, which can order punctuation differently;
+    SQLite's default is already binary."""
+    return expr.collate("C") if conn.dialect.name == "postgresql" else expr
+
+
+def queue_where(conn, tenant_id, *, today, status=None, notice_type=None,
+                include_excluded=False, entry_method=None, has_deadline=None,
+                hide_expired=True):
+    """WHERE clause for the Review Queue / Tender Feed list (see api.list_tenders).
+
+    `hide_expired` is the default expiry filter; list_tenders turns it off
+    only for status=dismissed_final, as before. `today` is an ISO date string
+    — passed in, never read from the clock here, so tests can pin it."""
+    t = tenders.c
+    deadline = func.coalesce(t.deadline, "")
+    clauses = [t.tenant_id == tenant_id, t.deleted_at.is_(None)]
+    if not include_excluded:
+        # visibility.is_hidden: excluded and not manual
+        clauses.append((func.coalesce(t.exclude_reason, "") == "") | (t.entry_method == "manual"))
+    if entry_method:
+        clauses.append(_or_default(t.entry_method, "scraped") == entry_method)
+    if status:
+        clauses.append(_or_default(t.status, "new") == status)
+    if has_deadline is True:
+        clauses.append(deadline != "")
+    elif has_deadline is False:
+        clauses.append(deadline == "")
+    if notice_type:
+        clauses.append(_or_default(t.notice_type, "tender") == notice_type)
+    else:
+        clauses.append(_or_default(t.notice_type, "tender") != "past_tender")
+    if hide_expired:
+        clauses.append((deadline == "") | (_binary(conn, func.substr(deadline, 1, 10)) >= today))
+    return and_(*clauses)
+
+
+def expired_undecided_where(conn, tenant_id, *, today):
+    """CR-017 §1.3: tenders that expired with nobody deciding — status new or
+    needs_review, visible, not a past_tender notice, deadline before today.
+    Soft-dismissed ('dismissed') is excluded: someone did decide those."""
+    t = tenders.c
+    deadline = func.coalesce(t.deadline, "")
+    return and_(
+        queue_where(conn, tenant_id, today=today, hide_expired=False),
+        _or_default(t.status, "new").in_(("new", "needs_review")),
+        deadline != "",
+        _binary(conn, func.substr(deadline, 1, 10)) < today,
+    )
+
+
+def select_records(conn, where):
+    """Tender rows matching `where` (callers include the tenant clause),
+    parsed exactly as all_records parses them. No ORDER BY, like
+    all_records: callers sort."""
+    q = select(*[tenders.c[col] for col in COLUMNS]).where(where)
+    with conn.connect() as c:
+        rows = c.execute(q).fetchall()
+    return _parse_tender_rows(rows)
+
+
+def count_records(conn, where):
+    with conn.connect() as c:
+        return c.execute(select(func.count()).select_from(tenders).where(where)).scalar_one()
+
+
+def records_by_pub_numbers(conn, tenant_id, pub_numbers):
+    """Non-deleted rows for these pub_numbers, chunked to stay under bind-
+    parameter limits."""
+    pubs = list(dict.fromkeys(pub_numbers))
+    out = []
+    for i in range(0, len(pubs), 500):
+        chunk = pubs[i:i + 500]
+        out.extend(select_records(conn, and_(
+            tenders.c.tenant_id == tenant_id, tenders.c.deleted_at.is_(None),
+            tenders.c.pub_number.in_(chunk))))
+    return out
+
+
+def relevance_pool_records(conn, tenant_id):
+    """The relevance training pools' rows (shortlisted + dismissed_final, all
+    of them — hidden, expired and past notices included, as when the pools
+    were drawn from all_records)."""
+    return select_records(conn, and_(
+        tenders.c.tenant_id == tenant_id, tenders.c.deleted_at.is_(None),
+        tenders.c.status.in_(("shortlisted", "dismissed_final"))))
 
 
 # ── CR-013 §3: manual tender identity ────────────────────────────────────────

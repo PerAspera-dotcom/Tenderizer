@@ -311,7 +311,7 @@ def _add_dismissal_reason_category(records):
     return records
 
 
-def _attach_relevance(conn, tenant_id, records):
+def _attach_relevance(conn, tenant_id, records, pool=None):
     """CR-007 Phase B (B3): computes relevance_score/relevance_reasoning for
     every tender still awaiting a decision (status "new" or "needs_review")
     — a decided tender (shortlisted/dismissed_final) doesn't need one. The
@@ -323,9 +323,14 @@ def _attach_relevance(conn, tenant_id, records):
     join here, back when dismissal was personal per-account). Must run
     before _add_dismissal_reason_category renames that field. Mutates
     `records` in place and returns it.
+
+    CR-017 §1.1: `pool`, when given, supplies the training pools instead of
+    `records` — list_tenders passes store.relevance_pool_records, so a
+    pre-filtered `records` scores exactly as it would against the full set.
     """
-    positive = [r for r in records if r.get("status") == "shortlisted"]
-    negative = [r for r in records if r.get("status") == "dismissed_final"]
+    pool = records if pool is None else pool
+    positive = [r for r in pool if r.get("status") == "shortlisted"]
+    negative = [r for r in pool if r.get("status") == "dismissed_final"]
     overrides = store.get_relevance_overrides(conn, tenant_id)
     # CR-009 A: {code: group} from the global CPV reference, computed once
     # per request rather than per-candidate — relevance.py stays config-
@@ -351,7 +356,7 @@ def _attach_relevance(conn, tenant_id, records):
     return records
 
 
-def _attach_duplicates(conn, tenant_id, records):
+def _attach_duplicates(conn, tenant_id, records, context=()):
     """CR-007 Phase C: attaches a `duplicates` list to every tender that has
     at least one detected cross-portal match (store.
     get_tender_duplicates_for_tenant stores one row per pair; this expands
@@ -391,7 +396,14 @@ def _attach_duplicates(conn, tenant_id, records):
     the dismissed record itself (Dismissed tab). A soft-dismissed
     ('dismissed', stage 1 — still an active, visible queue item per CR-007
     Phase B) still counts; only the terminal stage is excluded.
+
+    CR-017 §1.1: `context` is the extra rows a pre-filtered `records` needs
+    for this to come out the same as over the full set — every row linked
+    to `records` through duplicate edges (see _duplicate_context). They take
+    part in grouping and resolve as counterparts; they're enriched as a side
+    effect, and the caller doesn't return them.
     """
+    records = list(context) + list(records)
     by_pub = {r["pub_number"]: r for r in records}
     for r in records:
         r["duplicates"] = []
@@ -425,7 +437,36 @@ def _attach_duplicates(conn, tenant_id, records):
         by_pub[pub_number]["duplicate_group"] = group
     for pub_number, group in dedup.group_cross_portal_duplicates(by_pub, cross_portal_edges).items():
         by_pub[pub_number]["cross_portal_group"] = group
-    return records
+    return records[len(context):]
+
+
+def _duplicate_context(conn, tenant_id, records):
+    """CR-017 §1.1: every row reachable from `records` through any duplicate
+    edge (resolved or not, transitively) that isn't already in `records`.
+
+    Walking every edge, not only the active ones, over-collects slightly; it
+    can't under-collect, because each group _attach_duplicates forms is a
+    connected component of a subset of these edges. Soft-deleted rows aren't
+    loaded, matching all_records — an edge to one is skipped there too."""
+    edges = store.get_tender_duplicates_for_tenant(conn, tenant_id)
+    if not edges:
+        return []
+    adjacent = {}
+    for d in edges:
+        adjacent.setdefault(d["pub_number_a"], set()).add(d["pub_number_b"])
+        adjacent.setdefault(d["pub_number_b"], set()).add(d["pub_number_a"])
+    have = {r["pub_number"] for r in records}
+    seen, frontier = set(have), [p for p in have if p in adjacent]
+    while frontier:
+        nxt = []
+        for p in frontier:
+            for q in adjacent.get(p, ()):
+                if q not in seen:
+                    seen.add(q)
+                    nxt.append(q)
+        frontier = nxt
+    extra = seen - have
+    return store.records_by_pub_numbers(conn, tenant_id, extra) if extra else []
 
 
 def _attach_screening_answers(conn, tenant_id, records):
@@ -502,31 +543,36 @@ def list_tenders(
     entry_method:     Optional[str]  = None,
     limit:  int = Query(100, ge=1, le=1000),
     offset: int = Query(0,   ge=0),
-    sort:   str = "deadline",
     identity: Identity = Depends(get_current_identity),
 ):
+    """The Review Queue / Tender Feed list.
+
+    CR-017 §1.1: filters in SQL first (store.queue_where), then enriches
+    only the rows that survive. The predicates that moved into SQL, each
+    exactly as before:
+    - CR-001: excluded rows hidden unless include_excluded — via
+      visibility.is_hidden, so a manual tender with an exclude_reason still
+      shows (CR-013 §6).
+    - CR-013 §6: entry_method facet; status; has_deadline.
+    - CR-002 B1: past_tender notices only when notice_type asks for them.
+    - Expired deadlines hidden, except on status=dismissed_final (CR-006: an
+      old dismissal must still show on the Dismissed tab; CR-007 B1: a soft
+      "dismissed" stays subject to expiry like any undecided tender).
+    The free-text facets below stay in Python — see store.queue_where.
+
+    CR-017 §1.2: the `sort` parameter is gone. It was accepted and ignored;
+    the order is always deadline ascending, empty deadlines last.
+    """
     tenant_id = identity.tenant_id
     conn = _db()
-    records = store.all_records(conn, tenant_id)
-    _attach_relevance(conn, tenant_id, records)
-    _add_dismissal_reason_category(records)
-    _attach_duplicates(conn, tenant_id, records)
-    _attach_screening_answers(conn, tenant_id, records)
-    _attach_presence(conn, tenant_id, records, identity)
-    _attach_notifications(conn, tenant_id, records)
-
-    # CR-001: every F1-F8/D-DUP exclusion sets exclude_reason — hide those by
-    # default so they don't surface here even though the report already hid
-    # them (run.py's `surfaced`). include_excluded=true is the audit escape
-    # hatch (e.g. to show why a notice didn't make the cut).
-    if not include_excluded:
-        records = [r for r in records if not visibility.is_hidden(r)]
+    where = store.queue_where(
+        conn, tenant_id, today=_today(), status=status, notice_type=notice_type,
+        include_excluded=include_excluded, entry_method=entry_method,
+        has_deadline=has_deadline, hide_expired=(status != "dismissed_final"))
+    records = store.select_records(conn, where)
 
     if source:
         records = [r for r in records if (r.get("source") or "").upper() == source.upper()]
-    # CR-013 §6: manual / scraped facet
-    if entry_method:
-        records = [r for r in records if (r.get("entry_method") or "scraped") == entry_method]
     if category:
         records = [r for r in records if (r.get("category") or "").lower() == category.lower()]
     if match_source:
@@ -542,36 +588,66 @@ def list_tenders(
         records = [r for r in records
                    if ql in (r.get("tag_line") or "").lower()
                    or ql in (r.get("buyer") or "").lower()]
-    if status:
-        records = [r for r in records if (r.get("status") or "new") == status]
-    if has_deadline is True:
-        records = [r for r in records if r.get("deadline")]
-    elif has_deadline is False:
-        records = [r for r in records if not r.get("deadline")]
 
-    # CR-002 B1: past_tender notices never surface in the default Tender
-    # Feed/Review Queue view — they have their own Past Tenders page/query.
-    # notice_type=past_tender is the one way to explicitly ask for them back;
-    # any other explicit notice_type filters normally.
-    if notice_type:
-        records = [r for r in records if (r.get("notice_type") or "tender") == notice_type]
-    else:
-        records = [r for r in records if (r.get("notice_type") or "tender") != "past_tender"]
-
-    # Default: hide expired deadlines; show future deadlines and empty-deadline
-    # rows. CR-006: a dismissed tender is being reviewed for its dismissal, not
-    # its live deadline — an old dismissal with a since-passed deadline must
-    # still show up on the Dismissed tab, so this filter doesn't apply there.
-    # CR-007 Phase B (B1): only the *final* dismissed tab gets that exemption
-    # now — a soft-dismissed ("dismissed") tender is still an active Review
-    # Queue item and stays subject to the normal expiry filter like anything
-    # else still awaiting a decision.
-    if status != "dismissed_final":
-        today = date.today().isoformat()
-        records = [r for r in records
-                   if not r.get("deadline") or r["deadline"][:10] >= today]
-
+    _enrich_for_list(conn, tenant_id, records, identity)
     records.sort(key=lambda r: (r.get("deadline") or "9999-99-99"))
+    return {"total": len(records), "results": records[offset: offset + limit]}
+
+
+def _today():
+    """The Review Queue's "today" for the expiry filter — the one seam tests
+    pin (CR-017), never date.today() read inline."""
+    return date.today().isoformat()
+
+
+def _enrich_for_list(conn, tenant_id, records, identity):
+    """Everything list_tenders attaches, for an already-filtered `records`.
+    The relevance pools and duplicate counterparts come from their own
+    queries, so the result is what enriching the full set would give."""
+    _attach_relevance(conn, tenant_id, records, pool=store.relevance_pool_records(conn, tenant_id))
+    _add_dismissal_reason_category(records)
+    _attach_duplicates(conn, tenant_id, records, context=_duplicate_context(conn, tenant_id, records))
+    _attach_screening_answers(conn, tenant_id, records)
+    _attach_presence(conn, tenant_id, records, identity)
+    _attach_notifications(conn, tenant_id, records)
+    return records
+
+
+@app.get("/api/tenders/count")
+def count_tenders(
+    status:           Optional[str]  = None,
+    notice_type:      Optional[str]  = None,
+    include_excluded: bool           = False,
+    entry_method:     Optional[str]  = None,
+    has_deadline:     Optional[bool] = None,
+    identity: Identity = Depends(get_current_identity),
+):
+    """CR-017: list_tenders' `total` without loading or enriching a row — the
+    nav badge's query. Takes only the facets that list_tenders applies in
+    SQL, so for these the two can't disagree."""
+    conn = _db()
+    where = store.queue_where(
+        conn, identity.tenant_id, today=_today(), status=status, notice_type=notice_type,
+        include_excluded=include_excluded, entry_method=entry_method,
+        has_deadline=has_deadline, hide_expired=(status != "dismissed_final"))
+    return {"total": store.count_records(conn, where)}
+
+
+@app.get("/api/tenders/expired")
+def list_expired_undecided(
+    limit:  int = Query(200, ge=1, le=1000),
+    offset: int = Query(0,   ge=0),
+    identity: Identity = Depends(get_current_identity),
+):
+    """CR-017 §1.3: what expired while nobody decided — status new or
+    needs_review, visible, not a past_tender notice, deadline before today
+    (store.expired_undecided_where). The default list drops these silently;
+    this is where they stay visible. Most recently expired first."""
+    tenant_id = identity.tenant_id
+    conn = _db()
+    records = store.select_records(conn, store.expired_undecided_where(conn, tenant_id, today=_today()))
+    _enrich_for_list(conn, tenant_id, records, identity)
+    records.sort(key=lambda r: r["deadline"], reverse=True)
     return {"total": len(records), "results": records[offset: offset + limit]}
 
 

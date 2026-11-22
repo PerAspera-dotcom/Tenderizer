@@ -17,7 +17,7 @@ export default function Dashboard() {
     Promise.all([
       getStats(),
       getHealth(),
-      listTenders({ limit: 5, sort: 'deadline' }),
+      listTenders({ limit: 5 }),
     ]).then(([s, h, t]) => {
       setStats(s);
       setHealth(h);

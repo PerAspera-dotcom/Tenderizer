@@ -39,7 +39,6 @@ export default function TenderFeed() {
       match_source: params.match_source || undefined,
       country: params.country || undefined,
       limit: 200,
-      sort: 'deadline',
     }).then(r => {
       setTenders(r.results);
       setTotal(r.total);

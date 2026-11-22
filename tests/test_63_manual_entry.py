@@ -86,7 +86,7 @@ def test_derived_fields_equal_the_scraped_path(conn, site):
 def test_below_floor_manual_tender_is_stored_flagged_and_visible(conn, site):
     t = _create(conn, site, value="10000", value_currency="EUR")
     assert t["exclude_reason"] == "below_value_floor"
-    shown = api.list_tenders(identity=make_identity(), limit=1000, offset=0, sort="deadline",
+    shown = api.list_tenders(identity=make_identity(), limit=1000, offset=0,
                              source=None, category=None, match_source=None, country=None, q=None,
                              status=None, has_deadline=None, notice_type=None, include_excluded=False)
     assert t["pub_number"] in [r["pub_number"] for r in shown["results"]]
