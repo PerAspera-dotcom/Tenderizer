@@ -17,7 +17,11 @@ dependencies = [
     "python-multipart",
     "uvicorn[standard]",
     "apscheduler",
-    "sentry-sdk[fastapi]",
+    # Pinned 2026-11-23: an unpinned rebuild pulled a sentry-sdk that rejects
+    # src/api.py's sentry_sdk.init(send_default_pii=False) with
+    # "TypeError: Unknown option", crashing the app at startup (deployment
+    # f505b181, rolled back). 2.64.0 is the version verified locally.
+    "sentry-sdk[fastapi]==2.64.0",
     # Vault (document ingest/embed/metadata-extraction) — see src/vault.py.
     "chromadb",
     "sentence-transformers",
