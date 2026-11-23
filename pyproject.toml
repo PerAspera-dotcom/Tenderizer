@@ -3,39 +3,42 @@ name = "the_scout"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "requests",
-    "pyyaml",
-    "openpyxl",
-    "python-dotenv",
-    "sqlalchemy",
-    "alembic",
-    "psycopg2-binary",
-    "psycopg[binary]",
-    "pyjwt[crypto]",
-    "unidecode",
-    "fastapi",
-    "python-multipart",
-    "uvicorn[standard]",
-    "apscheduler",
-    # Pinned 2026-11-23: an unpinned rebuild pulled a sentry-sdk that rejects
-    # src/api.py's sentry_sdk.init(send_default_pii=False) with
-    # "TypeError: Unknown option", crashing the app at startup (deployment
-    # f505b181, rolled back). 2.64.0 is the version verified locally.
-    "sentry-sdk[fastapi]==2.64.0",
+    # Every dependency is pinned to the version the working production image
+    # ran (requirements.lock, captured 2026-11-23), and the Dockerfile installs
+    # with that lock as a constraint so transitive packages are fixed too. An
+    # unpinned rebuild pulled sentry-sdk 3.0.0 and crashed the app at startup:
+    # docs/INCIDENT_2026-11-23_BACKEND_DEPLOY.md. tests/test_70_pinned_
+    # dependencies.py fails if a dependency is unpinned or disagrees with the
+    # lock.
+    "requests==2.34.2",
+    "pyyaml==6.0.3",
+    "openpyxl==3.1.5",
+    "python-dotenv==1.2.4",
+    "sqlalchemy==2.1.8",
+    "alembic==1.20.1",
+    "psycopg2-binary==2.9.13",
+    "psycopg[binary]==3.3.9",
+    "pyjwt[crypto]==2.15.1",
+    "unidecode==1.4.0",
+    "fastapi==0.162.6",
+    "python-multipart==0.0.33",
+    "uvicorn[standard]==0.54.0",
+    "apscheduler==3.11.3",
+    "sentry-sdk[fastapi]==2.75.0",
     # Vault (document ingest/embed/metadata-extraction) — see src/vault.py.
-    "chromadb",
-    "sentence-transformers",
-    "pdfplumber",
-    "python-docx",
-    "pymupdf",
-    "anthropic",
+    "chromadb==1.5.9",
+    "sentence-transformers==6.3.0",
+    "pdfplumber==0.11.10",
+    "python-docx==1.2.0",
+    "pymupdf==2.1",
+    "anthropic==2.8.0",
     # Composer (src/composer.py) — compliance_matrix.xlsx read/write, ported
     # from proposal_tool/generate.py's pandas-based column parsing.
-    "pandas",
+    "pandas==3.1.1",
     # CR-004 F4 — backup upload/download to S3-compatible object storage
     # (AWS S3 / Backblaze B2 / GCS all speak this API). Inert if
     # BACKUP_S3_BUCKET is unset — see src/backup.py.
-    "boto3",
+    "boto3==1.44.2",
 ]
 
 [project.optional-dependencies]

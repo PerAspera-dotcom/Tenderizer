@@ -31,11 +31,56 @@ Status as of 2026-07-08. **tender-izer.com is fully live and verified end-to-end
 
 ## Redeploy runbook
 
-- **Backend (manual, until the GitHub App is authorized — see above):**
-  `curl -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_TOKEN" -d '{"query":"mutation { serviceInstanceDeploy(environmentId: \"7f5e871b-2567-47da-9cc4-e14434400746\", serviceId: \"5b12317b-18b8-44e2-9596-e945eef0b4ce\", latestCommit: true) }"}'` — or ask me.
-- **Frontend:** `npx vercel deploy --prod` **from the repo root** (not `frontend/`) — the Vercel project's Root Directory is set to `frontend`, so running it from inside `frontend/` makes the CLI look for `frontend/frontend` and fail. Linked via CLI, not GitHub import — pushes alone don't redeploy it.
-- **Rollback:** both Railway and Vercel keep full deployment history — redeploy a prior build from either dashboard.
-- **Data:** Postgres lives only on Railway now. No more `pg_dump`/`pg_restore` needed unless migrating hosts again.
+Rewritten 2026-11-23 after a deploy took the backend down for ~17 minutes:
+`docs/INCIDENT_2026-11-23_BACKEND_DEPLOY.md`. **Every backend deploy rebuilds
+the image**, so "no code risk" doesn't mean "no deploy risk".
+
+**Before a backend deploy**
+1. Full test suite green.
+2. Build the image exactly as Railway does, and start it:
+   `docker build -t tenderizer-backend:check .`, then run it with `SENTRY_DSN`
+   set to any well-formed DSN (Sentry initialises at import only when one is
+   set) and check `/api/health-check` answers 200.
+3. Note the current deployment ID (`railway deployment list --service backend`).
+   That's the rollback target.
+4. Not between 02:00 and 06:00 UTC: the daily scrape runs then.
+
+**Deploy the backend**
+- `railway redeploy --service backend --from-source --yes` (deploys the latest
+  commit of `master` from GitHub). `railway.toml` makes Railway wait for
+  `/api/health-check` to answer 200 before switching traffic; if it never does,
+  the deploy fails and the old deployment keeps serving.
+
+**After deploying: success is not the Railway status**
+- `/api/health-check` → 200 on the public URL.
+- The routes the change added are in `/openapi.json`.
+- `railway logs --service backend` shows no traceback.
+- Any doubt: roll back immediately (below), then diagnose.
+
+**Rollback**
+- Backend: `deploymentRollback(id: "<previous deployment id>")` via Railway's
+  GraphQL API, or Dashboard → backend → Deployments → ⋯ → Rollback. Re-uses the
+  old image, no rebuild. Took ~2 minutes on 2026-11-23.
+- Frontend: promote the previous deployment in Vercel.
+
+**Dependencies**
+- Runtime dependencies are pinned in `pyproject.toml` and, with every
+  transitive package, in `requirements.lock` (the Dockerfile installs with it as
+  a constraint). `tests/test_70_pinned_dependencies.py` enforces it.
+- Upgrading a package is its own change: edit `requirements.lock` and the pin
+  together, build and start the image, deploy, verify as above.
+
+**Frontend**
+- Production is the Vercel project **`tenderizer-web`** (scope
+  `schafermaximilian1994-7909s-projects`), which serves `tender-izer.com`.
+  The `.vercel/` link files in this repo point at an older project named
+  `frontend`: don't rely on them. Deploy with that project selected explicitly
+  (`VERCEL_ORG_ID` / `VERCEL_PROJECT_ID` for `tenderizer-web`, from
+  `npx vercel project inspect tenderizer-web`) and `--prod`. Pushes alone don't
+  redeploy it.
+- Deploy the backend first when the frontend calls new endpoints.
+- Data: Postgres lives only on Railway now. No more `pg_dump`/`pg_restore`
+  needed unless migrating hosts again.
 
 ## Still worth a look on your end (non-blocking)
 

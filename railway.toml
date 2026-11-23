@@ -1,0 +1,21 @@
+# Railway config-as-code for the backend service (repo root = service root).
+# Added 2026-11-23 after the backend deploy incident:
+# docs/INCIDENT_2026-11-23_BACKEND_DEPLOY.md.
+
+[build]
+# The image has always been built from the Dockerfile (the production freeze
+# shows its python:3.12 /app layout); this makes that explicit instead of
+# relying on Dockerfile auto-detection.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway only switches traffic to a new deployment once this path answers
+# 200. Without it (the case on 2026-11-23) a container that crashes on
+# startup is marked SUCCESS and takes the old deployment's place; with it,
+# the new deployment fails and the old one keeps serving. The endpoint
+# answers without touching the database, so it measures "the app imported
+# and uvicorn is serving" — which is exactly what failed. The boot command
+# runs `alembic upgrade head` first, so a failing migration is caught too.
+healthcheckPath = "/api/health-check"
+healthcheckTimeout = 300
