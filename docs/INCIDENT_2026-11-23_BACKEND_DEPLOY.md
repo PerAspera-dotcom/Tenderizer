@@ -1,14 +1,15 @@
-# Incident 2026-11-23: backend down for ~17 minutes after the CR-017 deploy
+# Incident 2026-11-23: backend down for ~26 minutes after the CR-017 deploy
 
-**Impact:** Every request to the backend returned HTTP 502 from about 14:53 to 15:10 UTC (2026-11-23), so `tender-izer.com` couldn't load any data. No data was lost or changed: the app never got far enough to touch the database.
+**Impact:** Every request to the backend returned HTTP 502 from about 14:44 to 15:10 UTC (2026-11-23), about 26 minutes, so `tender-izer.com` couldn't load any data. No data was lost or changed: the app never got far enough to touch the database.
 **Status:** Resolved by rollback. Root causes fixed in the repo; see "Remedies".
 
 ## Timeline (UTC)
 
 | Time | Event |
 |---|---|
-| 14:51 | `railway redeploy --service backend --from-source` deploys `master` @ `4b616f1` (CR-017). Deployment `f505b181` builds the image from scratch. |
-| ~14:53 | Railway marks `f505b181` **SUCCESS** and switches traffic to it. The container crashes on import and restarts in a loop (restart policy `ON_FAILURE`, 10 retries). Every request gets 502. |
+| 14:42 | `git push origin master` (fast-forward to `4b616f1`, approved as a push only) **triggers a Railway deploy**: deployment `ba016be2`. Nobody knew pushes deploy; `DEPLOYMENT.md` said they don't. It builds the image from scratch. |
+| ~14:44 | `ba016be2` is marked **SUCCESS** and takes traffic. The container crashes on import and restarts in a loop (restart policy `ON_FAILURE`, 10 retries). Every request gets 502. Unnoticed, because no deploy was thought to have happened. |
+| 14:51 | `railway redeploy --service backend --from-source` deploys the same commit again (deployment `f505b181`), believed to be *the* deploy. Same crash. |
 | ~14:54 | Post-deploy check: `/api/health-check` returns 502. The logs show `TypeError: Unknown option 'send_default_pii'` from `sentry_sdk` at `src/api.py:22`. |
 | ~15:00 | First rollback attempt (Railway API) blocked by the session's permission check. The situation is reported and an explicit go-ahead requested. |
 | ~15:08 | `deploymentRollback(8922cdc6…)` re-deploys the 2026-11-13 image of `114493a` without rebuilding (deployment `dfd538c5`). |
@@ -23,6 +24,8 @@ The previous build, 2026-11-13, got `sentry-sdk 2.75.0`. Between then and 2026-1
 Reproduced in a clean `python:3.12-slim` container: `sentry-sdk[fastapi]` (3.0.0) fails, while 2.75.0 and 2.64.0 initialise.
 
 ## Root causes
+
+0. **Pushing to `master` deploys the backend, and nobody knew.** `DEPLOYMENT.md` said deploys were manual-only (a GitHub-App permission problem in October); that has since changed. So the push approved as "push and fast-forward master" was itself the first deploy. *This is why the outage started 9 minutes before anyone was watching.*
 
 1. **Builds weren't reproducible.** No version pins and no lock file, so a deploy of unchanged dependency declarations could still install a different environment. CR-017 changed no dependency, yet its deploy re-resolved every one of the ~160 installed packages to whatever was newest that day. *This is the cause.*
 2. **Railway couldn't tell a dead deployment from a live one.** The backend service had no healthcheck (`healthcheckPath: null`, read from Railway's API). Railway therefore considers a deployment live once its container starts, and switched traffic away from the working deployment to one that never served a request. With a healthcheck, the same bad build would have failed its deploy and the old deployment would have kept serving: zero downtime. *This is why a bad build became an outage.*
@@ -45,6 +48,17 @@ Reproduced in a clean `python:3.12-slim` container: `sentry-sdk[fastapi]` (3.0.0
 - **Image built locally** from this commit, as Railway builds it: installed set identical to `requirements.lock` (158 packages); Python 3.12.16; `sentry-sdk` 2.75.0; the image's `pyproject.toml`, `requirements.lock` and `src/api.py` identical to the repo.
 - **Container started** with a `SENTRY_DSN` set against a Postgres 16 at the latest migration revision (as production is). `/api/health-check` answered 200 after about 15 s, with no restarts, and `/openapi.json` lists CR-017's routes.
 - Full test suite: 1343 passed.
+
+## The healthcheck in `railway.toml` did not take effect (found 2026-11-23, 16:47 UTC)
+
+The next push (`132680d`, 15:36) auto-deployed as deployment `58ad6711`, which carried `railway.toml`. Railway read the file (the deployment's `propertyFileMapping` lists its four keys), but **the healthcheck was not applied**:
+- the deployment's `serviceManifest` and the service's settings both show `healthcheckPath: null`
+- no healthcheck lines appear in the build or deploy logs
+- the only `/api/health-check` request in the runtime log was a manual one, an hour later
+
+Railway's own notice in the build log says config-as-code (`railway.toml`) is deprecated in favour of `.railway/railway.ts`. **So remedy 2 is not in force yet.** It needs the healthcheck set on the service itself (Settings → Deploy → Healthcheck Path, or `serviceInstanceUpdate`), then confirmed on the next deploy by healthcheck lines in its logs.
+
+Also observed: this service has a volume. On `58ad6711` the first container started before the volume was handed over, and was restarted when it mounted, about 90 s later. Whether Railway can keep an old deployment serving while a new one waits for a healthcheck, on a service with a volume, needs confirming against Railway's documentation before relying on "zero downtime".
 
 ## Follow-up found while verifying (not fixed)
 
