@@ -31,9 +31,14 @@ Status as of 2026-07-08. **tender-izer.com is fully live and verified end-to-end
 
 ## Redeploy runbook
 
-Rewritten 2026-11-23 after a deploy took the backend down for ~17 minutes:
+Rewritten 2026-11-23 after a deploy took the backend down for ~26 minutes:
 `docs/INCIDENT_2026-11-23_BACKEND_DEPLOY.md`. **Every backend deploy rebuilds
 the image**, so "no code risk" doesn't mean "no deploy risk".
+
+**Pushing to `master` deploys the backend** (verified 2026-11-23: both pushes
+that day created Railway deployments). The "auto-deploy is manual-only" note
+above is out of date. Treat a push to `master` as a deploy: do the
+before-deploy steps first.
 
 **Before a backend deploy**
 1. Full test suite green.
@@ -46,10 +51,31 @@ the image**, so "no code risk" doesn't mean "no deploy risk".
 4. Not between 02:00 and 06:00 UTC: the daily scrape runs then.
 
 **Deploy the backend**
-- `railway redeploy --service backend --from-source --yes` (deploys the latest
-  commit of `master` from GitHub). `railway.toml` makes Railway wait for
-  `/api/health-check` to answer 200 before switching traffic; if it never does,
-  the deploy fails and the old deployment keeps serving.
+- Push to `master` (or `railway redeploy --service backend --from-source --yes`
+  to redeploy the current `master` tip).
+- **Healthcheck gate: NOT active yet.** `railway.toml` lists
+  `healthcheckPath`, but Railway has never applied it: the service shows
+  `null` and no deploy has waited on it (see the incident report). It becomes
+  active when `.railway/railway.ts` is applied (CR-019). Until a deploy log
+  shows Railway waiting on `/api/health-check`, a crashing build still takes
+  traffic: watch the deploy and be ready to roll back.
+
+**Railway service settings live in `.railway/railway.ts` (CR-019)**
+- Railway does **not** read that file on deploy. `railway config apply` writes
+  it onto the service. **An apply is itself a deploy** (the plan marks changes
+  `deployEffect: deploy`), so it needs the same go-ahead and checklist.
+- Never change backend settings in the dashboard. Change the file, then plan,
+  then apply.
+- **Before every deploy:** `railway config plan --detailed-exit-code`. Exit 0
+  means the service matches the file; exit 2 means drift, so stop and find out why.
+- **Read the plan body, not the headline.** On 2026-11-24 the headline said
+  `0 to destroy` while the body said `! 1 destructive change(s)` (detaching
+  the 5 GB volume). Any `destructive` line is a stop.
+- Run it from PowerShell with `$env:_` set to the native `railway.exe`. Under
+  Git Bash, the SDK's CLI version check fails.
+- `backend-volume` is declared in the file. Removing the declaration would
+  **delete** the volume (permanent after 48 h; its Railway backups go with it).
+  Removing only its mount would detach it.
 
 **After deploying: success is not the Railway status**
 - `/api/health-check` → 200 on the public URL.
@@ -71,13 +97,13 @@ the image**, so "no code risk" doesn't mean "no deploy risk".
   together, build and start the image, deploy, verify as above.
 
 **Frontend**
-- Production is the Vercel project **`tenderizer-web`** (scope
-  `schafermaximilian1994-7909s-projects`), which serves `tender-izer.com`.
-  The `.vercel/` link files in this repo point at an older project named
-  `frontend`: don't rely on them. Deploy with that project selected explicitly
-  (`VERCEL_ORG_ID` / `VERCEL_PROJECT_ID` for `tenderizer-web`, from
-  `npx vercel project inspect tenderizer-web`) and `--prod`. Pushes alone don't
-  redeploy it.
+- Production is the Vercel project **`tenderizer-web`**
+  (`prj_eIf34h28AV6XX6ztSCTXKpvFurCQ`, Root Directory `frontend`), which
+  serves `tender-izer.com`. The repo's `.vercel/repo.json` links the same
+  project ID under its old name `frontend`. Deploy from `the_scout/` with
+  `npx vercel deploy --prod` (2026-11-23 used `VERCEL_ORG_ID=team_oAYjMdCcg8OlYwG2jakeO4fj
+  VERCEL_PROJECT_ID=prj_eIf34h28AV6XX6ztSCTXKpvFurCQ` to be explicit). Pushes
+  don't redeploy it.
 - Deploy the backend first when the frontend calls new endpoints.
 - Data: Postgres lives only on Railway now. No more `pg_dump`/`pg_restore`
   needed unless migrating hosts again.
