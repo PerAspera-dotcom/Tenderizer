@@ -74,9 +74,39 @@ def test_dockerfile_installs_with_the_lock_and_a_pinned_base_image():
         "Dockerfile must install with requirements.lock as a constraint"
 
 
-def test_railway_waits_for_the_healthcheck():
-    cfg = tomllib.loads((ROOT / "railway.toml").read_text(encoding="utf-8"))
-    assert cfg["deploy"]["healthcheckPath"] == "/api/health-check"
-    assert cfg["build"]["builder"] == "DOCKERFILE"
+def _railway_ts():
+    return (ROOT / ".railway" / "railway.ts").read_text(encoding="utf-8")
+
+
+def test_railway_ts_keeps_the_dockerfile_builder_and_the_healthcheck():
+    """CR-019. The service's stored builder was RAILPACK; only railway.toml
+    (unread after 2026-12-01) kept builds on the Dockerfile. This guards the
+    authoring FILE only: Railway applies it with `railway config apply`, never
+    on deploy, so live drift is checked with
+    `railway config plan --detailed-exit-code` (DEPLOYMENT.md), not here."""
+    ts = _railway_ts()
+    assert re.search(r'builder:\s*"DOCKERFILE"', ts)
+    assert re.search(r'dockerfilePath:\s*"Dockerfile"', ts)
+    assert re.search(r'healthcheck:\s*"/api/health-check"', ts)
+    assert re.search(r'healthcheckTimeout:\s*300\b', ts)
+    assert re.search(r'restartPolicyType:\s*"ON_FAILURE"', ts)
+    assert re.search(r'restartPolicyMaxRetries:\s*10\b', ts)
+    # A start command would override the Dockerfile CMD (migrate, then serve).
+    assert not re.search(r'^\s*(start|startCommand)\s*:', ts, re.M)
     api = (ROOT / "src" / "api.py").read_text(encoding="utf-8")
     assert '@app.get("/api/health-check")' in api, "the healthcheck path must exist"
+
+
+def test_railway_ts_keeps_backend_volume_mounted():
+    """The first plan without this declaration detached the 5 GB volume
+    (Vault, Composer, backups). It must stay declared, mounted and listed."""
+    ts = _railway_ts()
+    assert re.search(r'volume\("backend-volume",\s*\{\s*region:\s*"sfo",\s*sizeMB:\s*5000\s*\}\)', ts)
+    assert re.search(r'volumeMounts:\s*\{\s*"/app/data":\s*data\s*\}', ts)
+    assert re.search(r'resources:\s*\[[^\]]*\bdata\b', ts)
+
+
+def test_no_procfile():
+    """A Procfile only runs if the builder falls back to Railpack, and it
+    started uvicorn without `alembic upgrade head`. Removed in CR-019."""
+    assert not (ROOT / "Procfile").exists()

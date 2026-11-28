@@ -53,10 +53,29 @@ before-deploy steps first.
 **Deploy the backend**
 - Push to `master` (or `railway redeploy --service backend --from-source --yes`
   to redeploy the current `master` tip).
-- **Healthcheck gate: NOT active yet.** `railway.toml` sets
-  `healthcheckPath`, but Railway didn't apply it on 2026-11-23 (see the incident
-  report). Until it's set on the service and seen working, a crashing build
-  still takes traffic: watch the deploy and be ready to roll back.
+- **Healthcheck gate: NOT active yet.** `railway.toml` lists
+  `healthcheckPath`, but Railway has never applied it: the service shows
+  `null` and no deploy has waited on it (see the incident report). It becomes
+  active when `.railway/railway.ts` is applied (CR-019). Until a deploy log
+  shows Railway waiting on `/api/health-check`, a crashing build still takes
+  traffic: watch the deploy and be ready to roll back.
+
+**Railway service settings live in `.railway/railway.ts` (CR-019)**
+- Railway does **not** read that file on deploy. `railway config apply` writes
+  it onto the service. **An apply is itself a deploy** (the plan marks changes
+  `deployEffect: deploy`), so it needs the same go-ahead and checklist.
+- Never change backend settings in the dashboard. Change the file, then plan,
+  then apply.
+- **Before every deploy:** `railway config plan --detailed-exit-code`. Exit 0
+  means the service matches the file; exit 2 means drift, so stop and find out why.
+- **Read the plan body, not the headline.** On 2026-11-24 the headline said
+  `0 to destroy` while the body said `! 1 destructive change(s)` (detaching
+  the 5 GB volume). Any `destructive` line is a stop.
+- Run it from PowerShell with `$env:_` set to the native `railway.exe`. Under
+  Git Bash, the SDK's CLI version check fails.
+- `backend-volume` is declared in the file. Removing the declaration would
+  **delete** the volume (permanent after 48 h; its Railway backups go with it).
+  Removing only its mount would detach it.
 
 **After deploying: success is not the Railway status**
 - `/api/health-check` → 200 on the public URL.

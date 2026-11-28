@@ -1,7 +1,9 @@
 {
   "name": "tenderizer",
   "private": true,
-  "workspaces": ["frontend"],
+  "workspaces": [
+    "frontend"
+  ],
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": ".venv\\Scripts\\uvicorn.exe src.api:app --reload --port 8000",
@@ -10,6 +12,7 @@
     "db:down": "docker compose down"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0"
+    "concurrently": "^9.0.0",
+    "railway": "3.17.0"
   }
 }

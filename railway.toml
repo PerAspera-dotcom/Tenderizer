@@ -1,21 +1,18 @@
 # Railway config-as-code for the backend service (repo root = service root).
-# Added 2026-11-23 after the backend deploy incident:
-# docs/INCIDENT_2026-11-23_BACKEND_DEPLOY.md.
+# TO BE DELETED (CR-019) once .railway/railway.ts has been applied: Railway
+# stops reading this file on 2026-12-01.
 
 [build]
-# The image has always been built from the Dockerfile (the production freeze
-# shows its python:3.12 /app layout); this makes that explicit instead of
-# relying on Dockerfile auto-detection.
+# These two lines are the ONLY thing holding builds on the Dockerfile. The
+# service's own stored builder is RAILPACK (Python 3.13, no requirements.lock,
+# no pg_dump). Railway applies them per deploy, from this file.
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Railway only switches traffic to a new deployment once this path answers
-# 200. Without it (the case on 2026-11-23) a container that crashes on
-# startup is marked SUCCESS and takes the old deployment's place; with it,
-# the new deployment fails and the old one keeps serving. The endpoint
-# answers without touching the database, so it measures "the app imported
-# and uvicorn is serving" — which is exactly what failed. The boot command
-# runs `alembic upgrade head` first, so a failing migration is caught too.
+# NOT IN EFFECT. Railway reads these two keys but has never applied them:
+# the service shows healthcheckPath null, and no deploy has waited on a
+# healthcheck (docs/INCIDENT_2026-11-23_BACKEND_DEPLOY.md). The gate arrives
+# with `railway config apply` of .railway/railway.ts.
 healthcheckPath = "/api/health-check"
 healthcheckTimeout = 300

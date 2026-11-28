@@ -40,7 +40,7 @@ Reproduced in a clean `python:3.12-slim` container: `sentry-sdk[fastapi]` (3.0.0
 | 1 | **`pyproject.toml`:** every runtime dependency pinned `==` to the same version (so `sentry-sdk==2.75.0`, the production version, not the 2.64.0 from the first emergency pin, which was only the local virtualenv's version). |
 | 1 | **Dockerfile:** base image pinned to `python:3.12.16-slim`, the Python production ran. |
 | 1 | **`tests/test_70_pinned_dependencies.py`:** fails if a runtime dependency is unpinned, disagrees with the lock, the lock contains the app or build tools, `sentry-sdk` moves to 3.x without `src/api.py` changing, the Dockerfile stops using the lock or a pinned base, or the Railway healthcheck goes away. Mutation-checked: unpinning `sentry-sdk` fails it. |
-| 2 | **`railway.toml`:** `healthcheckPath = "/api/health-check"` (timeout 300 s), and builder `DOCKERFILE` made explicit. That endpoint answers without the database, and the boot command runs `alembic upgrade head` first, so a failing import, startup or migration all fail the deploy instead of replacing the live one. |
+| 2 | **`railway.toml`:** `healthcheckPath = "/api/health-check"` (timeout 300 s), and builder `DOCKERFILE` made explicit. **The healthcheck never took effect** (see the section below); it moves to `.railway/railway.ts` in CR-019. |
 | 3, 4 | **`DEPLOYMENT.md` runbook:** build and start the image locally before deploying; after deploying, success means health 200, the expected routes in `/openapi.json` and clean logs, not the Railway status; rollback is `deploymentRollback` to the previous deployment ID, recorded before deploying. Dependency upgrades are their own change: edit lock and pin together, build, start, deploy. |
 
 ## Verification done (2026-11-23)
